@@ -6,6 +6,7 @@
 TODO:
 - benchmark plots from paper/showing full GP vs. QSM GP vs. SSM vs. parallel SSM
 - doc/example useage
+- tests
 
 Possible additions
 - define other kernels not in tinygp
