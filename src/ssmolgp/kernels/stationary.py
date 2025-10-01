@@ -112,15 +112,26 @@ class StateSpaceModel(Kernel):
         """
         The process noise matrix $Q_k$
         
-        Default behavior uses the Van Loan method to compute the process noise
-        from the matrix exponential involving the design matrix, noise effect
-        matrix, and spectral density of the white noise process.
+        Default behavior computes Q from Pinf - A @ Pinf @ A, if Pinf and A 
+        are both implemented. Otherwise, uses the Van Loan method to compute
+        Q from the matrix exponential involving the F, L, and Qc
 
         Overload this method if you have a more general model or simply wish to
         define the process noise analytically.
         """
-        dt = X2 - X1
-        return Q_from_VanLoan(self.design_matrix(), self.noise_effect_matrix(), self.noise(), dt)
+        try:
+            # See Eq. 7 in Solin & Sarkka 2014
+            # https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
+            Pinf = self.stationary_covariance()
+            A = self.transition_matrix(X1, X2)
+            return Pinf - A @ Pinf @ A.T 
+        except NotImplementedError:
+            # use Van Loan matrix exponential given F, L, Qc
+            dt = X2 - X1
+            F = self.design_matrix()
+            L = self.noise_effect_matrix()
+            Qc = self.noise()
+            return Q_from_VanLoan(F,L,Qc,dt)
 
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
@@ -355,20 +366,19 @@ class SHO(StateSpaceModel):
 
     .. math::
 
-        k(\tau) = \sigma^2\,\exp\left(-\frac{\omega\,\tau}{2\,Q}\right)
+        k(\Delta) = \sigma^2\,\exp\left(-\frac{\omega_0\,\Delta}{2\,Q}\right)
         \left\{\begin{array}{ll}
-            1 + \omega\,\tau & \mbox{for } Q = 1/2 \\
-            \cosh(f\,\omega\,\tau/2\,Q) + \sinh(f\,\omega\,\tau/2\,Q)/f
+            1 + \omega_0\,\Delta & \mbox{for } Q = 1/2 \\
+            \cosh(\eta\,\omega_0\,\Delta) + \fra{1}{2\eta Q} \sinh(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q < 1/2 \\
-            \cos(g\,\omega\,\tau/2\,Q) + \sin(g\,\omega\,\tau/2\,Q)/g
+            \frac{1}{2\eta Q}\cos(\eta\,\omega_0\,\Delta) + \sin(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q > 1/2
         \end{array}\right.
 
-    for :math:`\tau = |x_i - x_j|`, :math:`f = \sqrt{1 - 4\,Q^2}`, and
-    :math:`g = \sqrt{4\,Q^2 - 1}`.
+    for :math:`\Delta = |x_i - x_j|`, :math:`\eta = \sqrt{|1 - 1/(4Q^2)|}`.
 
     Args:
-        omega: The parameter :math:`\omega`.
+        omega: The parameter :math:`\omega_0`.
         quality: The parameter :math:`Q`.
         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
             1. Specifying the explicit value here provides a slight performance
