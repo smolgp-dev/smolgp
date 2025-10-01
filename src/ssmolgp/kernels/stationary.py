@@ -1,7 +1,7 @@
 """
 The kernels implemented in this subpackage are defined similarly to 
 :class: `tinygp.kernels.quasisep.Quasisep` but are modified to:
-1. Include the `noise_effect` and `process_noise` matrices
+1. Include the `noise_effect_matrix` and `process_noise` matrix
 2. Treat the observation model as a column vector and the transition matrix
    in its usual form (compared to transposed forms in quasisep)
 3. Handle integrated versions of each kernel
@@ -42,6 +42,7 @@ from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
 from tinygp.solvers.quasisep.block import Block
 
+from ssmolgp.helpers import Q_from_VanLoan
 
 class StateSpaceModel(Kernel):
     """
@@ -52,7 +53,7 @@ class StateSpaceModel(Kernel):
     2. stationary_covariance : The stationary covariance, Pinf
     3. observation_model     : The observation model, H
     4. noise                 : The spectral density of the white noise process, Qc
-    5. noise_effect          : The noise effect matrix, L 
+    5. noise_effect_matrix   : The noise effect matrix, L 
         (defaults to [0, 1] if not provided)
     6. transition_matrix     : The transition matrix, A_k
         (optional, default uses jax.scipy.linalg.expm)
@@ -87,7 +88,7 @@ class StateSpaceModel(Kernel):
         raise NotImplementedError
     
     @abstractmethod
-    def noise_effect(self) -> JAXArray:
+    def noise_effect_matrix(self) -> JAXArray:
         ''' The noise effect matrix L, by default this is [0,1]'''
         raise NotImplementedError
     
@@ -119,7 +120,7 @@ class StateSpaceModel(Kernel):
         define the process noise analytically.
         """
         dt = X2 - X1
-        return Q_from_VanLoan(self.design_matrix(), self.noise_effect(), self.noise(), dt)
+        return Q_from_VanLoan(self.design_matrix(), self.noise_effect_matrix(), self.noise(), dt)
 
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
@@ -186,23 +187,6 @@ class StateSpaceModel(Kernel):
         return h @ self.stationary_covariance() @ h
 
 
-def Q_from_VanLoan(F, L, Qc, dt):
-    """
-    Van Loan method to compute Q = ∫0^dt exp(F (dt-s)) L Qc L^T exp(F^T (dt-s)) ds
-
-    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
-    PDF at https://www.olemartin.no/artikler/vanloan.pdf
-    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
-    """
-    QL = L*Qc@L.T
-    b = len(F) # block size
-    Z = jnp.zeros_like(F)
-    VanLoanBlock = expm(jnp.block([[-F, QL],[Z, F.T]])*dt)
-    G2 = VanLoanBlock[:b,b:]
-    F3 = VanLoanBlock[b:,b:]
-    return F3.T @ G2
-
-
 class Sum(StateSpaceModel):
     """
     A helper to represent the sum of two quasiseparable kernels
@@ -225,9 +209,9 @@ class Sum(StateSpaceModel):
         """F = BlockDiag(F1, F2)"""
         return Block(self.kernel1.design_matrix(), self.kernel2.design_matrix())
 
-    def noise_effect(self) -> JAXArray:
+    def noise_effect_matrix(self) -> JAXArray:
         """L = BlockDiag(L1, L2)"""
-        return Block(self.kernel1.noise_effect(), self.kernel2.noise_effect())
+        return Block(self.kernel1.noise_effect_matrix(), self.kernel2.noise_effect_matrix())
 
     def stationary_covariance(self) -> JAXArray:
         """Pinf = BlockDiag(Pinf1, Pinf2)"""
@@ -281,11 +265,11 @@ class Product(StateSpaceModel):
         return _prod_helper(F1, jnp.eye(F2.shape[0])) +\
                _prod_helper(jnp.eye(F1.shape[0]), F2)
     
-    def noise_effect(self) -> JAXArray:
+    def noise_effect_matrix(self) -> JAXArray:
         """L = L1 ⊗ L2"""
         return _prod_helper(
-            self.kernel1.noise_effect(),
-            self.kernel2.noise_effect(),
+            self.kernel1.noise_effect_matrix(),
+            self.kernel2.noise_effect_matrix(),
         )        
     
     def stationary_covariance(self) -> JAXArray:
@@ -327,8 +311,8 @@ class Wrapper(StateSpaceModel):
     def design_matrix(self) -> JAXArray:
         return self.kernel.design_matrix()
     
-    def noise_effect(self) -> JAXArray:
-        return self.kernel.noise_effect()
+    def noise_effect_matrix(self) -> JAXArray:
+        return self.kernel.noise_effect_matrix()
     
     def noise(self) -> JAXArray:
         return self.kernel.noise()
