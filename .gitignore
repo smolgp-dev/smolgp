@@ -9,3 +9,5 @@ docs/api/summary
 __pycache__
 *.egg-info
 uv.lock
+
+.python-version

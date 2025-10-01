@@ -1,5 +1,6 @@
 [project]
 name = "ssmolgp"
+version = "0.0.1"
 description = "Gaussian Process State Space Models in Python/JAX"
 authors = [{ name = "Ryan Rubenzahl", email = "rrubenzahl@gmail.com" },
            { name = "Soichiro Hattori", email = "soichiro.hattori@gmail.com"}]
@@ -15,72 +16,8 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
-dynamic = ["version"]
-dependencies = ["jax", "equinox"]
-
-[project.optional-dependencies]
-test = ["pytest", "pytest-xdist"]
-comparison = ["tinygp"]
-doctest = ["numpyro"]
-docs = [
-    "sphinx-book-theme",
-    "myst-nb",
-    "matplotlib",
-    "statsmodels",
-    "numpyro",
-    "arviz",
-    "flax",
-    "optax",
-    "jaxopt",
-    "ipython",
+dependencies = [
+    "equinox>=0.13.1",
+    "jax>=0.6.2",
+    "tinygp>=0.3.0",
 ]
-
-[build-system]
-requires = ["hatchling", "hatch-vcs"]
-build-backend = "hatchling.build"
-
-[tool.hatch.version]
-source = "vcs"
-
-[tool.hatch.build.hooks.vcs]
-version-file = "src/ssmolgp/ssmolgp_version.py"
-
-[tool.black]
-target-version = ["py39"]
-line-length = 88
-
-[tool.ruff]
-target-version = "py39"
-line-length = 88
-
-[tool.ruff.lint]
-select = ["F", "I", "E", "W", "YTT", "B", "Q", "PLE", "PLR", "PLW", "UP"]
-ignore = [
-    "E741",    # Allow ambiguous variable names
-    "PLR0911", # Allow many return statements
-    "PLR0913", # Allow many arguments to functions
-    "PLR0915", # Allow many statements
-    "PLR2004", # Allow magic numbers in comparisons
-]
-exclude = []
-
-[tool.ruff.lint.per-file-ignores]
-"docs/tutorials/*.ipynb" = [
-    "B007",  # Loop variable is not used
-    "E501",  # Line too long
-    "E731",  # Do not assign a lambda expression
-    "F401",  # Unused imports
-]
-
-[tool.ruff.lint.isort]
-known-first-party = ["ssmolgp"]
-combine-as-imports = true
-
-[tool.towncrier]
-name = "ssmolgp"
-package = "ssmolgp"
-package_dir = "src"
-filename = "docs/news.rst"
-directory = "news/"
-issue_format = "`#{issue} <https://github.com/rrubenza/ssmolgp/issues/{issue}>`_"
-underlines = "-~~"
