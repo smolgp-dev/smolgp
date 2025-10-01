@@ -546,13 +546,17 @@ class Exp(StateSpaceModel):
         del X
         return jnp.array([self.sigma])
 
+    def noise_effect(self) -> JAXArray:
+        """ The noise effect matrix L for the process """
+        return jnp.array([[0], [1]])
+    
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         dt = X2 - X1
         return jnp.exp(-dt[None, None] / self.scale)
 
 
 class Matern32(StateSpaceModel):
-    r"""A scalable implementation of :class:`tinygp.kernels.stationary.Matern32`
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern32`
 
     This kernel takes the form:
 
@@ -587,6 +591,10 @@ class Matern32(StateSpaceModel):
     def observation_model(self, X: JAXArray) -> JAXArray:
         return jnp.array([self.sigma, 0])
 
+    def noise_effect(self) -> JAXArray:
+        """ The noise effect matrix L for the process """
+        return jnp.array([[0], [1]])
+    
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         dt = X2 - X1
         f = np.sqrt(3) / self.scale
@@ -596,7 +604,7 @@ class Matern32(StateSpaceModel):
 
 
 class Matern52(StateSpaceModel):
-    r"""A scalable implementation of :class:`tinygp.kernels.stationary.Matern52`
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern52`
 
     This kernel takes the form:
 
@@ -633,6 +641,10 @@ class Matern52(StateSpaceModel):
         del X
         return jnp.array([self.sigma, 0, 0])
 
+    def noise_effect(self) -> JAXArray:
+        """ The noise effect matrix L for the process """
+        return jnp.array([[0], [1]])
+    
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         dt = X2 - X1
         f = np.sqrt(5) / self.scale
@@ -660,7 +672,7 @@ class Matern52(StateSpaceModel):
 
 
 class Cosine(StateSpaceModel):
-    r"""A scalable implementation of :class:`tinygp.kernels.stationary.Cosine`
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Cosine`
 
     This kernel takes the form:
 
@@ -690,7 +702,11 @@ class Cosine(StateSpaceModel):
 
     def observation_model(self, X: JAXArray) -> JAXArray:
         return jnp.array([self.sigma, 0])
-
+    
+    def noise_effect(self) -> JAXArray:
+        """ The noise effect matrix L for the process """
+        return jnp.array([[0], [1]])
+    
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         dt = X2 - X1
         f = 2 * np.pi / self.scale
