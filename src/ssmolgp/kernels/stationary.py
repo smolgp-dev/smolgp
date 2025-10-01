@@ -1,28 +1,32 @@
 """
-The kernels implemented in this subpackage are used with the
-:class:`tinygp.solvers.QuasisepSolver` to allow scalable GP computations by
-exploting quasiseparable structure in the relevant matrices (see
-:ref:`api-solvers-quasisep` for more technical details). For now, these methods
-are experimental, so you may find the documentation patchy in places. You are
-encouraged to `open issues or pull requests
-<https://github.com/dfm/tinygp/issues>`_ as you find gaps.
+The kernels implemented in this subpackage are defined similarly to 
+:class: `tinygp.kernels.quasisep.Quasisep` but are modified to:
+1. Include the `noise_effect` and `process_noise` matrices
+2. Treat the observation model as a column vector and the transition matrix
+   in its usual form (compared to transposed forms in quasisep)
+3. Handle integrated versions of each kernel
+These kernels are compatible with :class:`ssmolgp.solvers.StateSpaceSolver`
+which use Bayesian filtering and smoothing algorithms to perform scalable GP
+inference. (see :ref:`api-solvers-statespace` for more technical details). 
+
+Like the quasisep kernels, these methods are experimental, so you may find 
+the documentation patchy in places. You are encouraged to `open issues or 
+pull requests <https://github.com/rrubenza/ssmolgp/issues>`_ as you find gaps.
 """
 
 from __future__ import annotations
 
 __all__ = [
-    "Quasisep",
+    "StateSpaceModel",
     "Wrapper",
     "Sum",
     "Product",
     "Scale",
-    "Celerite",
     "SHO",
     "Exp",
     "Matern32",
     "Matern52",
     "Cosine",
-    "CARMA",
 ]
 
 from abc import abstractmethod
@@ -32,50 +36,91 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax.scipy.linalg import expm
 
 from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
 from tinygp.solvers.quasisep.block import Block
-from tinygp.solvers.quasisep.core import DiagQSM, StrictLowerTriQSM, SymmQSM
-from tinygp.solvers.quasisep.general import GeneralQSM
 
 
-class Quasisep(Kernel):
-    """The base class for all quasiseparable kernels
-
-    Instead of directly implementing the ``p``, ``q``, and ``a`` elements of the
-    :class:`tinygp.solvers.quasisep.core.StrictLowerQSM`, this class implements
-    ``h``, ``Pinf``, and ``A``, where:
-
-    - ``q = h``,
-    - ``p = h.T @ Pinf @ A``, and
-    - ``a = A``.
-
-    This notation follows the notation from state space models for stochastic
-    differential equations, and so far it seems like a good way to specify these
-    models, but these details are subject to change in future versions of
-    ``tinygp``.
+class StateSpaceModel(Kernel):
     """
+    The base class for all stationary linear Gaussian state space models
+
+    The components of a state space model are:
+    1. design_matrix         : The feedback matrix, F
+    2. stationary_covariance : The stationary covariance, Pinf
+    3. observation_model     : The observation model, H
+    4. noise                 : The spectral density of the white noise process, Qc
+    5. noise_effect          : The noise effect matrix, L 
+        (defaults to [0, 1] if not provided)
+    6. transition_matrix     : The transition matrix, A_k
+        (optional, default uses jax.scipy.linalg.expm)
+    7. process_noise        : The process noise, Q_k
+        (optional, default uses Van Loan matrix exponential)
+
+    As a child of :class:`tinygp.kernels.Kernel`, this class also implements
+    addition and multiplication with other kernels, as well as evaluation
+    
+    """
+
+    dimension: JAXArray | float = eqx.field(static=True) # dimensionality $d$ of the state vector
 
     @abstractmethod
     def design_matrix(self) -> JAXArray:
-        """The design matrix for the process"""
+        """The design (also called the feedback) matrix for the process, $F$"""
         raise NotImplementedError
 
     @abstractmethod
     def stationary_covariance(self) -> JAXArray:
-        """The stationary covariance of the process"""
+        """The stationary covariance of the process, $P_\infty$"""
         raise NotImplementedError
 
     @abstractmethod
     def observation_model(self, X: JAXArray) -> JAXArray:
-        """The observation model for the process"""
+        """The observation model for the process, $H$"""
         raise NotImplementedError
 
     @abstractmethod
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """The transition matrix between two coordinates"""
+    def noise(self) -> JAXArray:
+        ''' The spectral density of the white noise process, $Q_c$ '''
         raise NotImplementedError
+    
+    @abstractmethod
+    def noise_effect(self) -> JAXArray:
+        ''' The noise effect matrix L, by default this is [0,1]'''
+        raise NotImplementedError
+    
+    @abstractmethod
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """
+        The transition matrix between two states at coordinates X1 and X2, $A_k$
+
+        Default behavior uses jax.scipy.linalg.expm(self.design_matrix() * (X2 - X1)),
+        which is appropriate for stationary kernels defined by a linear Gaussian SSM.
+       
+       Overload this method if you have a more general model or simply wish to
+        define the transition matrix analytically.
+        """
+        F = self.design_matrix()
+        dt = X2 - X1
+        return expm(F * dt)
+
+    @abstractmethod    
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """
+        The process noise matrix $Q_k$
+        
+        Default behavior uses the Van Loan method to compute the process noise
+        from the matrix exponential involving the design matrix, noise effect
+        matrix, and spectral density of the white noise process.
+
+        Overload this method if you have a more general model or simply wish to
+        define the process noise analytically.
+        """
+        dt = X2 - X1
+        return Q_from_VanLoan(self.design_matrix(), self.noise_effect(), self.noise(), dt)
+
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """A helper function used to convert coordinates to sortable 1-D values
@@ -86,66 +131,11 @@ class Quasisep(Kernel):
         """
         return X
 
-    def to_symm_qsm(self, X: JAXArray) -> SymmQSM:
-        """The symmetric quasiseparable representation of this kernel"""
-        Pinf = self.stationary_covariance()
-        a = jax.vmap(self.transition_matrix)(
-            jax.tree_util.tree_map(lambda y: jnp.append(y[0], y[:-1]), X), X
-        )
-        h = jax.vmap(self.observation_model)(X)
-        q = h
-        p = h @ Pinf
-        d = jnp.sum(p * q, axis=1)
-        p = jax.vmap(lambda x, y: x @ y)(p, a)
-        return SymmQSM(diag=DiagQSM(d=d), lower=StrictLowerTriQSM(p=p, q=q, a=a))
-
-    def to_general_qsm(self, X1: JAXArray, X2: JAXArray) -> GeneralQSM:
-        """The generalized quasiseparable representation of this kernel"""
-        sortable = jax.vmap(self.coord_to_sortable)
-        idx = jnp.searchsorted(sortable(X2), sortable(X1), side="right") - 1
-
-        Xs = jax.tree_util.tree_map(lambda x: jnp.append(x[0], x[:-1]), X2)
-        Pinf = self.stationary_covariance()
-        a = jax.vmap(self.transition_matrix)(Xs, X2)
-        h1 = jax.vmap(self.observation_model)(X1)
-        h2 = jax.vmap(self.observation_model)(X2)
-
-        ql = h2
-        pl = h1 @ Pinf
-        qu = h1
-        pu = h2 @ Pinf
-
-        i = jnp.clip(idx, 0, ql.shape[0] - 1)
-        Xi = jax.tree_util.tree_map(lambda x: jnp.asarray(x)[i], X2)
-        pl = jax.vmap(lambda x, y: x @ y)(pl, jax.vmap(self.transition_matrix)(Xi, X1))
-
-        i = jnp.clip(idx + 1, 0, pu.shape[0] - 1)
-        Xi = jax.tree_util.tree_map(lambda x: jnp.asarray(x)[i], X2)
-        qu = jax.vmap(lambda x, y: x @ y)(jax.vmap(self.transition_matrix)(X1, Xi), qu)
-
-        return GeneralQSM(pl=pl, ql=ql, pu=pu, qu=qu, a=a, idx=idx)
-
-    def matmul(
-        self,
-        X1: JAXArray,
-        X2: JAXArray | None = None,
-        y: JAXArray | None = None,
-    ) -> JAXArray:
-        if y is None:
-            assert X2 is not None
-            y = X2
-            X2 = None
-
-        if X2 is None:
-            return self.to_symm_qsm(X1) @ y
-
-        else:
-            return self.to_general_qsm(X1, X2) @ y
 
     def __add__(self, other: Kernel | JAXArray) -> Kernel:
-        if not isinstance(other, Quasisep):
+        if not isinstance(other, StateSpaceModel):
             raise ValueError(
-                "Quasisep kernels can only be added to other Quasisep kernels"
+                "StateSpaceModel kernels can only be added to other StateSpaceModel kernels"
             )
         return Sum(self, other)
 
@@ -153,34 +143,34 @@ class Quasisep(Kernel):
         # We'll hit this first branch when using the `sum` function
         if other == 0:
             return self
-        if not isinstance(other, Quasisep):
+        if not isinstance(other, StateSpaceModel):
             raise ValueError(
-                "Quasisep kernels can only be added to other Quasisep kernels"
+                "StateSpaceModel kernels can only be added to other StateSpaceModel kernels"
             )
         return Sum(other, self)
 
     def __mul__(self, other: Kernel | JAXArray) -> Kernel:
-        if isinstance(other, Quasisep):
+        if isinstance(other, StateSpaceModel):
             return Product(self, other)
         if isinstance(other, Kernel) or jnp.ndim(other) != 0:
             raise ValueError(
-                "Quasisep kernels can only be multiplied by scalars and other "
-                "Quasisep kernels"
+                "StateSpaceModel kernels can only be multiplied by scalars and other "
+                "StateSpaceModel kernels"
             )
         return Scale(kernel=self, scale=other)
 
     def __rmul__(self, other: Any) -> Kernel:
-        if isinstance(other, Quasisep):
+        if isinstance(other, StateSpaceModel):
             return Product(other, self)
         if isinstance(other, Kernel) or jnp.ndim(other) != 0:
             raise ValueError(
-                "Quasisep kernels can only be multiplied by scalars and other "
-                "Quasisep kernels"
+                "StateSpaceModel kernels can only be multiplied by scalars and other "
+                "StateSpaceModel kernels"
             )
         return Scale(kernel=self, scale=other)
 
     def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """The kernel evaluated via the quasiseparable representation"""
+        """The kernel evaluated via the state space representation"""
         Pinf = self.stationary_covariance()
         h1 = self.observation_model(X1)
         h2 = self.observation_model(X2)
@@ -191,21 +181,157 @@ class Quasisep(Kernel):
         )
 
     def evaluate_diag(self, X: JAXArray) -> JAXArray:
-        """For quasiseparable kernels, the variance is simple to compute"""
+        """For state space kernels, the variance is simple to compute"""
         h = self.observation_model(X)
         return h @ self.stationary_covariance() @ h
 
 
-class Wrapper(Quasisep):
+def Q_from_VanLoan(F, L, Qc, dt):
+    """
+    Van Loan method to compute Q = ∫0^dt exp(F (dt-s)) L Qc L^T exp(F^T (dt-s)) ds
+
+    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
+    PDF at https://www.olemartin.no/artikler/vanloan.pdf
+    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
+    """
+    QL = L*Qc@L.T
+    b = len(F) # block size
+    Z = jnp.zeros_like(F)
+    VanLoanBlock = expm(jnp.block([[-F, QL],[Z, F.T]])*dt)
+    G2 = VanLoanBlock[:b,b:]
+    F3 = VanLoanBlock[b:,b:]
+    return F3.T @ G2
+
+
+class Sum(StateSpaceModel):
+    """
+    A helper to represent the sum of two quasiseparable kernels
+    
+    The state dimension becomes d = d1 + d2
+    """
+
+    kernel1: StateSpaceModel
+    kernel2: StateSpaceModel
+
+    dimension: JAXArray | float = eqx.field(
+        init=False, default_factory=lambda self: self.kernel1.dimension + self.kernel2.dimension
+    )
+
+    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
+        """We assume that both kernels use the same coordinates"""
+        return self.kernel1.coord_to_sortable(X)
+
+    def design_matrix(self) -> JAXArray:
+        """F = BlockDiag(F1, F2)"""
+        return Block(self.kernel1.design_matrix(), self.kernel2.design_matrix())
+
+    def noise_effect(self) -> JAXArray:
+        """L = BlockDiag(L1, L2)"""
+        return Block(self.kernel1.noise_effect(), self.kernel2.noise_effect())
+
+    def stationary_covariance(self) -> JAXArray:
+        """Pinf = BlockDiag(Pinf1, Pinf2)"""
+        return Block(self.kernel1.stationary_covariance(),
+                     self.kernel2.stationary_covariance(),
+        )
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """A = BlockDiag(A1, A2)"""
+        return Block(
+            self.kernel1.transition_matrix(X1, X2),
+            self.kernel2.transition_matrix(X1, X2),
+        )
+
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """Q = BlockDiag(Q1, Q2)"""
+        return Block(self.kernel1.process_noise(X1, X2), 
+                     self.kernel2.process_noise(X1, X2))
+
+    def observation_model(self, X: JAXArray) -> JAXArray:
+        """H = [H1, H2]"""
+        return jnp.hstack(
+            (
+                self.kernel1.observation_model(X),
+                self.kernel2.observation_model(X),
+            )
+        )
+
+class Product(StateSpaceModel):
+    """
+    A helper to represent the product of two StateSpaceModel kernels
+    
+    The state dimension becomes d = d1 * d2
+    """
+
+    kernel1: StateSpaceModel
+    kernel2: StateSpaceModel
+
+    dimension: JAXArray | float = eqx.field(
+        init=False, default_factory=lambda self: self.kernel1.dimension * self.kernel2.dimension
+    )
+
+    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
+        """We assume that both kernels use the same coordinates"""
+        return self.kernel1.coord_to_sortable(X)
+
+    def design_matrix(self) -> JAXArray:
+        """F = F1 ⊗ I + I ⊗ F2"""
+        F1 = self.kernel1.design_matrix()
+        F2 = self.kernel2.design_matrix()
+        return _prod_helper(F1, jnp.eye(F2.shape[0])) +\
+               _prod_helper(jnp.eye(F1.shape[0]), F2)
+    
+    def noise_effect(self) -> JAXArray:
+        """L = L1 ⊗ L2"""
+        return _prod_helper(
+            self.kernel1.noise_effect(),
+            self.kernel2.noise_effect(),
+        )        
+    
+    def stationary_covariance(self) -> JAXArray:
+        """Pinf = Pinf1 ⊗ Pinf2"""
+        return _prod_helper(
+            self.kernel1.stationary_covariance(),
+            self.kernel2.stationary_covariance(),
+        )
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """A = A1 ⊗ A2"""
+        return _prod_helper(
+            self.kernel1.transition_matrix(X1, X2),
+            self.kernel2.transition_matrix(X1, X2),
+        )
+    
+    def process_noise(self,  X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """Q = Q1 ⊗ Q2"""
+        return _prod_helper(
+            self.kernel1.process_noise(X1, X2), 
+            self.kernel2.process_noise(X1, X2)
+        )
+
+    def observation_model(self, X: JAXArray) -> JAXArray:
+        """H = H1 ⊗ H2"""
+        return _prod_helper(
+            self.kernel1.observation_model(X),
+            self.kernel2.observation_model(X),
+        )
+
+class Wrapper(StateSpaceModel):
     """A base class for wrapping kernels with some custom implementations"""
 
-    kernel: Quasisep
+    kernel: StateSpaceModel
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         return self.kernel.coord_to_sortable(X)
 
     def design_matrix(self) -> JAXArray:
         return self.kernel.design_matrix()
+    
+    def noise_effect(self) -> JAXArray:
+        return self.kernel.noise_effect()
+    
+    def noise(self) -> JAXArray:
+        return self.kernel.noise()
 
     def stationary_covariance(self) -> JAXArray:
         return self.kernel.stationary_covariance()
@@ -215,79 +341,15 @@ class Wrapper(Quasisep):
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         return self.kernel.transition_matrix(
-            self.coord_to_sortable(X1), self.coord_to_sortable(X2)
+            self.coord_to_sortable(X1),
+            self.coord_to_sortable(X2)
         )
 
-
-class Sum(Quasisep):
-    """A helper to represent the sum of two quasiseparable kernels"""
-
-    kernel1: Quasisep
-    kernel2: Quasisep
-
-    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
-        """We assume that both kernels use the same coordinates"""
-        return self.kernel1.coord_to_sortable(X)
-
-    def design_matrix(self) -> JAXArray:
-        return Block(self.kernel1.design_matrix(), self.kernel2.design_matrix())
-
-    def stationary_covariance(self) -> JAXArray:
-        return Block(
-            self.kernel1.stationary_covariance(),
-            self.kernel2.stationary_covariance(),
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        return self.kernel.process_noise(
+            self.coord_to_sortable(X1),
+            self.coord_to_sortable(X2)
         )
-
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        return jnp.concatenate(
-            (
-                self.kernel1.observation_model(X),
-                self.kernel2.observation_model(X),
-            )
-        )
-
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        return Block(
-            self.kernel1.transition_matrix(X1, X2),
-            self.kernel2.transition_matrix(X1, X2),
-        )
-
-
-class Product(Quasisep):
-    """A helper to represent the product of two quasiseparable kernels"""
-
-    kernel1: Quasisep
-    kernel2: Quasisep
-
-    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
-        """We assume that both kernels use the same coordinates"""
-        return self.kernel1.coord_to_sortable(X)
-
-    def design_matrix(self) -> JAXArray:
-        F1 = self.kernel1.design_matrix()
-        F2 = self.kernel2.design_matrix()
-        return _prod_helper(F1, jnp.eye(F2.shape[0])) + _prod_helper(
-            jnp.eye(F1.shape[0]), F2
-        )
-
-    def stationary_covariance(self) -> JAXArray:
-        return _prod_helper(
-            self.kernel1.stationary_covariance(),
-            self.kernel2.stationary_covariance(),
-        )
-
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        return _prod_helper(
-            self.kernel1.observation_model(X),
-            self.kernel2.observation_model(X),
-        )
-
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        return _prod_helper(
-            self.kernel1.transition_matrix(X1, X2),
-            self.kernel2.transition_matrix(X1, X2),
-        )
-
 
 class Scale(Wrapper):
     """The product of a scalar and a quasiseparable kernel"""
@@ -296,70 +358,12 @@ class Scale(Wrapper):
 
     def stationary_covariance(self) -> JAXArray:
         return self.scale * self.kernel.stationary_covariance()
+    
+    # TODO: also scale Qc?
+    
 
 
-class Celerite(Quasisep):
-    r"""The baseline kernel from the ``celerite`` package
-
-    This form of the kernel was introduced by `Foreman-Mackey et al. (2017)
-    <https://arxiv.org/abs/1703.09710>`_, and implemented in the `celerite
-    <https://celerite.readthedocs.io>`_ package. It shouldn't generally be used
-    on its own, and other kernels described in this subpackage should generally
-    be preferred.
-
-    This kernel takes the form:
-
-    .. math::
-
-        k(\tau)=\exp(-c\,\tau)\,\left[a\,\cos(d\,\tau)+b\,\sin(d\,\tau)\right]
-
-    for :math:`\tau = |x_i - x_j|`.
-
-    In order to be positive definite, the parameters of this kernel must satisfy
-    :math:`a\,c - b\,d > 0`, and you will see NaNs if you use parameters that
-    don't satisfy this relationship.
-    """
-
-    a: JAXArray | float
-    b: JAXArray | float
-    c: JAXArray | float
-    d: JAXArray | float
-
-    def design_matrix(self) -> JAXArray:
-        return jnp.array([[-self.c, -self.d], [self.d, -self.c]])
-
-    def stationary_covariance(self) -> JAXArray:
-        c = self.c
-        d = self.d
-        return jnp.array(
-            [
-                [1, -c / d],
-                [-c / d, 1 + 2 * jnp.square(c) / jnp.square(d)],
-            ]
-        )
-
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        del X
-        a = self.a
-        b = self.b
-        c = self.c
-        d = self.d
-        c2 = jnp.square(c)
-        d2 = jnp.square(d)
-        s2 = c2 + d2
-        h2_2 = d2 * (a * c - b * d) / (2 * c * s2)
-        h2 = jnp.sqrt(h2_2)
-        h1 = (c * h2 - jnp.sqrt(a * d2 - s2 * h2_2)) / d
-        return jnp.array([h1, h2])
-
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        dt = X2 - X1
-        cos = jnp.cos(self.d * dt)
-        sin = jnp.sin(self.d * dt)
-        return jnp.exp(-self.c * dt) * jnp.array([[cos, -sin], [sin, cos]]).T
-
-
-class SHO(Quasisep):
+class SHO(StateSpaceModel):
     r"""The damped, driven simple harmonic oscillator kernel
 
     This form of the kernel was introduced by `Foreman-Mackey et al. (2017)
