@@ -21,4 +21,4 @@ from ssmolgp import (
     transforms as transforms,
 )
 from ssmolgp.gp import GaussianProcess as GaussianProcess
-from ssmolgp.ssmolgp_version import __version__ as __version__
+# from ssmolgp.ssmolgp_version import __version__ as __version__
