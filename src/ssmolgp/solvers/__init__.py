@@ -10,8 +10,8 @@ The two built in solvers are:
 1. :class:`StateSpaceSolver`: A solver that uses the standard Kalman filter
    and RTS smoothing algorithms to derive the optimal predictive means and
    covariances for a linear Gaussian state space model. This is the default 
-   solver, and is intended to be used with stationary, instantaneous kernels,
-   which are implemented in `ssmolgp.kernels.stationary`. [TODO: compare benchmarking
+   solver, and is intended to be used with the instantaneous kernels 
+   implemented in `ssmolgp.kernels.base`. [TODO: compare benchmarking
    to `tinygp.solvers.QuasisepSolver`].
 
 2. :class:`IntegratedStateSpaceSolver`: An experiemental scalable solver that exploits the
