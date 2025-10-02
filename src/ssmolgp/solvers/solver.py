@@ -22,8 +22,6 @@ class StateSpaceSolver(eqx.Module):
 
     X: JAXArray
     y: JAXArray | None = None
-    means: JAXArray
-    covariances: JAXArray
 
     def __init__(
         self,
@@ -32,7 +30,7 @@ class StateSpaceSolver(eqx.Module):
         y: JAXArray | None,
         noise: Noise,
     ):
-        """Build a :class:`DirectSolver` for a given kernel and coordinates
+        """Build a :class:`StateSpaceSolver` for a given kernel and coordinates
 
         Args:
             kernel: The kernel function.
@@ -44,16 +42,6 @@ class StateSpaceSolver(eqx.Module):
         self.X = X
         self.y = y
         self.noise = noise
-        # self.variance_value = kernel(X) + noise.diagonal()
-        # if covariance is None:
-        #     covariance = kernel(X, X) + noise
-        # self.covariance_value = covariance
-
-    def variance(self) -> JAXArray:
-        return self.variance_value
-
-    def covariance(self) -> JAXArray:
-        return self.covariance_value
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
@@ -67,10 +55,12 @@ class StateSpaceSolver(eqx.Module):
 
         # Kalman filtering
         kalman_results = KalmanFilter(self.kernel, self.X, self.y, self.noise)
-        m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
 
         # RTS smoothing
         rts_results = RTSSmoother(self.kernel, self.X, kalman_results)
+
+        # Unpack and return
+        m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
         m_smoothed, P_smoothed = rts_results
     
         # # Project predictive mean/var to observation space
