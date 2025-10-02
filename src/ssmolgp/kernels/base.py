@@ -46,7 +46,7 @@ from ssmolgp.helpers import Q_from_VanLoan
 
 class StateSpaceModel(Kernel):
     """
-    The base class for all stationary linear Gaussian state space models
+    The base class for an instantaneous linear Gaussian state space model
 
     The components of a state space model are:
     1. design_matrix         : The feedback matrix, F

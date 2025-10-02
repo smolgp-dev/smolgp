@@ -1,5 +1,5 @@
 # TODO: 
-# 1. copy stationary.py kernel object style
+# 1. copy base.py kernel object style
 # 2. add integrated_transition_matrix and integrated_process_noise
 # 3. add attribute/property for num_insts 
 # 4. define each of the usual matrix components to be the augmented version
