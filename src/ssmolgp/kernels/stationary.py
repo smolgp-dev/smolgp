@@ -485,16 +485,16 @@ class SHO(StateSpaceModel):
             return Pinf - A @ Pinf @ A.T
 
         def underdamped(dt: JAXArray) -> JAXArray:
-            f = 2*n*q; f2 = jnp.square(f); n2 = jnp.square(n); w2 = jnp.square(w)
+            f = 2*n*q; q2 = jnp.square(q); n2 = jnp.square(n); w2 = jnp.square(w)
             a = w*dt/q # argument in exponential
             x = n*w*dt # argument in sin/cos
             exp = jnp.exp(a)
             sin = jnp.sin(x)
             sin2 = jnp.sin(2*x)
             sinsq = jnp.square(sin)
-            Q11 = exp - 1 - sin2/f + (1 - (n2+f2)/(n2*f2)) * sinsq
+            Q11 = exp - 1 - sin2/f - sinsq/(2*n2*q2)
             Q12 = Q21 = w*sinsq/(n2*q)
-            Q22 = w2 * (exp - 1 + sin2/f + (1 - (n2+f2)/(n2*f2)) * sinsq )
+            Q22 = w2 * (exp - 1 + sin2/f - sinsq/(2*n2*q2) )
             return jnp.square(self.sigma) * jnp.exp(-a) * jnp.array(
                 [
                     [Q11, Q12],
@@ -514,205 +514,205 @@ class SHO(StateSpaceModel):
             dt,
         )
 
-class Exp(StateSpaceModel):
-    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Exp`
+# class Exp(StateSpaceModel):
+#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Exp`
 
-    This kernel takes the form:
+#     This kernel takes the form:
 
-    .. math::
+#     .. math::
 
-        k(\tau)=\sigma^2\,\exp\left(-\frac{\tau}{\ell}\right)
+#         k(\tau)=\sigma^2\,\exp\left(-\frac{\tau}{\ell}\right)
 
-    for :math:`\tau = |x_i - x_j|`.
+#     for :math:`\tau = |x_i - x_j|`.
 
-    Args:
-        scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
-    """
+#     Args:
+#         scale: The parameter :math:`\ell`.
+#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
+#             1. Specifying the explicit value here provides a slight performance
+#             boost compared to independently multiplying the kernel with a
+#             prefactor.
+#     """
 
-    scale: JAXArray | float
-    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+#     scale: JAXArray | float
+#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
 
-    def design_matrix(self) -> JAXArray:
-        return jnp.array([[-1 / self.scale]])
+#     def design_matrix(self) -> JAXArray:
+#         return jnp.array([[-1 / self.scale]])
 
-    def stationary_covariance(self) -> JAXArray:
-        return jnp.ones((1, 1))
+#     def stationary_covariance(self) -> JAXArray:
+#         return jnp.ones((1, 1))
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        del X
-        return jnp.array([self.sigma])
+#     def observation_model(self, X: JAXArray) -> JAXArray:
+#         del X
+#         return jnp.array([self.sigma])
 
-    def noise_effect(self) -> JAXArray:
-        """ The noise effect matrix L for the process """
-        return jnp.array([[0], [1]])
+#     def noise_effect(self) -> JAXArray:
+#         """ The noise effect matrix L for the process """
+#         return jnp.array([[0], [1]])
     
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        dt = X2 - X1
-        return jnp.exp(-dt[None, None] / self.scale)
+#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+#         dt = X2 - X1
+#         return jnp.exp(-dt[None, None] / self.scale)
 
 
-class Matern32(StateSpaceModel):
-    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern32`
+# class Matern32(StateSpaceModel):
+#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern32`
 
-    This kernel takes the form:
+#     This kernel takes the form:
 
-    .. math::
+#     .. math::
 
-        k(\tau)=\sigma^2\,\left(1+f\,\tau\right)\,\exp(-f\,\tau)
+#         k(\tau)=\sigma^2\,\left(1+f\,\tau\right)\,\exp(-f\,\tau)
 
-    for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
+#     for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
 
-    Args:
-        scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
-    """
+#     Args:
+#         scale: The parameter :math:`\ell`.
+#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
+#             1. Specifying the explicit value here provides a slight performance
+#             boost compared to independently multiplying the kernel with a
+#             prefactor.
+#     """
 
-    scale: JAXArray | float
-    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+#     scale: JAXArray | float
+#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
 
-    def noise(self) -> JAXArray:
-        f = np.sqrt(3) / self.scale
-        return 4 * f**3
+#     def noise(self) -> JAXArray:
+#         f = np.sqrt(3) / self.scale
+#         return 4 * f**3
 
-    def design_matrix(self) -> JAXArray:
-        f = np.sqrt(3) / self.scale
-        return jnp.array([[0, 1], [-jnp.square(f), -2 * f]])
+#     def design_matrix(self) -> JAXArray:
+#         f = np.sqrt(3) / self.scale
+#         return jnp.array([[0, 1], [-jnp.square(f), -2 * f]])
 
-    def stationary_covariance(self) -> JAXArray:
-        return jnp.diag(jnp.array([1, 3 / jnp.square(self.scale)]))
+#     def stationary_covariance(self) -> JAXArray:
+#         return jnp.diag(jnp.array([1, 3 / jnp.square(self.scale)]))
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        return jnp.array([self.sigma, 0])
+#     def observation_model(self, X: JAXArray) -> JAXArray:
+#         return jnp.array([self.sigma, 0])
 
-    def noise_effect(self) -> JAXArray:
-        """ The noise effect matrix L for the process """
-        return jnp.array([[0], [1]])
+#     def noise_effect(self) -> JAXArray:
+#         """ The noise effect matrix L for the process """
+#         return jnp.array([[0], [1]])
     
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        dt = X2 - X1
-        f = np.sqrt(3) / self.scale
-        return jnp.exp(-f * dt) * jnp.array(
-            [[1 + f * dt, -jnp.square(f) * dt], [dt, 1 - f * dt]]
-        )
+#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+#         dt = X2 - X1
+#         f = np.sqrt(3) / self.scale
+#         return jnp.exp(-f * dt) * jnp.array(
+#             [[1 + f * dt, -jnp.square(f) * dt], [dt, 1 - f * dt]]
+#         )
 
 
-class Matern52(StateSpaceModel):
-    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern52`
+# class Matern52(StateSpaceModel):
+#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern52`
 
-    This kernel takes the form:
+#     This kernel takes the form:
 
-    .. math::
+#     .. math::
 
-        k(\tau)=\sigma^2\,\left(1+f\,\tau + \frac{f^2\,\tau^2}{3}\right)
-            \,\exp(-f\,\tau)
+#         k(\tau)=\sigma^2\,\left(1+f\,\tau + \frac{f^2\,\tau^2}{3}\right)
+#             \,\exp(-f\,\tau)
 
-    for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{5} / \ell`.
+#     for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{5} / \ell`.
 
-    Args:
-        scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
-    """
+#     Args:
+#         scale: The parameter :math:`\ell`.
+#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
+#             1. Specifying the explicit value here provides a slight performance
+#             boost compared to independently multiplying the kernel with a
+#             prefactor.
+#     """
 
-    scale: JAXArray | float
-    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+#     scale: JAXArray | float
+#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
 
-    def design_matrix(self) -> JAXArray:
-        f = np.sqrt(5) / self.scale
-        f2 = jnp.square(f)
-        return jnp.array([[0, 1, 0], [0, 0, 1], [-f2 * f, -3 * f2, -3 * f]])
+#     def design_matrix(self) -> JAXArray:
+#         f = np.sqrt(5) / self.scale
+#         f2 = jnp.square(f)
+#         return jnp.array([[0, 1, 0], [0, 0, 1], [-f2 * f, -3 * f2, -3 * f]])
 
-    def stationary_covariance(self) -> JAXArray:
-        f = np.sqrt(5) / self.scale
-        f2 = jnp.square(f)
-        f2o3 = f2 / 3
-        return jnp.array([[1, 0, -f2o3], [0, f2o3, 0], [-f2o3, 0, jnp.square(f2)]])
+#     def stationary_covariance(self) -> JAXArray:
+#         f = np.sqrt(5) / self.scale
+#         f2 = jnp.square(f)
+#         f2o3 = f2 / 3
+#         return jnp.array([[1, 0, -f2o3], [0, f2o3, 0], [-f2o3, 0, jnp.square(f2)]])
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        del X
-        return jnp.array([self.sigma, 0, 0])
+#     def observation_model(self, X: JAXArray) -> JAXArray:
+#         del X
+#         return jnp.array([self.sigma, 0, 0])
 
-    def noise_effect(self) -> JAXArray:
-        """ The noise effect matrix L for the process """
-        return jnp.array([[0], [1]])
+#     def noise_effect(self) -> JAXArray:
+#         """ The noise effect matrix L for the process """
+#         return jnp.array([[0], [1]])
     
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        dt = X2 - X1
-        f = np.sqrt(5) / self.scale
-        f2 = jnp.square(f)
-        d2 = jnp.square(dt)
-        return jnp.exp(-f * dt) * jnp.array(
-            [
-                [
-                    0.5 * f2 * d2 + f * dt + 1,
-                    -0.5 * f * f2 * d2,
-                    0.5 * f2 * f * dt * (f * dt - 2),
-                ],
-                [
-                    dt * (f * dt + 1),
-                    -f2 * d2 + f * dt + 1,
-                    f2 * dt * (f * dt - 3),
-                ],
-                [
-                    0.5 * d2,
-                    0.5 * dt * (2 - f * dt),
-                    0.5 * f2 * d2 - 2 * f * dt + 1,
-                ],
-            ]
-        )
+#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+#         dt = X2 - X1
+#         f = np.sqrt(5) / self.scale
+#         f2 = jnp.square(f)
+#         d2 = jnp.square(dt)
+#         return jnp.exp(-f * dt) * jnp.array(
+#             [
+#                 [
+#                     0.5 * f2 * d2 + f * dt + 1,
+#                     -0.5 * f * f2 * d2,
+#                     0.5 * f2 * f * dt * (f * dt - 2),
+#                 ],
+#                 [
+#                     dt * (f * dt + 1),
+#                     -f2 * d2 + f * dt + 1,
+#                     f2 * dt * (f * dt - 3),
+#                 ],
+#                 [
+#                     0.5 * d2,
+#                     0.5 * dt * (2 - f * dt),
+#                     0.5 * f2 * d2 - 2 * f * dt + 1,
+#                 ],
+#             ]
+#         )
 
 
-class Cosine(StateSpaceModel):
-    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Cosine`
+# class Cosine(StateSpaceModel):
+#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Cosine`
 
-    This kernel takes the form:
+#     This kernel takes the form:
 
-    .. math::
+#     .. math::
 
-        k(\tau)=\sigma^2\,\cos(-2\,\pi\,\tau/\ell)
+#         k(\tau)=\sigma^2\,\cos(-2\,\pi\,\tau/\ell)
 
-    for :math:`\tau = |x_i - x_j|`.
+#     for :math:`\tau = |x_i - x_j|`.
 
-    Args:
-        scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
-    """
+#     Args:
+#         scale: The parameter :math:`\ell`.
+#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
+#             1. Specifying the explicit value here provides a slight performance
+#             boost compared to independently multiplying the kernel with a
+#             prefactor.
+#     """
 
-    scale: JAXArray | float
-    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+#     scale: JAXArray | float
+#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
 
-    def design_matrix(self) -> JAXArray:
-        f = 2 * np.pi / self.scale
-        return jnp.array([[0, -f], [f, 0]])
+#     def design_matrix(self) -> JAXArray:
+#         f = 2 * np.pi / self.scale
+#         return jnp.array([[0, -f], [f, 0]])
 
-    def stationary_covariance(self) -> JAXArray:
-        return jnp.eye(2)
+#     def stationary_covariance(self) -> JAXArray:
+#         return jnp.eye(2)
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        return jnp.array([self.sigma, 0])
+#     def observation_model(self, X: JAXArray) -> JAXArray:
+#         return jnp.array([self.sigma, 0])
     
-    def noise_effect(self) -> JAXArray:
-        """ The noise effect matrix L for the process """
-        return jnp.array([[0], [1]])
+#     def noise_effect(self) -> JAXArray:
+#         """ The noise effect matrix L for the process """
+#         return jnp.array([[0], [1]])
     
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        dt = X2 - X1
-        f = 2 * np.pi / self.scale
-        cos = jnp.cos(f * dt)
-        sin = jnp.sin(f * dt)
-        return jnp.array([[cos, sin], [-sin, cos]])
+#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+#         dt = X2 - X1
+#         f = 2 * np.pi / self.scale
+#         cos = jnp.cos(f * dt)
+#         sin = jnp.sin(f * dt)
+#         return jnp.array([[cos, sin], [-sin, cos]])
 
 
 def _prod_helper(a1: JAXArray, a2: JAXArray) -> JAXArray:
