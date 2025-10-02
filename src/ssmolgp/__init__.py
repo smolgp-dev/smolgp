@@ -16,9 +16,7 @@ subpackage (see :ref:`api-kernels`), and then passing that to a
 
 from ssmolgp import (
     kernels as kernels,
-    noise as noise,
     solvers as solvers,
-    transforms as transforms,
 )
 from ssmolgp.gp import GaussianProcess as GaussianProcess
 # from ssmolgp.ssmolgp_version import __version__ as __version__

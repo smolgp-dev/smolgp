@@ -1,7 +1,7 @@
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
-
-from __future__ import annotations
 
 __all__ = ["KalmanFilter", "kalman_filter"]
 

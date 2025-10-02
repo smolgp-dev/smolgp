@@ -26,10 +26,10 @@ __all__ = [
     "IntegratedSHO",
 ]
 
-from ssmolgp.kernels import StateSpaceModel
 from ssmolgp.kernels.base import (
     Product,
     Sum,
+    StateSpaceModel,
 )
 from ssmolgp.kernels.base import (
     SHO,
