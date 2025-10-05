@@ -390,7 +390,8 @@ class SHO(StateSpaceModel):
     dimension: JAXArray | float = eqx.field(init=False, default=2)
     eta : JAXArray | float
 
-    def __init__(self, omega: JAXArray | float,
+    def __init__(self, 
+                 omega: JAXArray | float,
                  quality: JAXArray | float,
                  sigma: JAXArray | float = jnp.ones(()),
                  **kwargs):
@@ -400,9 +401,9 @@ class SHO(StateSpaceModel):
         self.quality = quality
         self.sigma   = sigma
 
-
-        self.eta = jnp.sqrt(jnp.abs(1-1/(4*self.quality**2)))
-
+    @property
+    def eta(self):
+        return jnp.sqrt(jnp.abs(1-1/(4*self.quality**2)))
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
@@ -424,7 +425,7 @@ class SHO(StateSpaceModel):
         del X
         return jnp.array([[1, 0]])
 
-    def noise_effect(self) -> JAXArray:
+    def noise_effect_matrix(self) -> JAXArray:
         """ The noise effect matrix L for the SHO process """
         return jnp.array([[0], [1]])
     
@@ -546,7 +547,7 @@ class SHO(StateSpaceModel):
 #         del X
 #         return jnp.array([self.sigma])
 
-#     def noise_effect(self) -> JAXArray:
+#     def noise_effect_matrix(self) -> JAXArray:
 #         """ The noise effect matrix L for the process """
 #         return jnp.array([[0], [1]])
     
@@ -591,7 +592,7 @@ class SHO(StateSpaceModel):
 #     def observation_model(self, X: JAXArray) -> JAXArray:
 #         return jnp.array([self.sigma, 0])
 
-#     def noise_effect(self) -> JAXArray:
+#     def noise_effect_matrix(self) -> JAXArray:
 #         """ The noise effect matrix L for the process """
 #         return jnp.array([[0], [1]])
     
@@ -641,7 +642,7 @@ class SHO(StateSpaceModel):
 #         del X
 #         return jnp.array([self.sigma, 0, 0])
 
-#     def noise_effect(self) -> JAXArray:
+#     def noise_effect_matrix(self) -> JAXArray:
 #         """ The noise effect matrix L for the process """
 #         return jnp.array([[0], [1]])
     
@@ -703,7 +704,7 @@ class SHO(StateSpaceModel):
 #     def observation_model(self, X: JAXArray) -> JAXArray:
 #         return jnp.array([self.sigma, 0])
     
-#     def noise_effect(self) -> JAXArray:
+#     def noise_effect_matrix(self) -> JAXArray:
 #         """ The noise effect matrix L for the process """
 #         return jnp.array([[0], [1]])
     
