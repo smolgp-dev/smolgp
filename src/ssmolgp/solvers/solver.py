@@ -22,6 +22,9 @@ class StateSpaceSolver(eqx.Module):
 
     X: JAXArray
     y: JAXArray | None = None
+    kernel : StateSpaceModel
+    noise  : Noise
+    conditioned_states: JAXArray | None
 
     def __init__(
         self,
@@ -29,7 +32,6 @@ class StateSpaceSolver(eqx.Module):
         X: JAXArray,
         y: JAXArray | None,
         noise: Noise,
-        conditioned_states: JAXArray | None,
     ):
         """Build a :class:`StateSpaceSolver` for a given kernel and coordinates
 
