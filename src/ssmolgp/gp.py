@@ -126,6 +126,16 @@ class GaussianProcess(eqx.Module):
     def covariance(self) -> JAXArray:
         return self.solver.covariance()
 
+    ## TODO: implement dedicated log likelihood function 
+    ##  option: if we have a ConditionedResult, we could
+    ##  simply save the v and S from Kalman into an attribute
+    ##  and then just retrieve that here for a speedup...
+    ##  ...or have a version of this that takes v and S as arguments
+    ##  and then it can be called right after kalman in gp.condition
+    ##  
+    #   but we should also have a standalone version that only does
+    ##  the necessary steps for v and S which can be what is called
+    ##  for MCMC/gradient descent/etc.
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
 
@@ -140,6 +150,7 @@ class GaussianProcess(eqx.Module):
         """
         return self._compute_log_prob(self._get_alpha(y))
 
+    ## TODO: implement
     def condition(
         self,
         y: JAXArray,
@@ -176,6 +187,19 @@ class GaussianProcess(eqx.Module):
             the :class:`GaussianProcess` object describing the conditional
             distribution evaluated at ``X_test``.
         """
+
+        ## This function will use the solver to compute the
+        ## conditional mean and covariance at the data points
+        ## a byproduct of Kalman is the log likelihood, so we
+        ## can track v and S and pass that into loglikelihood 
+        ## to return here. This function then returns a conditioned
+        ## GP object that can be used to predict at new points
+        ## via gp.predict, but in this function we actually should
+        ## remove X_test as an argument and only consider the 
+        ## states at the data points themselves here
+
+        ### below here is the tinygp version
+
         # If X_test is provided, we need to check that the tree structure
         # matches that of the input data, and that the shapes are all compatible
         # (i.e. the dimension of the inputs must match). This is slightly
@@ -225,6 +249,7 @@ class GaussianProcess(eqx.Module):
 
         return ConditionResult(log_prob, gp)
 
+    ## TODO: implement
     @partial(
         jax.jit,
         static_argnames=("include_mean", "return_var", "return_cov"),
@@ -266,6 +291,39 @@ class GaussianProcess(eqx.Module):
             returned with shape ``(N_test,)`` or ``(N_test, N_test)``
             respectively.
         """
+
+        ## this will be a wrapper for self.condition
+        ## followed by projection to observed space
+        ## and optionally select just a component signal
+
+        ## Steps:
+        ## 1. If this is not a ConditionedResult already,
+        ##    call self.condition to get conditioned
+        ##    means/covariances at all of the states
+        ##    --- if it is a ConditionedResult, no need
+        ##        to pass in y here, can just use self.y?
+
+        ## 2. Call solver.predict to get predicted states
+        ##    at the X_test (full state vector)
+
+        ## 3. Select component kernel if user passed one
+        ##    i.e. zero out H for all the others
+
+        ## 4. Project prediction through observation model 
+
+        ## 5. Return mean and optionally var/cov
+
+
+        ## Example code to project to observation space
+        # y_kal = (H @ m_filtered.T).squeeze()
+        # yvar_kal = (H @ P_filtered @ H.T).squeeze()
+        # yerr_kal = jnp.sqrt(yvar_kal)
+
+        # y_rts = (H @ m_smooth.T).squeeze()
+        # yvar_rts  = (H @ P_smooth @ H.T).squeeze()
+        # yerr_rts = jnp.sqrt(yvar_rts)
+
+        ## tinygp version of this function:
         _, cond = self.condition(y, X_test, kernel=kernel, include_mean=include_mean)
         if return_var:
             return cond.loc, cond.variance
@@ -273,6 +331,8 @@ class GaussianProcess(eqx.Module):
             return cond.loc, cond.covariance
         return cond.loc
 
+
+    ## TODO: how to define the sample function?
     def sample(
         self,
         key: jax.random.KeyArray,
