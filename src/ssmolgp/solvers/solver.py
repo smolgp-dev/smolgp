@@ -21,10 +21,9 @@ class StateSpaceSolver(eqx.Module):
     """
 
     X: JAXArray
-    y: JAXArray | None = None
+    y: JAXArray | None
     kernel : StateSpaceModel
     noise  : Noise
-    conditioned_states: JAXArray | None
 
     def __init__(
         self,
@@ -45,7 +44,6 @@ class StateSpaceSolver(eqx.Module):
         self.X = X
         self.y = y
         self.noise = noise
-        self.conditioned_states = None
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
@@ -59,48 +57,43 @@ class StateSpaceSolver(eqx.Module):
 
         # Kalman filtering
         kalman_results = KalmanFilter(self.kernel, self.X, self.y, self.noise, return_v_S=return_v_S)
-
-        # RTS smoothing
-        rts_results = RTSSmoother(self.kernel, self.X, kalman_results)
-
-        # Unpack and return
-        m_smoothed, P_smoothed = rts_results
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
         else:
             m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
             v_S = None
+        
+        # RTS smoothing
+        rts_results = RTSSmoother(self.kernel, self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
+        m_smoothed, P_smoothed = rts_results
 
-        # Save conditioned states for self.predict
-        conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
-        self.conditioned_states = conditioned_states
-        return conditioned_states, v_S
+        return (m_predicted, P_predicted), \
+                (m_filtered, P_filtered), \
+                (m_smoothed, P_smoothed), v_S
 
-    @jax.jit
-    def predict(self, X_test, observation_model=None)  -> JAXArray:
+    def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
-        TODO: write this docstring 
-        TODO: add option to parallelize over X_test
+        Wrapper fot jitted StateSpaceSolver._predict. If the solver 
+        hasn't been conditioned yet, it will be done here.
 
-        observation_model : H for the test points
-                            should be a function just like 
-                            self.kernel.observation_model
+        TODO: add option to parallelize over X_test
+        Args:
+            X_test              : The test coordinates.
+            conditioned_results : The output of self.condition()
+            observation_model   : (optional) H for the test points
+                                  should be a function just like 
+                                  self.kernel.observation_model
         """
 
         N = len(self.X) # number of data points
         M = len(X_test) # number of test points
-
-        # If solver hasn't been conditioned, do so now
-        if self.conditioned_states is None:
-            self.condition()
-            # raise RuntimeError("Must call .condition() before .predict()")
         
         # Unpack conditioned results
-        (m_predicted, P_predicted),\
-            (m_filtered, P_filtered), \
-                (m_smooth, P_smooth) = self.conditioned_states
-    
+        (m_predicted, P_predicted), \
+        (m_filtered, P_filtered), \
+        (m_smoothed, P_smoothed), v_S = conditioned_results
+        
         Pinf = self.kernel.stationary_covariance()
 
         # Observation model to call at each of the X_test
@@ -146,8 +139,8 @@ class StateSpaceSolver(eqx.Module):
             # Next (future) data point predicted & smoothed state
             m_pred_next = m_predicted[k_next] # prediction (no kalman update) at next data point
             P_pred_next = P_predicted[k_next] # prediction (no kalman update) at next data point
-            m_hat_next = m_smooth[k_next]     # RTS smoothed state at next data point
-            P_hat_next = P_smooth[k_next]     # RTS smoothed covariance at next data point
+            m_hat_next = m_smoothed[k_next]     # RTS smoothed state at next data point
+            P_hat_next = P_smoothed[k_next]     # RTS smoothed covariance at next data point
 
             # Time-lag between states
             dt = self.X[k_next] - X_test[ktest]

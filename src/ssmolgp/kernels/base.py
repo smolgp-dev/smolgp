@@ -478,7 +478,6 @@ class SHO(StateSpaceModel):
         n = self.eta
         w = self.omega
         q = self.quality
-        assert q>0.5 # TODO: currently only for Q>1/2
 
         def critical(dt: JAXArray) -> JAXArray:
             Pinf = self.stationary_covariance()
