@@ -20,8 +20,8 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-from ssmolgp.kernels.base import StateSpaceModel
-# from ssmolgp.kernels.integrated import StateSpaceModel # TODO: define this
+from ssmolgp.kernels import StateSpaceModel
+from ssmolgp.kernels.integrated import IntegratedStateSpaceModel # TODO: define this
 from ssmolgp.solvers import StateSpaceSolver
 from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
 
@@ -60,6 +60,7 @@ class GaussianProcess(eqx.Module):
     X: JAXArray
     mean_function: means.MeanBase
     mean: JAXArray
+    var:  JAXArray | None
     noise: Noise
     solver: StateSpaceSolver
 
@@ -73,6 +74,7 @@ class GaussianProcess(eqx.Module):
         mean: means.MeanBase | Callable[[JAXArray], JAXArray] | JAXArray | None = None,
         solver: Any | None = None,
         mean_value: JAXArray | None = None,
+        variance_value: JAXArray | None = None,
         covariance_value: Any | None = None,
         **solver_kwargs: Any,
     ):
@@ -90,6 +92,7 @@ class GaussianProcess(eqx.Module):
         self.num_data = mean_value.shape[0]
         self.dtype = mean_value.dtype
         self.mean = mean_value
+        self.var = variance_value
         if self.mean.ndim != 1:
             raise ValueError(
                 "Invalid mean shape: " f"expected ndim = 1, got ndim={self.mean.ndim}"
@@ -101,24 +104,26 @@ class GaussianProcess(eqx.Module):
         self.noise = noise
 
         if solver is None:
-            if isinstance(kernel, StateSpaceModel):
-                solver = StateSpaceSolver
-            elif isinstance(kernel, IntegratedStateSpaceModel):
+            if isinstance(kernel, IntegratedStateSpaceModel):
                 # TODO: if any leaf kernels are integrated, use this
                 # will have to define a Sum between integrated/non
                 # (and Product) that creates a new integrated model 
                 solver = IntegratedStateSpaceSolver
-            else:
+            elif isinstance(self.kernel, StateSpaceModel):
+                solver = StateSpaceSolver
+            else: 
                 raise ValueError(
                     "Must provide a solver if the kernel is not "
                     "a StateSpaceModel or IntegratedStateSpaceModel"
                 )
 
-        self.solver = solver(
-            kernel,
-            self.X,
-            self.noise,
-        )
+            self.solver = solver(
+                kernel,
+                self.X,
+                self.noise,
+            )
+        else:
+            self.solver = solver
 
     @property
     def loc(self) -> JAXArray:
@@ -127,12 +132,12 @@ class GaussianProcess(eqx.Module):
     @property
     def variance(self) -> JAXArray:
         # TODO: return H @ Pinf @ H.T here?
-        return self.solver.variance()
+        return self.var
 
     @property
     def covariance(self) -> JAXArray:
         # TODO: what do we return here?
-        return self.solver.covariance()
+        return self.covariance_value
 
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
@@ -158,8 +163,8 @@ class GaussianProcess(eqx.Module):
         y: JAXArray,
         X_test: JAXArray | None = None,
         *,
-        # diag: JAXArray | None = None,
-        # noise: Noise | None = None,
+        diag: JAXArray | None = None, # TODO: is this needed?
+        noise: Noise | None = None,   # TODO: is this needed?
         include_mean: bool = True,
         kernel: kernels.Kernel | None = None, # TODO: select a component kernel
     ) -> ConditionResult:
@@ -248,8 +253,10 @@ class GaussianProcess(eqx.Module):
             X_test,
             noise=noise,
             # mean=????
+            solver=self.solver,
             mean_value=mu,
-            covariance_value=var,
+            variance_value=var,
+            # covariance_value=None,
         )
 
         return ConditionResult(log_prob, gp)
