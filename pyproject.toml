@@ -21,3 +21,9 @@ dependencies = [
     "jax>=0.6.2",
     "tinygp>=0.3.0",
 ]
+
+[dependency-groups]
+dev = [
+    "jupyter>=1.1.1",
+    "matplotlib>=3.10.6",
+]

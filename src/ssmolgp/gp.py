@@ -60,7 +60,7 @@ class GaussianProcess(eqx.Module):
     mean_function: means.MeanBase
     mean: JAXArray
     noise: Noise
-    solver: Solver
+    solver: StateSpaceSolver
 
     def __init__(
         self,
@@ -99,11 +99,13 @@ class GaussianProcess(eqx.Module):
             noise = Diagonal(diag=jnp.broadcast_to(diag, self.mean.shape))
         self.noise = noise
 
-        if solver is None:
-            if isinstance(covariance_value, SymmQSM) or isinstance(kernel, Quasisep):
-                solver = QuasisepSolver
-            else:
-                solver = DirectSolver
+        # TODO: Remove once we know how the workflow is
+        # if solver is None:
+        #     if isinstance(covariance_value, SymmQSM) or isinstance(kernel, Quasisep):
+        #         solver = QuasisepSolver
+        #     else:
+        #         solver = DirectSolver
+
         self.solver = solver(
             kernel,
             self.X,
@@ -148,7 +150,7 @@ class GaussianProcess(eqx.Module):
         include_mean: bool = True,
         kernel: kernels.Kernel | None = None,
     ) -> ConditionResult:
-        """Condition the model on observed data and
+        """Condition the model on observed data
 
         Args:
             y (JAXArray): The observed data. This should have the shape
