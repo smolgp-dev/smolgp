@@ -126,16 +126,8 @@ class GaussianProcess(eqx.Module):
     def covariance(self) -> JAXArray:
         return self.solver.covariance()
 
-    ## TODO: implement dedicated log likelihood function 
-    ##  option: if we have a ConditionedResult, we could
-    ##  simply save the v and S from Kalman into an attribute
-    ##  and then just retrieve that here for a speedup...
-    ##  ...or have a version of this that takes v and S as arguments
-    ##  and then it can be called right after kalman in gp.condition
-    ##  
-    #   but we should also have a standalone version that only does
-    ##  the necessary steps for v and S which can be what is called
-    ##  for MCMC/gradient descent/etc.
+    ## TODO: this function will do just the necessary steps
+    ##  to get v and S and pass those into _compute_log_prob
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
 
@@ -148,6 +140,8 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
+        ## TODO: get v and S from just those parts of Kalman 
+        ## and pass them into below:
         return self._compute_log_prob(self._get_alpha(y))
 
     ## TODO: implement
@@ -189,16 +183,18 @@ class GaussianProcess(eqx.Module):
         """
 
         ## This function will use the solver to compute the
-        ## conditional mean and covariance at the data points
+        ## conditional mean and covariance at the data points.
         ## a byproduct of Kalman is the log likelihood, so we
-        ## can track v and S and pass that into loglikelihood 
-        ## to return here. This function then returns a conditioned
+        ## can return_v_S in solver.condition and pass that 
+        ## into _compute_log_prob to return here 
+        ## 
+        ## This function then returns a conditioned
         ## GP object that can be used to predict at new points
         ## via gp.predict, but in this function we actually should
         ## remove X_test as an argument and only consider the 
         ## states at the data points themselves here
 
-        ### below here is the tinygp version
+        ### ***** below here is the tinygp version *****
 
         # If X_test is provided, we need to check that the tree structure
         # matches that of the input data, and that the shapes are all compatible
@@ -305,6 +301,11 @@ class GaussianProcess(eqx.Module):
 
         ## 2. Call solver.predict to get predicted states
         ##    at the X_test (full state vector)
+        ##    this way we can define separate predict
+        ##    functions for StateSpaceSolver and 
+        ##    IntegratedStateSpaceSolver and keep a single
+        ##    GP object for both. Although when we have t
+        ##    and texp defined for a GP, we will have 2x states
 
         ## 3. Select component kernel if user passed one
         ##    i.e. zero out H for all the others
@@ -375,6 +376,14 @@ class GaussianProcess(eqx.Module):
 
     @jax.jit
     def _compute_log_prob(self, alpha: JAXArray) -> JAXArray:
+        ### TODO: use this version, assume here we take in v and S
+        # L_k = jnp.linalg.cholesky(S_k)
+        # w = solve_triangular(L_k, v_k, lower=True)
+        # quad = jnp.dot(w, w)
+        # logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
+        # m = v_k.shape[0] # dimension of state vector
+        # loglik -= 0.5 * (quad + logdetS_k + m*jnp.log(2*jnp.pi))
+
         loglike = -0.5 * jnp.sum(jnp.square(alpha)) - self.solver.normalization()
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 

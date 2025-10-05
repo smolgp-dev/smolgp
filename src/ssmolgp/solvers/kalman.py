@@ -6,7 +6,7 @@ import jax.numpy as jnp
 __all__ = ["KalmanFilter", "kalman_filter"]
 
 
-def KalmanFilter(kernel, X, y, noise):
+def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     '''
     Wrapper for Kalman filter
 
@@ -28,10 +28,10 @@ def KalmanFilter(kernel, X, y, noise):
     R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
-    return kalman_filter(A, Q, H, R, X, y, m0, P0)
+    return kalman_filter(A, Q, H, R, X, y, m0, P0, return_v_S=return_v_S)
 
 @jax.jit
-def kalman_filter(A, Q, H, R, t, y, m0, P0):
+def kalman_filter(A, Q, H, R, t, y, m0, P0, return_v_S=False):
     '''
     Jax implementation of the Kalman filter algorithm
 
@@ -89,12 +89,15 @@ def kalman_filter(A, Q, H, R, t, y, m0, P0):
         m_k = m_pred + K_k @ v_k          # conditioned state estimate
         P_k = P_pred - K_k @ S_k @ K_k.T  # conditioned covariance estimate
         
-        return (m_k, P_k), (m_k, P_k, m_pred, P_pred)
+        if return_v_S:
+            return (m_k, P_k), (m_k, P_k, m_pred, P_pred, v_k, S_k)
+        else:
+            return (m_k, P_k), (m_k, P_k, m_pred, P_pred)
     
     # Initialize carry with prior state and covariance
     init_carry = (m0, P0)
 
     # Run the filter over all time steps, unpack, and return results
     _, outputs = jax.lax.scan(step, init_carry, jnp.arange(N))
-    m_filtered, P_filtered, m_predicted, P_predicted = outputs
-    return m_filtered, P_filtered, m_predicted, P_predicted
+    # m_filtered, P_filtered, m_predicted, P_predicted, v, S = outputs
+    return outputs

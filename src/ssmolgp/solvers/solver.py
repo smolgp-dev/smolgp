@@ -49,26 +49,31 @@ class StateSpaceSolver(eqx.Module):
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
         return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
 
-    def condition(self) -> JAXArray:
+    def condition(self, return_v_S=False) -> JAXArray:
         """
         Compute the Kalman predicted, filtered, and RTS smoothed 
         means and covariances at each of the input coordinates
         """
 
         # Kalman filtering
-        kalman_results = KalmanFilter(self.kernel, self.X, self.y, self.noise)
+        kalman_results = KalmanFilter(self.kernel, self.X, self.y, self.noise, return_v_S=return_v_S)
 
         # RTS smoothing
         rts_results = RTSSmoother(self.kernel, self.X, kalman_results)
 
         # Unpack and return
-        m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
         m_smoothed, P_smoothed = rts_results
+        if return_v_S:
+            m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
+            v_S = (v, S)
+        else:
+            m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
+            v_S = None
 
         # Save conditioned states for self.predict
         conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
         self.conditioned_states = conditioned_states
-        return conditioned_states
+        return conditioned_states, v_S
 
     @jax.jit
     def predict(self, X_test, observation_model=None)  -> JAXArray:
@@ -192,7 +197,7 @@ class StateSpaceSolver(eqx.Module):
             return project(ktest, m_star, P_star)
 
         # Calculate predictions
-        ktests = jnp.arange(0, Ntest, 1)
+        ktests = jnp.arange(0, M, 1)
         branches = (retrodict, interpolate, extrapolate)
         (pred_mean, pred_var) = jax.vmap(lambda ktest: jax.lax.switch(cases[ktest], branches, (ktest)))(ktests)
 
