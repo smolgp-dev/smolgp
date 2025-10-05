@@ -20,9 +20,10 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-# TODO: will need to generalize to include integrated versions
 from ssmolgp.kernels.base import StateSpaceModel
+# from ssmolgp.kernels.integrated import StateSpaceModel # TODO: define this
 from ssmolgp.solvers import StateSpaceSolver
+from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
@@ -99,19 +100,24 @@ class GaussianProcess(eqx.Module):
             noise = Diagonal(diag=jnp.broadcast_to(diag, self.mean.shape))
         self.noise = noise
 
-        # TODO: Remove once we know how the workflow is
-        # if solver is None:
-        #     if isinstance(covariance_value, SymmQSM) or isinstance(kernel, Quasisep):
-        #         solver = QuasisepSolver
-        #     else:
-        #         solver = DirectSolver
+        if solver is None:
+            if isinstance(kernel, StateSpaceModel):
+                solver = StateSpaceSolver
+            elif isinstance(kernel, IntegratedStateSpaceModel):
+                # TODO: if any leaf kernels are integrated, use this
+                # will have to define a Sum between integrated/non
+                # (and Product) that creates a new integrated model 
+                solver = IntegratedStateSpaceSolver
+            else:
+                raise ValueError(
+                    "Must provide a solver if the kernel is not "
+                    "a StateSpaceModel or IntegratedStateSpaceModel"
+                )
 
         self.solver = solver(
             kernel,
             self.X,
             self.noise,
-            covariance=covariance_value,
-            **solver_kwargs,
         )
 
     @property
@@ -120,14 +126,14 @@ class GaussianProcess(eqx.Module):
 
     @property
     def variance(self) -> JAXArray:
+        # TODO: return H @ Pinf @ H.T here?
         return self.solver.variance()
 
     @property
     def covariance(self) -> JAXArray:
+        # TODO: what do we return here?
         return self.solver.covariance()
 
-    ## TODO: this function will do just the necessary steps
-    ##  to get v and S and pass those into _compute_log_prob
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
 
@@ -140,9 +146,11 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
-        ## TODO: get v and S from just those parts of Kalman 
-        ## and pass them into below:
-        return self._compute_log_prob(self._get_alpha(y))
+        _, _, _, _, v, S = self.solver.Kalman(self.kernel, 
+                                          self.X, y, self.noise, 
+                                          return_v_S=True)
+
+        return self._compute_log_prob(v, S)
 
     ## TODO: implement
     def condition(
@@ -150,10 +158,10 @@ class GaussianProcess(eqx.Module):
         y: JAXArray,
         X_test: JAXArray | None = None,
         *,
-        diag: JAXArray | None = None,
-        noise: Noise | None = None,
+        # diag: JAXArray | None = None,
+        # noise: Noise | None = None,
         include_mean: bool = True,
-        kernel: kernels.Kernel | None = None,
+        kernel: kernels.Kernel | None = None, # TODO: select a component kernel
     ) -> ConditionResult:
         """Condition the model on observed data
 
@@ -182,20 +190,6 @@ class GaussianProcess(eqx.Module):
             distribution evaluated at ``X_test``.
         """
 
-        ## This function will use the solver to compute the
-        ## conditional mean and covariance at the data points.
-        ## a byproduct of Kalman is the log likelihood, so we
-        ## can return_v_S in solver.condition and pass that 
-        ## into _compute_log_prob to return here 
-        ## 
-        ## This function then returns a conditioned
-        ## GP object that can be used to predict at new points
-        ## via gp.predict, but in this function we actually should
-        ## remove X_test as an argument and only consider the 
-        ## states at the data points themselves here
-
-        ### ***** below here is the tinygp version *****
-
         # If X_test is provided, we need to check that the tree structure
         # matches that of the input data, and that the shapes are all compatible
         # (i.e. the dimension of the inputs must match). This is slightly
@@ -213,34 +207,49 @@ class GaussianProcess(eqx.Module):
                     "and all but the leading dimension must have matching sizes"
                 )
 
-        alpha, log_prob, mean_value = self._condition(y, X_test, include_mean, kernel)
+        ## Condition on the data and return likelihood ingredients
+        conditioned_results = self.solver.condition(y, return_v_S=True)
+
+        ## unpack into prediction at data points
+        (m_predicted, P_predicted), \
+        (m_filtered, P_filtered), \
+        (m_smoothed, P_smoothed), (v, S) = conditioned_results
+
+        ## Grab likelihood
+        log_prob = self._compute_log_prob(v, S)
+
+        # If no component kernel passed, use the full model
         if kernel is None:
+            observation_model = self.kernel.observation_model
+        else:
             kernel = self.kernel
+            # Pick out just the component of interest
+            observation_model = self.kernel.observation_model
+            # TODO: zero out all the other components
+
+        ## If the user passed X_test, predit at those points
+        if X_test is not None:
+            mu, var = self.solver.predict(X_test, conditioned_results)
+        else:
+            # Otherwise project to observation space at the data points
+            H  = jax.vmap(observation_model)(self.X)
+            ks = jnp.arange(len(self.X))
+            mu  = jax.vmap(lambda k: H[k]@m_smoothed[k])(ks).squeeze()
+            var = jax.vmap(lambda k: H[k]@P_smoothed[k]@H[k].T)(ks).squeeze()
 
         if noise is None:
-            diag = _default_diag(mean_value) if diag is None else diag
-            noise = Diagonal(diag=jnp.broadcast_to(diag, mean_value.shape))
+            diag = _default_diag(mu) if diag is None else diag
+            noise = Diagonal(diag=jnp.broadcast_to(diag, mu.shape))
 
-        covariance_value = self.solver.condition(kernel, X_test, noise)
-        if X_test is None:
-            X_test = self.X
-
-        # The conditional GP will also be a GP with the mean an covariance
-        # specified by a :class:`tinygp.means.Conditioned` and
-        # :class:`tinygp.kernels.Conditioned` respectively.
+        # The conditional GP will also be a GP with the mean 
+        # and covariance specified by the conditioned result
         gp = GaussianProcess(
             kernels.Conditioned(self.X, self.solver, kernel),
             X_test,
             noise=noise,
-            mean=means.Conditioned(
-                self.X,
-                alpha,
-                kernel,
-                include_mean=include_mean,
-                mean_function=self.mean_function,
-            ),
-            mean_value=mean_value,
-            covariance_value=covariance_value,
+            # mean=????
+            mean_value=mu,
+            covariance_value=var,
         )
 
         return ConditionResult(log_prob, gp)
@@ -375,21 +384,23 @@ class GaussianProcess(eqx.Module):
         )
 
     @jax.jit
-    def _compute_log_prob(self, alpha: JAXArray) -> JAXArray:
-        ### TODO: use this version, assume here we take in v and S
-        # L_k = jnp.linalg.cholesky(S_k)
-        # w = solve_triangular(L_k, v_k, lower=True)
-        # quad = jnp.dot(w, w)
-        # logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
-        # m = v_k.shape[0] # dimension of state vector
-        # loglik -= 0.5 * (quad + logdetS_k + m*jnp.log(2*jnp.pi))
+    def _compute_log_prob(self, v: JAXArray, S: JAXArray) -> JAXArray:
+        """
+        Compute the log-likelihood given v and S from the Kalman filter
 
-        loglike = -0.5 * jnp.sum(jnp.square(alpha)) - self.solver.normalization()
+        TODO: verify by comparing to GP matrix version
+        """
+        def llh(k):
+            v_k, S_k = v[k], S[k]
+            L_k = jnp.linalg.cholesky(S_k)
+            w = jax.scipy.linalg.solve_triangular(L_k, v_k, lower=True)
+            quad = jnp.dot(w, w)
+            logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
+            d = v_k.shape[0] # dimension of state vector
+            return -0.5 * (quad + logdetS_k + d*jnp.log(2*jnp.pi))
+
+        loglike = jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
-
-    @jax.jit
-    def _get_alpha(self, y: JAXArray) -> JAXArray:
-        return self.solver.solve_triangular(y - self.loc)
 
     @partial(jax.jit, static_argnums=(3,))
     def _condition(
