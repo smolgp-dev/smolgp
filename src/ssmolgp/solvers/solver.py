@@ -21,7 +21,6 @@ class StateSpaceSolver(eqx.Module):
     """
 
     X: JAXArray
-    y: JAXArray | None
     kernel : StateSpaceModel
     noise  : Noise
 
@@ -29,7 +28,6 @@ class StateSpaceSolver(eqx.Module):
         self,
         kernel: StateSpaceModel,
         X: JAXArray,
-        y: JAXArray | None,
         noise: Noise,
     ):
         """Build a :class:`StateSpaceSolver` for a given kernel and coordinates
@@ -42,21 +40,28 @@ class StateSpaceSolver(eqx.Module):
         """
         self.kernel = kernel
         self.X = X
-        self.y = y
         self.noise = noise
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
         return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
 
-    def condition(self, return_v_S=False) -> JAXArray:
+    def Kalman(self, kernel, X, y, noise, return_v_S=False) -> Any:
+        """Wrapper for Kalman filter used with this solver"""
+        return KalmanFilter(kernel, X, y, noise, return_v_S=return_v_S)
+
+    def RTS(self, kernel, X, kalman_results) -> Any:
+        """Wrapper for RTS smoother used with this solver"""
+        return RTSSmoother(kernel, X, kalman_results)
+
+    def condition(self, y, return_v_S=False) -> JAXArray:
         """
         Compute the Kalman predicted, filtered, and RTS smoothed 
         means and covariances at each of the input coordinates
         """
 
         # Kalman filtering
-        kalman_results = KalmanFilter(self.kernel, self.X, self.y, self.noise, return_v_S=return_v_S)
+        kalman_results = self.Kalman(self.kernel, self.X, y, self.noise, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -65,7 +70,7 @@ class StateSpaceSolver(eqx.Module):
             v_S = None
         
         # RTS smoothing
-        rts_results = RTSSmoother(self.kernel, self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
+        rts_results = self.RTS(self.kernel, self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
         return (m_predicted, P_predicted), \
