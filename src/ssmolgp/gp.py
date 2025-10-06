@@ -157,7 +157,6 @@ class GaussianProcess(eqx.Module):
 
         return self._compute_log_prob(v, S)
 
-    ## TODO: implement
     def condition(
         self,
         y: JAXArray,
@@ -252,9 +251,9 @@ class GaussianProcess(eqx.Module):
             kernels.Conditioned(self.X, self.solver, kernel),
             X_test,
             noise=noise,
-            # mean=????
+            # mean=mean, # TODO: just pass along mean function, right?
             solver=self.solver,
-            mean_value=mu,
+            mean_value=mu,  # this mean is the conditioned mean
             variance_value=var,
             # covariance_value=None,
         )
@@ -331,15 +330,6 @@ class GaussianProcess(eqx.Module):
         ## 5. Return mean and optionally var/cov
 
 
-        ## Example code to project to observation space
-        # y_kal = (H @ m_filtered.T).squeeze()
-        # yvar_kal = (H @ P_filtered @ H.T).squeeze()
-        # yerr_kal = jnp.sqrt(yvar_kal)
-
-        # y_rts = (H @ m_smooth.T).squeeze()
-        # yvar_rts  = (H @ P_smooth @ H.T).squeeze()
-        # yerr_rts = jnp.sqrt(yvar_rts)
-
         ## tinygp version of this function:
         _, cond = self.condition(y, X_test, kernel=kernel, include_mean=include_mean)
         if return_var:
@@ -394,19 +384,27 @@ class GaussianProcess(eqx.Module):
     def _compute_log_prob(self, v: JAXArray, S: JAXArray) -> JAXArray:
         """
         Compute the log-likelihood given v and S from the Kalman filter
-
-        TODO: verify by comparing to GP matrix version
         """
-        def llh(k):
-            v_k, S_k = v[k], S[k]
-            L_k = jnp.linalg.cholesky(S_k)
-            w = jax.scipy.linalg.solve_triangular(L_k, v_k, lower=True)
-            quad = jnp.dot(w, w)
-            logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
-            d = v_k.shape[0] # dimension of state vector
-            return -0.5 * (quad + logdetS_k + d*jnp.log(2*jnp.pi))
+        # def llh(k):
+        #     v_k, S_k = v[k], S[k]
+        #     L_k = jnp.linalg.cholesky(S_k)
+        #     w = jax.scipy.linalg.solve_triangular(L_k, v_k, lower=True)
+        #     quad = jnp.dot(w, w)
+        #     logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
+        #     d = v_k.shape[0]
+        #     return -0.5 * (quad + logdetS_k + d*jnp.log(2*jnp.pi))
 
-        loglike = jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
+        # loglike = jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
+
+        L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
+        w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
+        w = jnp.squeeze(w, axis=-1) 
+        quad = jnp.sum(w**2, axis=1)
+        logdetS = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L, axis1=-2, axis2=-1)), axis=1)
+        d = v.shape[1]
+        log_probs = -0.5 * (quad + logdetS + d*jnp.log(2.0 * jnp.pi))
+        loglike = jnp.sum(log_probs)
+
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 
     @partial(jax.jit, static_argnums=(3,))
