@@ -33,6 +33,17 @@ from tinygp.helpers import JAXArray
 from ssmolgp.kernels import StateSpaceModel
 from ssmolgp.helpers import Q_from_VanLoan
 
+class IntegratedStateSpaceModel(StateSpaceModel):
+
+    ## Same functions as StateSpaceModel
+    ## put into augmented form, plus:
+    ##   - integrated_transition_matrix
+    ##   - integrated_process_noise
+    def __init__(self):
+        pass
+
+    
+
 
 class IntegratedSHO(StateSpaceModel):
     r"""The damped, driven simple harmonic oscillator kernel 
