@@ -26,4 +26,8 @@ dependencies = [
 dev = [
     "jupyter>=1.1.1",
     "matplotlib>=3.10.6",
+    "tinygp",
 ]
+
+[tool.uv.sources]
+tinygp = { git = "https://github.com/dfm/tinygp" }
