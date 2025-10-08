@@ -12,8 +12,8 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
 
     Parameters:
         kernel: StateSpaceModel kernel
-        X: input coordinates
-        y: observations
+        X: data coordinates (e.g. time)
+        y: observations at data coordinates
         noise: Noise model
         
     Returns:
