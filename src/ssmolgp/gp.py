@@ -28,6 +28,40 @@ from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
 
+class ConditionedStates(eqx.Module):
+    """
+    An object to hold the conditioned means and variances
+
+    times : timestamp corresponding to each state
+    predicted_mean/var : Kalman predicted state
+    filtered_mean/var  : Kalman filtered state
+    smoothed_mean/var  : RTS smoothed state
+    """
+    times          : JAXArray
+    predicted_mean : JAXArray
+    filtered_mean  : JAXArray
+    smoothed_mean  : JAXArray
+    predicted_var  : JAXArray
+    filtered_var   : JAXArray
+    smoothed_var   : JAXArray
+
+    def __init__(self, times,
+                 m_pred   : JAXArray, P_pred   : JAXArray,
+                 m_filt   : JAXArray, P_filt   : JAXArray, 
+                 m_smooth : JAXArray, P_smooth : JAXArray):
+        self.times = times
+        self.predicted_mean = m_pred
+        self.predicted_var  = P_pred
+        self.filtered_mean  = m_filt
+        self.filtered_var   = P_filt
+        self.smoothed_mean  = m_smooth
+        self.smoothed_var   = P_smooth
+        
+    def __call__(self):
+        packaged_results = (self.predicted_mean, self.predicted_var), \
+                           (self.filtered_mean, self.filtered_var), \
+                           (self.smoothed_mean, self.smoothed_var)
+        return self.times, packaged_results, None
 
 class GaussianProcess(eqx.Module):
     """An interface for designing a Gaussian Process regression model
@@ -63,6 +97,7 @@ class GaussianProcess(eqx.Module):
     var:  JAXArray | None
     noise: Noise
     solver: StateSpaceSolver
+    states: ConditionedStates
 
     def __init__(
         self,
@@ -76,6 +111,7 @@ class GaussianProcess(eqx.Module):
         mean_value: JAXArray | None = None,
         variance_value: JAXArray | None = None,
         covariance_value: Any | None = None,
+        states: JAXArray | None = None,
         **solver_kwargs: Any,
     ):
         self.kernel = kernel
@@ -93,6 +129,7 @@ class GaussianProcess(eqx.Module):
         self.dtype = mean_value.dtype
         self.mean = mean_value
         self.var = variance_value
+        self.states = states
         if self.mean.ndim != 1:
             raise ValueError(
                 "Invalid mean shape: " f"expected ndim = 1, got ndim={self.mean.ndim}"
@@ -151,7 +188,7 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
-        _, _, _, _, v, S = self.solver.Kalman(self.kernel, 
+        _, (_, _, _, _, v, S) = self.solver.Kalman(self.kernel, 
                                           self.X, y, self.noise, 
                                           return_v_S=True)
 
@@ -214,10 +251,11 @@ class GaussianProcess(eqx.Module):
         ## Condition on the data and return likelihood ingredients
         conditioned_results = self.solver.condition(y, return_v_S=True)
 
-        ## unpack into prediction at data points
+        ## unpack into prediction at the states
+        X_states, conditioned_states, (v, S) = conditioned_results
         (m_predicted, P_predicted), \
         (m_filtered, P_filtered), \
-        (m_smoothed, P_smoothed), (v, S) = conditioned_results
+        (m_smoothed, P_smoothed) = conditioned_states
 
         ## Grab likelihood
         log_prob = self._compute_log_prob(v, S)
@@ -231,69 +269,75 @@ class GaussianProcess(eqx.Module):
             observation_model = self.kernel.observation_model
             # TODO: zero out all the other components
 
-        ## If the user passed X_test, predit at those points
         if X_test is not None:
+            # If X_test was given, also predit at those points
             mu, var = self.solver.predict(X_test, conditioned_results)
         else:
-            # Otherwise project to observation space at the data points
-            H  = jax.vmap(observation_model)(self.X)
-            ks = jnp.arange(len(self.X))
+            # Otherwise, project the conditioned states 
+            # (at the data points) to observation space
+            X_test = X_states
+            H  = jax.vmap(observation_model)(X_test)
+            ks = jnp.arange(len(X_test))
+            # TODO: when we have integral states, we should have the solver
+            # return only the exposure-end states along with the data timestamps
+            # that way here we don't have to worry about H at exposure starts technically being "zero"
+            # if we implement it that way, we can remove X_test from everywhere
             mu  = jax.vmap(lambda k: H[k]@m_smoothed[k])(ks).squeeze()
             var = jax.vmap(lambda k: H[k]@P_smoothed[k]@H[k].T)(ks).squeeze()
 
-        if noise is None:
-            diag = _default_diag(mu) if diag is None else diag
-            noise = Diagonal(diag=jnp.broadcast_to(diag, mu.shape))
+        # Save the conditioned state values to a new GP object
+        # so we can use them to make quick predictions at test
+        # points with subsequent calls to self.predict
+        states = ConditionedStates(X_states, 
+                                   m_predicted, P_predicted, 
+                                   m_filtered, P_filtered, 
+                                   m_smoothed, P_smoothed)
 
-        # The conditional GP will also be a GP with the mean 
-        # and covariance specified by the conditioned result
-        gp = GaussianProcess(
-            kernels.Conditioned(self.X, self.solver, kernel),
-            X_test,
-            noise=noise,
-            # mean=mean, # TODO: just pass along mean function, right?
-            solver=self.solver,
-            mean_value=mu,  # this mean is the conditioned mean
-            variance_value=var,
-            # covariance_value=None,
+        condGP = GaussianProcess(kernel=self.kernel, X=X_test,
+                    noise=self.noise, mean=self.mean, solver=self.solver,
+                    mean_value=mu, variance_value=var, states=states,
         )
 
-        return ConditionResult(log_prob, gp)
+        # Return the likelihood and conditioned GP
+        return log_prob, condGP
 
-    ## TODO: implement
-    @partial(
-        jax.jit,
-        static_argnames=("include_mean", "return_var", "return_cov"),
-    )
+
     def predict(
         self,
-        y: JAXArray,
         X_test: JAXArray | None = None,
+        y: JAXArray | None = None,
         *,
-        kernel: kernels.Kernel | None = None,
-        include_mean: bool = True,
+        # kernel: kernels.Kernel | None = None, # TODO: here
+        # include_mean: bool = True,
         return_var: bool = False,
-        return_cov: bool = False,
+        # return_cov: bool = False,
+        observation_model: Any | None = None,
     ) -> JAXArray | tuple[JAXArray, JAXArray]:
         """Predict the GP model at new test points conditioned on observed data
 
         Args:
-            y (JAXArray): The observed data. This should have the shape
-                ``(N_data,)``, where ``N_data`` was the zeroth axis of the ``X``
-                data provided when instantiating this object.
             X_test (JAXArray, optional): The coordinates where the prediction
                 should be evaluated. This should have a data type compatible
                 with the ``X`` data provided when instantiating this object. If
                 it is not provided, ``X`` will be used by default, so the
-                predictions will be made.
+                predictions will be made at the data coordinates.
+            y (JAXArray): The observed data. Only needs to be given if the GP 
+                has not yet been conditioned. This should have the shape
+                ``(N_data,)``, where ``N_data`` was the zeroth axis of the ``X``
+                data provided when instantiating this object.
             include_mean (bool, optional): If ``True`` (default), the predicted
                 values will include the mean function evaluated at ``X_test``.
-            return_var (bool, optional): If ``True``, the variance of the
+            return_var (bool, optional): If ``True`` (default), the variance of the
                 predicted values at ``X_test`` will be returned.
             return_cov (bool, optional): If ``True``, the covariance of the
                 predicted values at ``X_test`` will be returned. If
                 ``return_var`` is ``True``, this flag will be ignored.
+            observation_model (Any, optional): optionally provide a function of 
+                                X_test to define the output observation model. 
+                                Default will use that of the kernel.
+            TODO: add an option to predict just at a given component kernel? or bake that into observation_model above
 
+                
         Returns:
             The mean of the predictive model evaluated at ``X_test``, with shape
             ``(N_test,)`` where ``N_test`` is the zeroth dimension of
@@ -303,40 +347,24 @@ class GaussianProcess(eqx.Module):
             respectively.
         """
 
-        ## this will be a wrapper for self.condition
-        ## followed by projection to observed space
-        ## and optionally select just a component signal
-
-        ## Steps:
-        ## 1. If this is not a ConditionedResult already,
-        ##    call self.condition to get conditioned
-        ##    means/covariances at all of the states
-        ##    --- if it is a ConditionedResult, no need
-        ##        to pass in y here, can just use self.y?
-
-        ## 2. Call solver.predict to get predicted states
-        ##    at the X_test (full state vector)
-        ##    this way we can define separate predict
-        ##    functions for StateSpaceSolver and 
-        ##    IntegratedStateSpaceSolver and keep a single
-        ##    GP object for both. Although when we have t
-        ##    and texp defined for a GP, we will have 2x states
-
-        ## 3. Select component kernel if user passed one
-        ##    i.e. zero out H for all the others
-
-        ## 4. Project prediction through observation model 
-
-        ## 5. Return mean and optionally var/cov
-
-
-        ## tinygp version of this function:
-        _, cond = self.condition(y, X_test, kernel=kernel, include_mean=include_mean)
+        if self.states is None:
+            # Need to condition the GP first
+            assert y is not None, "The GP has not been conditioned yet, and no data array `y` was given."
+            llh, condGP = self.condition(y, X_test)  # condition on data, also predicts at X_test  
+            mu, var = condGP.loc, condGP.var         # which we can read off like so
+        else:
+            if X_test is None:
+                mu  = self.loc # get pre-computed mean 
+                var = self.var # & var at the data points
+            else:
+                # TODO: if component kernel is passed, fold that into H_test here
+                H_test = self.kernel.observation_model if observation_model is None else observation_model
+                mu, var = self.solver.predict(X_test, self.states(), H_test)
         if return_var:
-            return cond.loc, cond.variance
-        if return_cov:
-            return cond.loc, cond.covariance
-        return cond.loc
+            return mu, var
+        # if return_cov:
+        #     return mu, var
+        return mu
 
 
     ## TODO: how to define the sample function?
@@ -371,14 +399,17 @@ class GaussianProcess(eqx.Module):
         key: jax.random.KeyArray,
         shape: Sequence[int] | None,
     ) -> JAXArray:
-        if shape is None:
-            shape = (self.num_data,)
-        else:
-            shape = (self.num_data,) + tuple(shape)
-        normal_samples = jax.random.normal(key, shape=shape, dtype=self.dtype)
-        return self.mean + jnp.moveaxis(
-            self.solver.dot_triangular(normal_samples), 0, -1
-        )
+        raise NotImplementedError
+        ## TODO: implement sampling for state space model
+        ##        or alternatively call the tinygp version? copied below:
+        # if shape is None:
+        #     shape = (self.num_data,)
+        # else:
+        #     shape = (self.num_data,) + tuple(shape)
+        # normal_samples = jax.random.normal(key, shape=shape, dtype=self.dtype)
+        # return self.mean + jnp.moveaxis(
+        #     self.solver.dot_triangular(normal_samples), 0, -1
+        # )
 
     @jax.jit
     def _compute_log_prob(self, v: JAXArray, S: JAXArray) -> JAXArray:
@@ -392,9 +423,9 @@ class GaussianProcess(eqx.Module):
         #     quad = jnp.dot(w, w)
         #     logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
         #     d = v_k.shape[0]
-        #     return -0.5 * (quad + logdetS_k + d*jnp.log(2*jnp.pi))
+        #     return quad + logdetS_k + d*jnp.log(2*jnp.pi)
 
-        # loglike = jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
+        # loglike = -0.5 * jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
 
         L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
         w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
@@ -402,51 +433,23 @@ class GaussianProcess(eqx.Module):
         quad = jnp.sum(w**2, axis=1)
         logdetS = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L, axis1=-2, axis2=-1)), axis=1)
         d = v.shape[1]
-        log_probs = -0.5 * (quad + logdetS + d*jnp.log(2.0 * jnp.pi))
-        loglike = jnp.sum(log_probs)
+        log_probs = quad + logdetS + d*jnp.log(2.0 * jnp.pi)
+        loglike = -0.5 * jnp.sum(log_probs)
 
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 
-    @partial(jax.jit, static_argnums=(3,))
-    def _condition(
-        self,
-        y: JAXArray,
-        X_test: JAXArray | None,
-        include_mean: bool,
-        kernel: kernels.Kernel | None = None,
-    ) -> tuple[JAXArray, JAXArray, JAXArray]:
-        alpha = self._get_alpha(y)
-        log_prob = self._compute_log_prob(alpha)
+    # @partial(jax.jit, static_argnums=(3,))
+    # def _condition(
+    #     self,
+    #     y: JAXArray,
+    #     X_test: JAXArray | None,
+    #     include_mean: bool,
+    #     kernel: kernels.Kernel | None = None,
+    # ) -> tuple[JAXArray, JAXArray, JAXArray]:
+    #     alpha = self._get_alpha(y)
+    #     log_prob = self._compute_log_prob(alpha)
 
-        # Below, we actually want alpha = K^-1 y instead of alpha = L^-1 y
-        alpha = self.solver.solve_triangular(alpha, transpose=True)
-
-        if X_test is None:
-            X_test = self.X
-
-            # In this common case (where we're predicting the GP at the data
-            # points, using the original kernel), the mean is especially fast to
-            # compute; so let's use that calculation here.
-            if kernel is None:
-                delta = self.noise @ alpha
-                mean_value = y - delta
-                if not include_mean:
-                    mean_value -= self.loc
-
-            else:
-                mean_value = kernel.matmul(self.X, y=alpha)
-                if include_mean:
-                    mean_value += self.loc
-
-        else:
-            if kernel is None:
-                kernel = self.kernel
-
-            mean_value = kernel.matmul(X_test, self.X, alpha)
-            if include_mean:
-                mean_value += jax.vmap(self.mean_function)(X_test)
-
-        return alpha, log_prob, mean_value
+    #     return alpha, log_prob, mean_value
 
 
 class ConditionResult(NamedTuple):

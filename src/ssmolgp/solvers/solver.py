@@ -48,7 +48,8 @@ class StateSpaceSolver(eqx.Module):
 
     def Kalman(self, kernel, X, y, noise, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        return KalmanFilter(kernel, X, y, noise, return_v_S=return_v_S)
+        X_states = X # states are at the data points here
+        return X_states, KalmanFilter(kernel, X_states, y, noise, return_v_S=return_v_S)
 
     def RTS(self, kernel, X, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
@@ -61,7 +62,7 @@ class StateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        kalman_results = self.Kalman(self.kernel, self.X, y, self.noise, return_v_S=return_v_S)
+        X_states, kalman_results = self.Kalman(self.kernel, self.X, y, self.noise, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -73,15 +74,14 @@ class StateSpaceSolver(eqx.Module):
         rts_results = self.RTS(self.kernel, self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
-        return (m_predicted, P_predicted), \
-                (m_filtered, P_filtered), \
-                (m_smoothed, P_smoothed), v_S
-
+        # Pack-up results and return
+        conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
+        return X_states, conditioned_states, v_S
+    
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
-        Wrapper fot jitted StateSpaceSolver._predict. If the solver 
-        hasn't been conditioned yet, it will be done here.
-
+        Wrapper fot jitted StateSpaceSolver._predict. 
+        
         TODO: add option to parallelize over X_test
         Args:
             X_test              : The test coordinates.
@@ -90,28 +90,43 @@ class StateSpaceSolver(eqx.Module):
                                   should be a function just like 
                                   self.kernel.observation_model
         """
-
-        N = len(self.X) # number of data points
-        M = len(X_test) # number of test points
-        
-        # Unpack conditioned results
-        (m_predicted, P_predicted), \
-        (m_filtered, P_filtered), \
-        (m_smoothed, P_smoothed), v_S = conditioned_results
-        
-        Pinf = self.kernel.stationary_covariance()
-
         # Observation model to call at each of the X_test
         H = self.kernel.observation_model \
             if observation_model is None else observation_model
+        return self._predict(X_test, conditioned_results, H)
+    
+    @jax.jit
+    def _predict(self, X_test, conditioned_results, H) -> JAXArray:
+        """
+        Algorithm for making predictions at arbitrary coordinates X_test
+
+        There are three cases:
+            1. Retrodiction  : smoothing from the first data point
+                               using the prior as the prediction
+            2. Interpolation : filtering from most recent data point
+                               and smoothing from next future point
+            3. Extrapolation : predicting from final filtered point
+        """
+
+        # Unpack conditioned results
+        X_states, conditioned_states, _ = conditioned_results
+        (m_predicted, P_predicted), \
+        (m_filtered, P_filtered), \
+        (m_smoothed, P_smoothed) = conditioned_states
+
+        N = len(self.X)   # number of data points
+        K = len(X_states) # number of states
+        M = len(X_test)   # number of test points
+                
+        Pinf = self.kernel.stationary_covariance()
 
         # Nearest (future) datapoint
-        ## TODO: we assume self.X is sorted here; should we enforce that?
-        k_nexts = jnp.searchsorted(self.X, X_test, side='right')
+        ## TODO: we assume X_states is sorted here; should we enforce that?
+        k_nexts = jnp.searchsorted(X_states, X_test, side='right')
 
         # Which method to use for each test point:
         past   = (k_nexts<=0)    # Retrodiction
-        future = (k_nexts>=N)    # Forecast
+        future = (k_nexts>=K)    # Forecast
         during = ~past & ~future # Interpolate
         cases = (past.astype(int)*0 + during.astype(int)*1 + future.astype(int)*2)
 
