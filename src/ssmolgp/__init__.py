@@ -2,10 +2,11 @@
 ``ssmolgp`` is designed to be a drop-in extension of the `tinygp <https://github.com/dfm/tinygp>`_ 
 library for building Gaussian Process (GP) models in Python. It is also built 
 on top of `jax <https://github.com/google/jax>`_. ``ssmolgp`` uses state space
-representations of Gaussian Processes to implement linear-time solvers for
-GP regression and forecasting. Uniquely it also implements "integrated" kernels
-that can model time-averaged measurements, such as those from long-exposure
-astronomical observations, and can solve these in linear time as well.
+representations of Gaussian Processes to implement linear-time (or up to logN with
+parallelization on GPU) solvers for GP regression and forecasting. It also implements 
+"integrated" kernels that can model time-averaged measurements, such as those from 
+long-exposure astronomical observations, which can also be solved in linear time and is
+compatible with the parallel methods.
 
 The primary way that you will use to interact with ``ssmolgp`` is by constructing
 "kernel" functions using the building blocks provided in the ``kernels``
