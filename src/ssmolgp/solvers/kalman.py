@@ -37,7 +37,7 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
         return m_filtered, P_filtered, m_predicted, P_predicted
 
 @jax.jit
-def kalman_filter(A, Q, H, R, t, y, m0, P0, return_v_S=False):
+def kalman_filter(A, Q, H, R, t, y, m0, P0):
     '''
     Jax implementation of the Kalman filter algorithm
 

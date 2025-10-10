@@ -54,11 +54,10 @@ class StateSpaceModel(Kernel):
     3. observation_model     : The observation model, H
     4. noise                 : The spectral density of the white noise process, Qc
     5. noise_effect_matrix   : The noise effect matrix, L 
-        (defaults to [0, 1] if not provided)
     6. transition_matrix     : The transition matrix, A_k
         (optional, default uses jax.scipy.linalg.expm)
     7. process_noise        : The process noise, Q_k
-        (optional, default uses Van Loan matrix exponential)
+        (optional, default uses Pinf and A or (alternatively) Van Loan matrix exponential)
 
     As a child of :class:`tinygp.kernels.Kernel`, this class also implements
     addition and multiplication with other kernels, as well as evaluation
@@ -89,7 +88,7 @@ class StateSpaceModel(Kernel):
     
     @abstractmethod
     def noise_effect_matrix(self) -> JAXArray:
-        ''' The noise effect matrix L, by default this is [0,1]'''
+        ''' The noise effect matrix, $L$'''
         raise NotImplementedError
     
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
@@ -99,37 +98,38 @@ class StateSpaceModel(Kernel):
         Default behavior uses jax.scipy.linalg.expm(self.design_matrix() * (X2 - X1)),
         which is appropriate for stationary kernels defined by a linear Gaussian SSM.
        
-       Overload this method if you have a more general model or simply wish to
+        Overload this method if you have a more general model or simply wish to
         define the transition matrix analytically.
         """
         F = self.design_matrix()
         dt = X2 - X1
         return expm(F * dt)
  
-    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
         """
         The process noise matrix $Q_k$
         
-        Default behavior computes Q from Pinf - A @ Pinf @ A, if Pinf and A 
-        are both implemented. Otherwise, uses the Van Loan method to compute
+        Default behavior computes Q from Pinf - A @ Pinf @ A 
+        (see Eq. 7 in Solin & Sarkka 2014). Alternatively, 
+        give use_van_loan=True to use the Van Loan method to compute 
         Q from the matrix exponential involving the F, L, and Qc
 
         Overload this method if you have a more general model or simply wish to
         define the process noise analytically.
         """
-        try:
-            # See Eq. 7 in Solin & Sarkka 2014
-            # https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
-            Pinf = self.stationary_covariance()
-            A = self.transition_matrix(X1, X2)
-            return Pinf - A @ Pinf @ A.T 
-        except NotImplementedError:
+        if use_van_loan:
             # use Van Loan matrix exponential given F, L, Qc
             dt = X2 - X1
             F = self.design_matrix()
             L = self.noise_effect_matrix()
             Qc = self.noise()
             return Q_from_VanLoan(F,L,Qc,dt)
+        else:
+            # See Eq. 7 in Solin & Sarkka 2014
+            # https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
+            Pinf = self.stationary_covariance()
+            A = self.transition_matrix(X1, X2)
+            return Pinf - A @ Pinf @ A.T 
 
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
@@ -206,9 +206,10 @@ class Sum(StateSpaceModel):
     kernel1: StateSpaceModel
     kernel2: StateSpaceModel
 
-    dimension: JAXArray | float = eqx.field(
-        init=False, default_factory=lambda self: self.kernel1.dimension + self.kernel2.dimension
-    )
+    def __init__(self, kernel1, kernel2):
+        self.kernel1 = kernel1
+        self.kernel2 = kernel2
+        self.dimension = self.kernel1.dimension + self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """We assume that both kernels use the same coordinates"""
@@ -248,6 +249,15 @@ class Sum(StateSpaceModel):
                 self.kernel2.observation_model(X),
             )
         )
+    
+    def noise(self) -> JAXArray:
+        ''' TODO: is it just Qc = Qc1 + Qc2 ??'''
+        ## TODO: we might not need to even implement this
+        ##  since practically we only need process_noise 
+        ##  which can be has each component process_noise 
+        ##  defined by its own Qc already
+        raise NotImplementedError
+    
 
 class Product(StateSpaceModel):
     """
@@ -259,9 +269,10 @@ class Product(StateSpaceModel):
     kernel1: StateSpaceModel
     kernel2: StateSpaceModel
 
-    dimension: JAXArray | float = eqx.field(
-        init=False, default_factory=lambda self: self.kernel1.dimension * self.kernel2.dimension
-    )
+    def __init__(self, kernel1, kernel2):
+        self.kernel1 = kernel1
+        self.kernel2 = kernel2
+        self.dimension = self.kernel1.dimension * self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """We assume that both kernels use the same coordinates"""
@@ -308,6 +319,14 @@ class Product(StateSpaceModel):
             self.kernel1.observation_model(X),
             self.kernel2.observation_model(X),
         )
+    
+    def noise(self) -> JAXArray:
+        ''' TODO: is it Qc = Qc1 * Qc2 ??'''
+        ## TODO: we might not need to even implement this
+        ##  since practically we only need process_noise 
+        ##  which can be has each component process_noise 
+        ##  defined by its own Qc already
+        raise NotImplementedError
 
 class Wrapper(StateSpaceModel):
     """A base class for wrapping kernels with some custom implementations"""
