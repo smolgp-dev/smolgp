@@ -39,7 +39,7 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
 
 @jax.jit
 def kalman_filter(A, Q, H, R, t, y, m0, P0):
-    '''
+    """
     Jax implementation of the Kalman filter algorithm
 
     See Theorem 4.2 (pdf page 77) in "Bayesian Filtering and Smoothing"
