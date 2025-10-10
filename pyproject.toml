@@ -24,6 +24,7 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "astropy>=6.1.7",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.6",
     "tinygp",
