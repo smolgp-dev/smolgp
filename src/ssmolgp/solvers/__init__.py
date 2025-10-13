@@ -1,15 +1,15 @@
 """
 In ``ssmolgp``, "solvers" provide a swappable low-level interface for
-implementing the filtering and smoothing algorithms required to condition 
-Gaussian Process models. New solvers can be implemented as external packages 
+implementing the filtering and smoothing algorithms required to condition
+Gaussian Process models. New solvers can be implemented as external packages
 or as pull requests to the main ``ssmolgp`` GitHub project.
 
 The built in solvers are:
 
 1. :class:`StateSpaceSolver`: A solver that uses the standard Kalman filter
    and RTS smoothing algorithms to derive the optimal predictive means and
-   covariances for a linear Gaussian state space model. This is the default 
-   solver, and is intended to be used with the instantaneous kernels 
+   covariances for a linear Gaussian state space model. This is the default
+   solver, and is intended to be used with the instantaneous kernels
    implemented in `ssmolgp.kernels.base`. [TODO: compare benchmarking
    to `tinygp.solvers.QuasisepSolver`].
 
@@ -36,3 +36,4 @@ low-level feature and the details are definitely subject to change!
 __all__ = ["StateSpaceModel"]
 
 from ssmolgp.solvers.solver import StateSpaceSolver
+from ssmolgp.solvers.parallel.solver import ParallelStateSpaceSolver

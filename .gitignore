@@ -11,5 +11,6 @@ __pycache__
 uv.lock
 
 .python-version
+.DS_Store
 
 playground/

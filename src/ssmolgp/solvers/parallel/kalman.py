@@ -6,7 +6,13 @@ import jax.numpy as jnp
 __all__ = ["KalmanFilter", "kalman_filter"]
 
 
-def KalmanFilter(kernel, X, y, noise):
+def KalmanFilter(
+    kernel,
+    X,
+    y,
+    noise,
+    return_v_S=False,
+):
     """
     Wrapper for the parallel Kalman filter.
 
@@ -32,18 +38,49 @@ def KalmanFilter(kernel, X, y, noise):
 
     asso_params = make_associative_params(Phi, H, Q, R, X, y, m0, P0)
     A, b, C, eta, J = kalman_filter(asso_params)
-    return (A, b, C, eta, J)
+    m_pred, P_pred, v, S = postprocess(
+        Phi,
+        H,
+        Q,
+        R,
+        X,
+        y,
+        b,
+        C,
+        m0,
+        P0,
+    )
+    return (
+        (A, b, C, eta, J),
+        (m_pred, P_pred, v, S),
+    )
 
 
 @jax.jit
-def make_associative_params(Phi, H, Q, R, X, y, m0, P0):
+def make_associative_params(
+    Phi,
+    H,
+    Q,
+    R,
+    X,
+    y,
+    m0,
+    P0,
+):
     """Generate the associative parameters needed for parallel Kalman
 
     See Eqns. 10, 11, 12 from Sarkka & Garcia-Fernandez (2020)
 
     """
 
-    def make_first_params(Phi, H, m0, P0, y0, r0):
+    def make_first_params(
+        Phi,
+        H,
+        m0,
+        P0,
+        y0,
+        r0,
+    ):
         Phi0 = Phi(0, 0)
         H0 = H(0)  # this is sort of unnecessary but we'll keep it for now
 
@@ -64,11 +101,18 @@ def make_associative_params(Phi, H, Q, R, X, y, m0, P0):
 
         return (A, b, C, eta, J)
 
-    def make_generic_params(Phi, H, Q, t_delta, y, r):
+    def make_generic_params(
+        Phi,
+        H,
+        Q,
+        t_delta,
+        y,
+        r,
+    ):
         Phi_dt = Phi(0, t_delta)
         I = jnp.eye(Phi_dt.shape[-1])
 
-        Hk = H(t_delta)
+        Hk = H(t_delta)  # this is wrong
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
@@ -144,3 +188,70 @@ def kalman_filter(asso_params):
     )
 
     return (A, b, C, eta, J)
+
+
+@jax.jit
+def postprocess(
+    Phi,
+    H,
+    Q,
+    R,
+    X,
+    y,
+    b,
+    C,
+    m0,
+    P0,
+):
+
+    t_delta = jnp.diff(X)
+    dim = b.shape[-1]
+    I = jnp.eye(dim)
+
+    Phis = jax.vmap(Phi, in_axes=(None, 0))(0, t_delta)
+    Qs = jax.vmap(Q, in_axes=(None, 0))(0, t_delta)
+
+    Phi_all = jnp.concatenate(
+        [I[jnp.newaxis, ...], Phis],
+        axis=0,
+    )
+    Q_all = jnp.concatenate(
+        [jnp.zeros_like(I)[jnp.newaxis, ...], Qs],
+        axis=0,
+    )
+    H_all = jax.vmap(H, in_axes=(0,))(X)
+    R_all = R
+
+    m_prev = jnp.concatenate(
+        [m0[jnp.newaxis, ...], b[:-1]],
+        axis=0,
+    )
+    P_prev = jnp.concatenate(
+        [P0[jnp.newaxis, ...], C[:-1]],
+        axis=0,
+    )
+
+    m_pred = jax.vmap(lambda _Phi, _m: _Phi @ _m)(
+        Phi_all,
+        m_prev,
+    )
+    P_pred = jax.vmap(lambda _Phi, _P_prev, _Q: _Phi @ _P_prev @ _Phi.T + _Q)(
+        Phi_all,
+        P_prev,
+        Q_all,
+    )
+
+    y_pred = jax.vmap(lambda _H, _m: _H @ _m, in_axes=(0, 0))(
+        H_all,
+        m_pred,
+    )
+
+    v = y[..., jnp.newaxis] - y_pred
+
+    S = jax.vmap(lambda _H, _P, _R: _H @ _P @ _H.T + _R)(
+        H_all,
+        P_pred,
+        R_all,
+    )
+
+    return (m_pred, P_pred, v, S)

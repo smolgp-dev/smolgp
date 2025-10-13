@@ -21,12 +21,14 @@ from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
 from ssmolgp.kernels import StateSpaceModel
-from ssmolgp.kernels.integrated import IntegratedStateSpaceModel # TODO: define this
+from ssmolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
 from ssmolgp.solvers import StateSpaceSolver
 from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
+from ssmolgp.solvers import ParallelStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
+
 
 class ConditionedStates(eqx.Module):
     """
@@ -37,31 +39,41 @@ class ConditionedStates(eqx.Module):
     filtered_mean/var  : Kalman filtered state
     smoothed_mean/var  : RTS smoothed state
     """
-    times          : JAXArray
-    predicted_mean : JAXArray
-    filtered_mean  : JAXArray
-    smoothed_mean  : JAXArray
-    predicted_var  : JAXArray
-    filtered_var   : JAXArray
-    smoothed_var   : JAXArray
 
-    def __init__(self, times,
-                 m_pred   : JAXArray, P_pred   : JAXArray,
-                 m_filt   : JAXArray, P_filt   : JAXArray, 
-                 m_smooth : JAXArray, P_smooth : JAXArray):
+    times: JAXArray
+    predicted_mean: JAXArray
+    filtered_mean: JAXArray
+    smoothed_mean: JAXArray
+    predicted_var: JAXArray
+    filtered_var: JAXArray
+    smoothed_var: JAXArray
+
+    def __init__(
+        self,
+        times,
+        m_pred: JAXArray,
+        P_pred: JAXArray,
+        m_filt: JAXArray,
+        P_filt: JAXArray,
+        m_smooth: JAXArray,
+        P_smooth: JAXArray,
+    ):
         self.times = times
         self.predicted_mean = m_pred
-        self.predicted_var  = P_pred
-        self.filtered_mean  = m_filt
-        self.filtered_var   = P_filt
-        self.smoothed_mean  = m_smooth
-        self.smoothed_var   = P_smooth
-        
+        self.predicted_var = P_pred
+        self.filtered_mean = m_filt
+        self.filtered_var = P_filt
+        self.smoothed_mean = m_smooth
+        self.smoothed_var = P_smooth
+
     def __call__(self):
-        packaged_results = (self.predicted_mean, self.predicted_var), \
-                           (self.filtered_mean, self.filtered_var), \
-                           (self.smoothed_mean, self.smoothed_var)
+        packaged_results = (
+            (self.predicted_mean, self.predicted_var),
+            (self.filtered_mean, self.filtered_var),
+            (self.smoothed_mean, self.smoothed_var),
+        )
         return self.times, packaged_results, None
+
 
 class GaussianProcess(eqx.Module):
     """An interface for designing a Gaussian Process regression model
@@ -94,7 +106,7 @@ class GaussianProcess(eqx.Module):
     X: JAXArray
     mean_function: means.MeanBase
     mean: JAXArray
-    var:  JAXArray | None
+    var: JAXArray | None
     noise: Noise
     solver: StateSpaceSolver
     states: ConditionedStates
@@ -144,11 +156,11 @@ class GaussianProcess(eqx.Module):
             if isinstance(kernel, IntegratedStateSpaceModel):
                 # TODO: if any leaf kernels are integrated, use this
                 # will have to define a Sum between integrated/non
-                # (and Product) that creates a new integrated model 
+                # (and Product) that creates a new integrated model
                 solver = IntegratedStateSpaceSolver
             elif isinstance(self.kernel, StateSpaceModel):
                 solver = StateSpaceSolver
-            else: 
+            else:
                 raise ValueError(
                     "Must provide a solver if the kernel is not "
                     "a StateSpaceModel or IntegratedStateSpaceModel"
@@ -159,6 +171,14 @@ class GaussianProcess(eqx.Module):
                 self.X,
                 self.noise,
             )
+        # If solver type is passed
+        elif solver is ParallelStateSpaceSolver:
+            self.solver = solver(
+                kernel,
+                self.X,
+                self.noise,
+            )
+        # If an instantiated solver is passed like condGP
         else:
             self.solver = solver
 
@@ -188,9 +208,19 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
-        _, (_, _, _, _, v, S) = self.solver.Kalman(self.kernel, 
-                                          self.X, y, self.noise, 
-                                          return_v_S=True)
+        if isinstance(self.solver, StateSpaceSolver):
+            _, (_, _, _, _, v, S) = self.solver.Kalman(
+                self.kernel, self.X, y, self.noise, return_v_S=True
+            )
+        elif isinstance(self.solver, ParallelStateSpaceSolver):
+            _, _, outputs = self.solver.Kalman(
+                self.kernel,
+                self.X,
+                y,
+                self.noise,
+                return_v_S=True,
+            )
+            _, _, v, S = outputs
 
         return self._compute_log_prob(v, S)
 
@@ -199,10 +229,10 @@ class GaussianProcess(eqx.Module):
         y: JAXArray,
         X_test: JAXArray | None = None,
         *,
-        diag: JAXArray | None = None, # TODO: is this needed?
-        noise: Noise | None = None,   # TODO: is this needed?
+        diag: JAXArray | None = None,  # TODO: is this needed?
+        noise: Noise | None = None,  # TODO: is this needed?
         include_mean: bool = True,
-        kernel: kernels.Kernel | None = None, # TODO: select a component kernel
+        kernel: kernels.Kernel | None = None,  # TODO: select a component kernel
     ) -> ConditionResult:
         """Condition the model on observed data
 
@@ -253,9 +283,11 @@ class GaussianProcess(eqx.Module):
 
         ## unpack into prediction at the states
         X_states, conditioned_states, (v, S) = conditioned_results
-        (m_predicted, P_predicted), \
-        (m_filtered, P_filtered), \
-        (m_smoothed, P_smoothed) = conditioned_states
+        (
+            (m_predicted, P_predicted),
+            (m_filtered, P_filtered),
+            (m_smoothed, P_smoothed),
+        ) = conditioned_states
 
         ## Grab likelihood
         log_prob = self._compute_log_prob(v, S)
@@ -273,34 +305,44 @@ class GaussianProcess(eqx.Module):
             # If X_test was given, also predit at those points
             mu, var = self.solver.predict(X_test, conditioned_results)
         else:
-            # Otherwise, project the conditioned states 
+            # Otherwise, project the conditioned states
             # (at the data points) to observation space
             X_test = X_states
-            H  = jax.vmap(observation_model)(X_test)
+            H = jax.vmap(observation_model)(X_test)
             ks = jnp.arange(len(X_test))
             # TODO: when we have integral states, we should have the solver
             # return only the exposure-end states along with the data timestamps
             # that way here we don't have to worry about H at exposure starts technically being "zero"
             # if we implement it that way, we can remove X_test from everywhere
-            mu  = jax.vmap(lambda k: H[k]@m_smoothed[k])(ks).squeeze()
-            var = jax.vmap(lambda k: H[k]@P_smoothed[k]@H[k].T)(ks).squeeze()
+            mu = jax.vmap(lambda k: H[k] @ m_smoothed[k])(ks).squeeze()
+            var = jax.vmap(lambda k: H[k] @ P_smoothed[k] @ H[k].T)(ks).squeeze()
 
         # Save the conditioned state values to a new GP object
         # so we can use them to make quick predictions at test
         # points with subsequent calls to self.predict
-        states = ConditionedStates(X_states, 
-                                   m_predicted, P_predicted, 
-                                   m_filtered, P_filtered, 
-                                   m_smoothed, P_smoothed)
+        states = ConditionedStates(
+            X_states,
+            m_predicted,
+            P_predicted,
+            m_filtered,
+            P_filtered,
+            m_smoothed,
+            P_smoothed,
+        )
 
-        condGP = GaussianProcess(kernel=self.kernel, X=X_test,
-                    noise=self.noise, mean=self.mean, solver=self.solver,
-                    mean_value=mu, variance_value=var, states=states,
+        condGP = GaussianProcess(
+            kernel=self.kernel,
+            X=X_test,
+            noise=self.noise,
+            mean=self.mean,
+            solver=self.solver,
+            mean_value=mu,
+            variance_value=var,
+            states=states,
         )
 
         # Return the likelihood and conditioned GP
         return log_prob, condGP
-
 
     def predict(
         self,
@@ -321,7 +363,7 @@ class GaussianProcess(eqx.Module):
                 with the ``X`` data provided when instantiating this object. If
                 it is not provided, ``X`` will be used by default, so the
                 predictions will be made at the data coordinates.
-            y (JAXArray): The observed data. Only needs to be given if the GP 
+            y (JAXArray): The observed data. Only needs to be given if the GP
                 has not yet been conditioned. This should have the shape
                 ``(N_data,)``, where ``N_data`` was the zeroth axis of the ``X``
                 data provided when instantiating this object.
@@ -332,12 +374,12 @@ class GaussianProcess(eqx.Module):
             return_cov (bool, optional): If ``True``, the covariance of the
                 predicted values at ``X_test`` will be returned. If
                 ``return_var`` is ``True``, this flag will be ignored.
-            observation_model (Any, optional): optionally provide a function of 
-                                X_test to define the output observation model. 
+            observation_model (Any, optional): optionally provide a function of
+                                X_test to define the output observation model.
                                 Default will use that of the kernel.
             TODO: add an option to predict just at a given component kernel? or bake that into observation_model above
 
-                
+
         Returns:
             The mean of the predictive model evaluated at ``X_test``, with shape
             ``(N_test,)`` where ``N_test`` is the zeroth dimension of
@@ -349,23 +391,30 @@ class GaussianProcess(eqx.Module):
 
         if self.states is None:
             # Need to condition the GP first
-            assert y is not None, "The GP has not been conditioned yet, and no data array `y` was given."
-            llh, condGP = self.condition(y, X_test)  # condition on data, also predicts at X_test  
-            mu, var = condGP.loc, condGP.var         # which we can read off like so
+            assert (
+                y is not None
+            ), "The GP has not been conditioned yet, and no data array `y` was given."
+            llh, condGP = self.condition(
+                y, X_test
+            )  # condition on data, also predicts at X_test
+            mu, var = condGP.loc, condGP.var  # which we can read off like so
         else:
             if X_test is None:
-                mu  = self.loc # get pre-computed mean 
-                var = self.var # & var at the data points
+                mu = self.loc  # get pre-computed mean
+                var = self.var  # & var at the data points
             else:
                 # TODO: if component kernel is passed, fold that into H_test here
-                H_test = self.kernel.observation_model if observation_model is None else observation_model
+                H_test = (
+                    self.kernel.observation_model
+                    if observation_model is None
+                    else observation_model
+                )
                 mu, var = self.solver.predict(X_test, self.states(), H_test)
         if return_var:
             return mu, var
         # if return_cov:
         #     return mu, var
         return mu
-
 
     ## TODO: how to define the sample function?
     def sample(
@@ -426,14 +475,13 @@ class GaussianProcess(eqx.Module):
         #     return quad + logdetS_k + d*jnp.log(2*jnp.pi)
 
         # loglike = -0.5 * jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
-
         L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
         w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
-        w = jnp.squeeze(w, axis=-1) 
+        w = jnp.squeeze(w, axis=-1)
         quad = jnp.sum(w**2, axis=1)
         logdetS = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L, axis1=-2, axis2=-1)), axis=1)
         d = v.shape[1]
-        log_probs = quad + logdetS + d*jnp.log(2.0 * jnp.pi)
+        log_probs = quad + logdetS + d * jnp.log(2.0 * jnp.pi)
         loglike = -0.5 * jnp.sum(log_probs)
 
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
