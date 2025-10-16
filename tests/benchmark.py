@@ -79,7 +79,7 @@ def plot_benchmark(Ns, runtime_ss, runtime_qs, runtime_gp, ax=None,
     ax.set_xticks(tens, labels=['' for _ in tens], minor=True)
     ax.grid(alpha=0.5, zorder=-10);
     ax.grid(alpha=0.5, zorder=-10, which='minor', axis='x');
-    ax.set_ylim(top=jnp.nanmax(runtime_ss[:,0])*1e3)
+    # ax.set_ylim(top=jnp.nanmax(runtime_ss[:,0])*1e3)
     if savefig:
         plt.savefig(savefig, dpi=300, bbox_inches='tight')
     return ax
@@ -99,14 +99,17 @@ def benchmark_llh(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
         t_train, y_train = generate_data(N, kernel)
 
+        @jax.jit
         def ss_llh(y_train):
             gp_ss =ssmolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
             return gp_ss.log_probability(y_train)
         
+        @jax.jit
         def qs_llh(y_train):
             gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
             return gp_qs.log_probability(y_train)
         
+        @jax.jit
         def gp_llh(y_train):
             gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
             return gp_gp.log_probability(y_train)
@@ -166,14 +169,17 @@ def benchmark_condition(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
         t_train, y_train = generate_data(N, kernel)
 
+        @jax.jit
         def ss_cond(y_train):
             gp_ss =ssmolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
             return gp_ss.condition(y_train)
         
+        @jax.jit
         def qs_cond(y_train):
             gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
             return gp_qs.condition(y_train)
         
+        @jax.jit
         def gp_cond(y_train):
             gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
             return gp_gp.condition(y_train)
@@ -232,6 +238,7 @@ def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
     for M in Ms:
         # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
         t_train, y_train = generate_data(N, kernel)
+        # t_train, y_train = generate_data(M, kernel)
         dt = 0.1 * (t_train.max()-t_train.min())
         t_test = jnp.linspace(t_train.min()-dt, t_train.max()+dt, M)
 
@@ -242,13 +249,16 @@ def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         _, condGPss = gp_ss.condition(y_train)
         
         ## Only time the actual prediction part
+        @jax.jit
         def ss_pred(t_test):
             # _, condGPss = gp_ss.condition(y_train)
             return condGPss.predict(t_test, return_var=True)
         
+        @jax.jit
         def qs_pred(t_test):
             return gp_qs.predict(y_train, t_test, return_var=True)
         
+        @jax.jit
         def gp_pred(t_test):
             return gp_gp.predict(y_train, t_test, return_var=True)
         
