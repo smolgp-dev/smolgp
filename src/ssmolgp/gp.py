@@ -22,9 +22,10 @@ from tinygp.noise import Diagonal, Noise
 
 from ssmolgp.kernels import StateSpaceModel
 from ssmolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
+
 from ssmolgp.solvers import StateSpaceSolver
-from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
 from ssmolgp.solvers import ParallelStateSpaceSolver
+from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
@@ -210,11 +211,10 @@ class GaussianProcess(eqx.Module):
         """
         if isinstance(self.solver, StateSpaceSolver):
             _, (_, _, _, _, v, S) = self.solver.Kalman(
-                self.kernel, self.X, y, self.noise, return_v_S=True
+                self.X, y, self.noise, return_v_S=True
             )
         elif isinstance(self.solver, ParallelStateSpaceSolver):
             _, _, outputs = self.solver.Kalman(
-                self.kernel,
                 self.X,
                 y,
                 self.noise,

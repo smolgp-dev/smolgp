@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from tinygp.helpers import JAXArray
 
 __all__ = ["KalmanFilter", "kalman_filter"]
 
@@ -28,6 +29,8 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
+    if not isinstance(P0, JAXArray):
+        P0 = P0.to_dense() # needed for carry in jax.lax.scan
 
     output = kalman_filter(A, Q, H, R, X, y, m0, P0)
     if return_v_S:
@@ -45,8 +48,8 @@ def kalman_filter(A, Q, H, R, t, y, m0, P0):
     See Theorem 4.2 (pdf page 77) in "Bayesian Filtering and Smoothing"
     by Simo S{\"a}rkk{\"a} for detailed description of the algorithm and notation.
 
-    e.g. _prev is _{k-1} in Sarkka notation
-         _pred is _k^{-} in Sarkka notation
+    e.g. _prev is _{k-1}
+         _pred is _k^{-}
 
     Total runtime complexity is O(N*d^3) where N is the number
     of time steps and d is the dimension of the state vector.
@@ -88,6 +91,8 @@ def kalman_filter(A, Q, H, R, t, y, m0, P0):
         P_pred = A_prev @ P_prev @ A_prev.T + Q_prev
 
         # Update (Eq. 4.21)
+        ## TODO: let t be a tuple and use coord_to_sortable to get time axis out
+        ##       That way we can pass the full t into H and it can use e.g. instid etc.
         H_k = H(t[k])  # observation model for this time step
         y_pred = H_k @ m_pred  # predicted observation
         v_k = y[k] - y_pred  # "innovation" or "surprise" term

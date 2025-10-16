@@ -46,14 +46,14 @@ class StateSpaceSolver(eqx.Module):
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
         return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
 
-    def Kalman(self, kernel, X, y, noise, return_v_S=False) -> Any:
+    def Kalman(self, X, y, noise, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         X_states = X # states are at the data points here
-        return X_states, KalmanFilter(kernel, X_states, y, noise, return_v_S=return_v_S)
+        return X_states, KalmanFilter(self.kernel, X_states, y, noise, return_v_S=return_v_S)
 
-    def RTS(self, kernel, X, kalman_results) -> Any:
+    def RTS(self, X, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        return RTSSmoother(kernel, X, kalman_results)
+        return RTSSmoother(self.kernel, X, kalman_results)
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
@@ -62,7 +62,7 @@ class StateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        X_states, kalman_results = self.Kalman(self.kernel, self.X, y, self.noise, return_v_S=return_v_S)
+        X_states, kalman_results = self.Kalman(self.X, y, self.noise, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -71,7 +71,7 @@ class StateSpaceSolver(eqx.Module):
             v_S = None
         
         # RTS smoothing
-        rts_results = self.RTS(self.kernel, self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
+        rts_results = self.RTS(self.X, (m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
         # Pack-up results and return
@@ -119,6 +119,8 @@ class StateSpaceSolver(eqx.Module):
         M = len(X_test)   # number of test points
                 
         Pinf = self.kernel.stationary_covariance()
+        if not isinstance(Pinf, JAXArray):
+            Pinf = Pinf.to_dense() # need dense version for jnp.linalg.solve in retrodict
 
         # Nearest (future) datapoint
         ## TODO: we assume X_states is sorted here; should we enforce that?
