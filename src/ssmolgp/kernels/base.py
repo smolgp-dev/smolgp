@@ -73,7 +73,7 @@ class StateSpaceModel(Kernel):
 
     @abstractmethod
     def stationary_covariance(self) -> JAXArray:
-        """The stationary covariance of the process, $P_\infty$"""
+        """The stationary covariance of the process, Pinf"""
         raise NotImplementedError
 
     @abstractmethod
@@ -283,7 +283,7 @@ class Product(StateSpaceModel):
         F1 = self.kernel1.design_matrix()
         F2 = self.kernel2.design_matrix()
         return _prod_helper(F1, jnp.eye(F2.shape[0])) +\
-               _prod_helper(jnp.eye(F1.shape[0]), F2)
+               _prod_helper(jnp.eye(F2.shape[0]), F2)
     
     def noise_effect_matrix(self) -> JAXArray:
         """L = L1 ⊗ L2"""
@@ -315,10 +315,10 @@ class Product(StateSpaceModel):
 
     def observation_model(self, X: JAXArray) -> JAXArray:
         """H = H1 ⊗ H2"""
-        return _prod_helper(
-            self.kernel1.observation_model(X),
-            self.kernel2.observation_model(X),
-        )
+        return jnp.array([_prod_helper(
+            self.kernel1.observation_model(X)[0],
+            self.kernel2.observation_model(X)[0],
+        )])
     
     def noise(self) -> JAXArray:
         ''' TODO: is it Qc = Qc1 * Qc2 ??'''
