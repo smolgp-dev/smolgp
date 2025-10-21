@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 import tinygp
-import ssmolgp
+import smolgp
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -101,7 +101,7 @@ def benchmark_llh(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
 
         @jax.jit
         def ss_llh(y_train):
-            gp_ss =ssmolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
+            gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
             return gp_ss.log_probability(y_train)
         
         @jax.jit
@@ -171,7 +171,7 @@ def benchmark_condition(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
 
         @jax.jit
         def ss_cond(y_train):
-            gp_ss =ssmolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
+            gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
             return gp_ss.condition(y_train)
         
         @jax.jit
@@ -245,7 +245,7 @@ def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         ## Prepare GP objects
         gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
         gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
-        gp_ss =ssmolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
+        gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
         _, condGPss = gp_ss.condition(y_train)
         
         ## Only time the actual prediction part

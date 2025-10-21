@@ -11,9 +11,9 @@ import equinox as eqx
 from tinygp.helpers import JAXArray
 from tinygp.noise import Noise
 from tinygp.solvers.quasisep.solver import QuasisepSolver
-from ssmolgp.kernels.base import StateSpaceModel
-from ssmolgp.solvers.kalman import KalmanFilter
-from ssmolgp.solvers.rts import RTSSmoother
+from smolgp.kernels.base import StateSpaceModel
+from smolgp.solvers.kalman import KalmanFilter
+from smolgp.solvers.rts import RTSSmoother
 
 class StateSpaceSolver(eqx.Module):
     """

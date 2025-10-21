@@ -20,12 +20,12 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-from ssmolgp.kernels import StateSpaceModel
-from ssmolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
+from smolgp.kernels import StateSpaceModel
+from smolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
 
-from ssmolgp.solvers import StateSpaceSolver
-from ssmolgp.solvers import ParallelStateSpaceSolver
-from ssmolgp.solvers.integrated import IntegratedStateSpaceSolver
+from smolgp.solvers import StateSpaceSolver
+from smolgp.solvers import ParallelStateSpaceSolver
+from smolgp.solvers.integrated import IntegratedStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution

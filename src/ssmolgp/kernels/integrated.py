@@ -30,8 +30,8 @@ from jax.scipy.linalg import expm
 
 from tinygp.helpers import JAXArray
 
-from ssmolgp.kernels import StateSpaceModel
-from ssmolgp.helpers import Q_from_VanLoan
+from smolgp.kernels import StateSpaceModel
+from smolgp.helpers import Q_from_VanLoan
 
 class IntegratedStateSpaceModel(StateSpaceModel):
     """

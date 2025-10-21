@@ -5,13 +5,13 @@ The kernels implemented in this subpackage are defined similarly to
 2. Treat the observation model as a column vector and the transition matrix
    in its usual form (compared to transposed forms in quasisep)
 3. Handle integrated versions of each kernel
-These kernels are compatible with :class:`ssmolgp.solvers.StateSpaceSolver`
+These kernels are compatible with :class:`smolgp.solvers.StateSpaceSolver`
 which use Bayesian filtering and smoothing algorithms to perform scalable GP
 inference. (see :ref:`api-solvers-statespace` for more technical details). 
 
 Like the quasisep kernels, these methods are experimental, so you may find 
 the documentation patchy in places. You are encouraged to `open issues or 
-pull requests <https://github.com/rrubenza/ssmolgp/issues>`_ as you find gaps.
+pull requests <https://github.com/rrubenza/smolgp/issues>`_ as you find gaps.
 """
 
 from __future__ import annotations
@@ -42,7 +42,7 @@ from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
 from tinygp.solvers.quasisep.block import Block
 
-from ssmolgp.helpers import Q_from_VanLoan
+from smolgp.helpers import Q_from_VanLoan
 
 class StateSpaceModel(Kernel):
     """
