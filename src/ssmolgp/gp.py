@@ -185,16 +185,17 @@ class GaussianProcess(eqx.Module):
 
     @property
     def loc(self) -> JAXArray:
+        # TODO: Return H @ m_smooth
         return self.mean
 
     @property
     def variance(self) -> JAXArray:
-        # TODO: return H @ Pinf @ H.T here?
+        # TODO: Return H @ P_smooth @ H.T
         return self.var
 
     @property
     def covariance(self) -> JAXArray:
-        # TODO: what do we return here?
+        # TODO: Eq. 12.55 in Sarkka & Solin 2019
         return self.covariance_value
 
     def log_probability(self, y: JAXArray) -> JAXArray:
