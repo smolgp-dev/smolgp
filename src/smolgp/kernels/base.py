@@ -140,6 +140,13 @@ class StateSpaceModel(Kernel):
             A = self.transition_matrix(X1, X2)
             return Pinf - A @ Pinf @ A.T 
 
+    def reset_matrix(self, instid: int = 0) -> JAXArray:
+        """
+        The reset matrix for an instantaneous state  
+        space model is trivially the identity matrix.
+        """
+        return jnp.eye(self.dimension)
+    
 
     def __add__(self, other: Kernel | JAXArray) -> Kernel:
         if not isinstance(other, StateSpaceModel):
@@ -248,7 +255,12 @@ class Sum(StateSpaceModel):
                 self.kernel2.observation_model(X),
             )
         )
-    
+
+    def reset_matrix(self, instid: int = 0) -> JAXArray:
+        """RESET = BlockDiag(RESET1, RESET2)"""
+        return Block(self.kernel1.reset_matrix(instid), 
+                     self.kernel2.reset_matrix(instid))
+
     def noise(self) -> JAXArray:
         ''' TODO: is it just Qc = Qc1 + Qc2 ??'''
         ## TODO: we might not need to even implement this
@@ -317,6 +329,13 @@ class Product(StateSpaceModel):
         return jnp.array([_prod_helper(
             self.kernel1.observation_model(X)[0],
             self.kernel2.observation_model(X)[0],
+        )])
+    
+    def reset_matrix(self, instid: int = 0) -> JAXArray:
+        """RESET = RESET1 ⊗ RESET2"""
+        return jnp.array([_prod_helper(
+            self.kernel1.reset_matrix(instid),
+            self.kernel2.reset_matrix(instid),
         )])
     
     def noise(self) -> JAXArray:
