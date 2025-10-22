@@ -30,99 +30,160 @@ from jax.scipy.linalg import expm
 
 from tinygp.helpers import JAXArray
 
+import smolgp.kernels as base_kernels
 from smolgp.kernels import StateSpaceModel
-from smolgp.helpers import Q_from_VanLoan
+from smolgp.helpers import Q_from_VanLoan, Phibar_from_VanLoan
+
 
 class IntegratedStateSpaceModel(StateSpaceModel):
     """
     A generic class that augments a :class:`StateSpaceModel` 
-    obejct (which has state `x`) with an integral state `z`, 
+    object (which has state `x`) with an integral state `z`, 
     to model the joint state `X = [x; z]`.
+
+    The coordinates for an integrated model should be a tuple of
+        X = (t, delta, instid), 
+    where `t` is the usual coordinate (e.g. time),
+    `delta` is the integration range (e.g. exposure time),
+    and `instid` is an index encoding which instrument the measurement corresponds to.
     """
 
-    ## Same functions as StateSpaceModel
-    ## put into augmented form, plus:
-    ##   - integrated_transition_matrix
-    ##   - integrated_process_noise
-    def __init__(self):
-        pass
+    dimension: JAXArray | float = eqx.field(static=True) # dimensionality of the augmented space
+    num_insts: JAXArray | int = eqx.field(static=True, default=1)  # number of integral states
+    base_model: StateSpaceModel = eqx.field(static=True)  # the underlying (non-integrated) SSM (dimension=d)
+    d: JAXArray | int = eqx.field(static=True)  # dimension of the base model
+    I: JAXArray = eqx.field(static=True)  # identity matrix of size dxd
+    Z: JAXArray = eqx.field(static=True)  # zero matrix of size dxd
 
+    def __init__(self, base_model: StateSpaceModel, num_insts: int = 1):
+        """
+        Augment the base_model (:class:`StateSpaceModel`) with `num_insts` integral states.
+        """
+        self.base_model = base_model
+        self.num_insts  = num_insts
 
+        # set dimension of integrated model from num_insts and base model
+        self.d = self.base_model.dimension 
+        self.dimension = self.d * (1 + self.num_insts)
 
-    dimension: JAXArray | float = eqx.field(static=True) # dimensionality $d$ of the state vector
+        # Useful identity and zero matrices
+        self.I = jnp.eye(self.d)
+        self.Z = jnp.zeros((self.d,self.d))
 
-    @abstractmethod
+    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
+        """A helper function used to convert coordinates to sortable 1-D values
+
+        If X is a tuple, e.g. of (time, delta, instid), this assumes the first coordinate is the sortable one
+        """
+        if isinstance(X, tuple) or isinstance(X, list):
+            return X[0]
+        else:
+            return X
+
     def design_matrix(self) -> JAXArray:
-        """The design (also called the feedback) matrix for the process, $F$"""
-        raise NotImplementedError
+        """The augmented design (also called the feedback) matrix for the process, $F$"""
+        F = self.base_model.design_matrix()
+        F_aug = [[F] + [self.Z]*self.num_insts]
+        for _ in range(self.num_insts):
+            F_aug.append([self.I] + [self.Z]*self.num_insts)
+        F_aug = jnp.block(F_aug)
+        return F_aug
 
-    @abstractmethod
     def stationary_covariance(self) -> JAXArray:
-        """The stationary covariance of the process, Pinf"""
-        raise NotImplementedError
+        """The augmented stationary covariance of the process, Pinf"""
+        Pinf = self.base_model.stationary_covariance()
+        Pinf_aug = jnp.diag(jnp.ones(self.dimension)).at[:self.d,:self.d].set(Pinf)
+        return Pinf_aug
 
-    @abstractmethod
     def observation_model(self, X: JAXArray) -> JAXArray:
-        """The observation model for the process, $H$"""
-        raise NotImplementedError
+        """The augmented observation model for the process, $H$"""
+        t, delta, instid = X
 
-    @abstractmethod
+        ## TODO: make sure this works for multivariate data
+        # H_base = self.base_model.observation_model(t)
+        # H_z = H_base/delta # observe the average value over exposure
+        # H_aug = jnp.zeros((H_base.shape[0], self.dimension))
+        # H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
+        # return H_aug
+
+        # Hardcoded 1-D version for now
+        H_z = jnp.array([1] + [0]*(self.d-1))/delta
+        H_aug = jnp.zeros(self.d*(1+self.num_insts))
+        H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
+        return jnp.array([H_aug])
+
     def noise(self) -> JAXArray:
         ''' The spectral density of the white noise process, $Q_c$ '''
-        raise NotImplementedError
+        return self.base_model.noise()
     
-    @abstractmethod
     def noise_effect_matrix(self) -> JAXArray:
-        ''' The noise effect matrix L, by default this is [0,1]'''
-        raise NotImplementedError
+        ''' The augmented noise effect matrix, $L$'''
+        L = self.base_model.noise_effect_matrix()
+        L_aug = jnp.vstack([L] + [jnp.zeros_like(L)]*self.num_insts)
+        return L_aug
     
+    def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """
+        The integrated transition matrix between two states at coordinates X1 and X2, $A_k$
+
+        By default uses the Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
+
+        Overload this method if you wish to define the integrated transition matrix analytically.
+        """
+        F = self.base_model.design_matrix()
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        return Phibar_from_VanLoan(F, dt)
+        
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
-        The transition matrix between two states at coordinates X1 and X2, $A_k$
-
-        Default behavior uses jax.scipy.linalg.expm(self.design_matrix() * (X2 - X1)),
-        which is appropriate for stationary kernels defined by a linear Gaussian SSM.
-       
-       Overload this method if you have a more general model or simply wish to
-        define the transition matrix analytically.
+        The augmented transition matrix between two states at coordinates X1 and X2, $A_k$
         """
-        F = self.design_matrix()
-        dt = X2 - X1
-        return expm(F * dt)
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        PHI    = self.base_model.transition_matrix(t1, t2)
+        INTPHI = self.integrated_transition_matrix(t1, t2)
+        top = [PHI] + [self.Z]*self.num_insts
+        mids = []
+        for inst in range(self.num_insts):
+            row = [INTPHI] + [self.Z]*self.num_insts
+            row[1+inst] = self.I
+            mids.append(row)
+        return jnp.block([top] + mids)
  
-    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
         """
-        The process noise matrix $Q_k$
-        
-        Default behavior computes Q from Pinf - A @ Pinf @ A, if Pinf and A 
-        are both implemented. Otherwise, uses the Van Loan method to compute
-        Q from the matrix exponential involving the F, L, and Qc
+        The augmented process noise matrix $Q_k$
 
-        Overload this method if you have a more general model or simply wish to
-        define the process noise analytically.
+        Default behavior computes Q from the Van Loan 
+        matrix exponential involving F, L, and Qc
+
+        Overload this method if you wish to define the process noise analytically.
         """
-        try:
-            # See Eq. 7 in Solin & Sarkka 2014
-            # https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
-            Pinf = self.stationary_covariance()
-            A = self.transition_matrix(X1, X2)
-            return Pinf - A @ Pinf @ A.T 
-        except NotImplementedError:
-            # use Van Loan matrix exponential given F, L, Qc
-            dt = X2 - X1
-            F = self.design_matrix()
-            L = self.noise_effect_matrix()
-            Qc = self.noise()
-            return Q_from_VanLoan(F,L,Qc,dt)
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        F_aug = self.design_matrix()
+        L_aug = self.noise_effect_matrix()
+        Qc = self.noise()
+        return Q_from_VanLoan(F_aug,L_aug,Qc,dt)
+
+    def reset_matrix(self, instid: int = 0) -> JAXArray:
+        """
+        The reset matrix, RESET_k,for instrument `instid` (0-indexed)
+
+        By default, resets only the integral states to zero.
+        Overload this method if you wish to define a different reset behavior.
+        """
+        diag = jnp.ones(self.d*(self.num_insts+1))
+        diag = jax.lax.dynamic_update_slice(diag, jnp.zeros(self.d), (self.d*(1+instid),))
+        return jnp.diag(diag)
 
 
 
 
-
-    
-
-
-class IntegratedSHO(StateSpaceModel):
+class IntegratedSHO(IntegratedStateSpaceModel):
     r"""The damped, driven simple harmonic oscillator kernel 
         integrated over a finite time range, :math:`\delta`.
 
@@ -141,129 +202,85 @@ class IntegratedSHO(StateSpaceModel):
     omega  : JAXArray | float
     quality: JAXArray | float
     sigma  : JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
-    dimension: JAXArray | float = eqx.field(init=False, default=2)
-    eta : JAXArray | float
+    eta    : JAXArray | float
+    dimension: JAXArray | float = eqx.field(init=False, default=4)
+    num_insts: JAXArray | int = eqx.field(static=True, default=1)  # number of integral states
 
     def __init__(self, omega: JAXArray | float,
                  quality: JAXArray | float,
                  sigma: JAXArray | float = jnp.ones(()),
-                 **kwargs):
+                 num_insts: int = 1,
+                 ):
         
         # SHO parameters
         self.omega   = omega
         self.quality = quality
         self.sigma   = sigma
-
-
         self.eta = jnp.sqrt(jnp.abs(1-1/(4*self.quality**2)))
 
+        base_model = base_kernels.SHO(omega=self.omega, quality=self.quality, sigma=self.sigma)
+        super().__init__(base_model=base_model, num_insts=num_insts)
 
-    # def design_matrix(self) -> JAXArray:
-    #     """The design (also called the feedback) matrix for the SHO process, F"""
-    #     return jnp.array(
-    #         [[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]]
-    #     )
-    
-    # def stationary_covariance(self) -> JAXArray:
-    #     """The stationary covariance of the SHO process, Pinf"""
-    #     return jnp.diag(jnp.square(self.sigma) * jnp.array([1, jnp.square(self.omega)]))
+    def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The integrated transition matrix Phibar for the SHO process"""
 
-    # def noise(self) -> JAXArray:
-    #     """The scalar Qc for the SHO process"""
-    #     omega3 = jnp.power(self.omega,3)
-    #     return jnp.array([[2*omega3*jnp.square(self.sigma)/self.quality]])
+        # Shorthand notations
+        n = self.eta
+        w = self.omega
+        q = self.quality
+        a = -0.5*w/q
+        b = n*w
+        a2plusb2 = jnp.square(a) + jnp.square(b)
+        A = 1/(2*n*q)
+        B = 1/(n*w) # = 1/b
+        C = -w/n
 
-    # def observation_model(self, X: JAXArray) -> JAXArray:
-    #     """ The observation model H for the SHO process """
-    #     del X
-    #     return jnp.array([[1, 0]])
+        def critical(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            ## TODO: returning numerical result until we do this integral by hand
+            F = self.base_model.design_matrix()
+            return Phibar_from_VanLoan(F, t2-t1)
 
-    # def noise_effect(self) -> JAXArray:
-    #     """ The noise effect matrix L for the SHO process """
-    #     return jnp.array([[0], [1]])
-    
-    # def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The transition matrix A_k for the SHO process"""
-    #     dt = X2 - X1
-    #     n = self.eta
-    #     w = self.omega
-    #     q = self.quality
+        def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
+     
+            def Int_ecos(t):
+                return jnp.exp(a*t) * (a*jnp.cos(b*t) + b*jnp.sin(b*t))
 
-    #     def critical(dt: JAXArray) -> JAXArray:
-    #         return jnp.exp(-w * dt) * jnp.array(
-    #             [[1 + w * dt, dt], [-jnp.square(w) * dt, 1 - w * dt]]
-    #         )
-
-    #     def underdamped(dt: JAXArray) -> JAXArray:
-    #         f = 2*n*q
-    #         x = n*w*dt
-    #         sin = jnp.sin(x)
-    #         cos = jnp.cos(x)
-    #         return jnp.exp(-0.5*w*dt/q) * jnp.array(
-    #             [
-    #                 [cos+sin/f, sin/(w*n)],
-    #                 [-w*sin/n , cos-sin/f]
-    #             ]
-    #         )
-
-    #     def overdamped(dt: JAXArray) -> JAXArray:
-    #         f = 2*n*q
-    #         x = n*w*dt
-    #         sinh = jnp.sinh(x)
-    #         cosh = jnp.cosh(x)
-    #         return jnp.exp(-0.5*w*dt/q) * jnp.array(
-    #             [
-    #                 [cosh+sinh/f, sinh/(w*n)],
-    #                 [-w*sinh/n  , cosh-sinh/f]
-    #             ]
-    #         )
-        
-    #     return jax.lax.cond(
-    #         jnp.allclose(q, 0.5),
-    #         critical,
-    #         lambda dt: jax.lax.cond(q > 0.5, underdamped, overdamped, dt),
-    #         dt,
-    #     )
-
-    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the SHO process"""
-    #     dt = X2 - X1
-    #     n = self.eta
-    #     w = self.omega
-    #     q = self.quality
-    #     assert q>0.5 # TODO: currently only for Q>1/2
-
-    #     def critical(dt: JAXArray) -> JAXArray:
-    #         Pinf = self.stationary_covariance()
-    #         A = self.transition_matrix(0,dt)
-    #         return Pinf - A @ Pinf @ A.T
-
-    #     def underdamped(dt: JAXArray) -> JAXArray:
-    #         f = 2*n*q; q2 = jnp.square(q); n2 = jnp.square(n); w2 = jnp.square(w)
-    #         a = w*dt/q # argument in exponential
-    #         x = n*w*dt # argument in sin/cos
-    #         exp = jnp.exp(a)
-    #         sin = jnp.sin(x)
-    #         sin2 = jnp.sin(2*x)
-    #         sinsq = jnp.square(sin)
-    #         Q11 = exp - 1 - sin2/f - sinsq/(2*n2*q2)
-    #         Q12 = Q21 = w*sinsq/(n2*q)
-    #         Q22 = w2 * (exp - 1 + sin2/f - sinsq/(2*n2*q2) )
-    #         return jnp.square(self.sigma) * jnp.exp(-a) * jnp.array(
-    #             [
-    #                 [Q11, Q12],
-    #                 [Q21, Q22]
-    #             ]
-    #         ) 
-
-    #     def overdamped(dt: JAXArray) -> JAXArray:
-    #         Pinf = self.stationary_covariance()
-    #         A = self.transition_matrix(0,dt)
-    #         return Pinf - A @ Pinf @ A.T
+            def Int_esin(t):
+                return jnp.exp(a*t) * (a*jnp.sin(b*t) - b*jnp.cos(b*t))
             
-    #     return jax.lax.cond(
-    #         jnp.allclose(q, 0.5),
-    #         critical,
-    #         lambda dt: jax.lax.cond(q > 0.5, underdamped, overdamped, dt),
-    #         dt,
-    #     )
+            Ic = Int_ecos(t2) - Int_ecos(t1)
+            Is = Int_esin(t2) - Int_esin(t1)
+            Phibar11 = Ic + A*Is
+            Phibar12 = B * Is
+            Phibar21 = C * Is
+            Phibar22 = Ic - A*Is
+ 
+            return jnp.array([
+                            [Phibar11, Phibar12],
+                            [Phibar21, Phibar22]
+                        ]) / a2plusb2
+
+        def overdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            ## TODO: returning numerical result until we do this integral by hand
+            F = self.base_model.design_matrix()
+            return Phibar_from_VanLoan(F, t2-t1)
+        
+        # Return the appropriate form based on quality factor
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+
+        return jax.lax.cond(
+            jnp.allclose(q, 0.5),
+            critical,
+            lambda t1,t2: jax.lax.cond(q > 0.5, underdamped, overdamped, t1,t2),
+            t1,t2,
+        )
+    
+
+
+### TODO: is it just these for all the named kernels?
+# class IntegratedMatern32(IntegratedStateSpaceModel):
+#     def __init__(self, **kwargs):
+#         base_model = StateSpaceModel.Matern32(**kwargs)
+#         super().__init__(base_model=base_model, **kwargs)
+

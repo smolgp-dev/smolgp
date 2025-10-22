@@ -3,8 +3,8 @@ The kernels implemented in this subpackage are defined similarly to
 :class: `tinygp.kernels.quasisep.Quasisep` but are modified to:
 1. Include the `noise_effect_matrix` and `process_noise` matrix
 2. Treat the observation model as a column vector and the transition matrix
-   in its usual form (compared to transposed forms in quasisep)
-3. Handle integrated versions of each kernel
+   in its usual form (compared to transposed forms in tinygp.kernels.quasisep)
+3. Handle integrated versions of each kernel (in integrated.py)
 These kernels are compatible with :class:`smolgp.solvers.StateSpaceSolver`
 which use Bayesian filtering and smoothing algorithms to perform scalable GP
 inference. (see :ref:`api-solvers-statespace` for more technical details). 
@@ -66,6 +66,15 @@ class StateSpaceModel(Kernel):
 
     dimension: JAXArray | float = eqx.field(static=True) # dimensionality $d$ of the state vector
 
+    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
+        """A helper function used to convert coordinates to sortable 1-D values
+
+        By default, this is the identity, but in cases where ``X`` is structured
+        (e.g. multivariate inputs), this can be used to appropriately unwrap
+        that structure.
+        """
+        return X
+    
     @abstractmethod
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the process, $F$"""
@@ -130,16 +139,6 @@ class StateSpaceModel(Kernel):
             Pinf = self.stationary_covariance()
             A = self.transition_matrix(X1, X2)
             return Pinf - A @ Pinf @ A.T 
-
-
-    def coord_to_sortable(self, X: JAXArray) -> JAXArray:
-        """A helper function used to convert coordinates to sortable 1-D values
-
-        By default, this is the identity, but in cases where ``X`` is structured
-        (e.g. multivariate inputs), this can be used to appropriately unwrap
-        that structure.
-        """
-        return X
 
 
     def __add__(self, other: Kernel | JAXArray) -> Kernel:
