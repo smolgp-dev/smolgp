@@ -43,8 +43,8 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
     The coordinates for an integrated model should be a tuple of
         X = (t, delta, instid), 
-    where `t` is the usual coordinate (e.g. time),
-    `delta` is the integration range (e.g. exposure time),
+    where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
+    `delta` is the integration range (e.g. exposure time) for each measurement,
     and `instid` is an index encoding which instrument the measurement corresponds to.
     """
 

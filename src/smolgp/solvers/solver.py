@@ -35,7 +35,6 @@ class StateSpaceSolver(eqx.Module):
         Args:
             kernel: The kernel function.
             X: The input coordinates.
-            y: The measurement values.
             noise: The noise model for the process.
         """
         self.kernel = kernel
@@ -82,7 +81,6 @@ class StateSpaceSolver(eqx.Module):
         """
         Wrapper fot jitted StateSpaceSolver._predict. 
         
-        TODO: add option to parallelize over X_test
         Args:
             X_test              : The test coordinates.
             conditioned_results : The output of self.condition()
@@ -119,7 +117,7 @@ class StateSpaceSolver(eqx.Module):
         M = len(X_test)   # number of test points
                 
         Pinf = self.kernel.stationary_covariance()
-        if not isinstance(Pinf, JAXArray):
+        if not isinstance(Pinf, JAXArray): # if multicomponent model
             Pinf = Pinf.to_dense() # need dense version for jnp.linalg.solve in retrodict
 
         # Nearest (future) datapoint
@@ -136,7 +134,8 @@ class StateSpaceSolver(eqx.Module):
         A = self.kernel.transition_matrix
         Q = self.kernel.process_noise
 
-        def predict(k, ktest):
+        @jax.jit
+        def kalman(k, ktest):
             '''
             Kalman prediction from most recent 
             filtered (not smoothed) state
@@ -151,12 +150,13 @@ class StateSpaceSolver(eqx.Module):
             # No Kalman update since we have no data at t_star, so we're done
             return m_star_pred, P_star_pred
 
+        @jax.jit
         def smooth(k_next, ktest, m_star_pred, P_star_pred):
             '''
             RTS smooth the prediction (ktest) using 
             the nearest future (smoothed) state (k_next)
 
-            m_star_pred and P_star_pred are the output of predict(k, k_star)
+            m_star_pred and P_star_pred are the output of kalman(k, k_star)
             '''
             # Next (future) data point predicted & smoothed state
             m_pred_next = m_predicted[k_next] # prediction (no kalman update) at next data point
@@ -181,6 +181,7 @@ class StateSpaceSolver(eqx.Module):
             
             return m_star_hat, P_star_hat
 
+        @jax.jit
         def project(ktest, m_star, P_star):
             ''' Project the state vector to the observation space '''
             Htest = H(X_test[ktest])
@@ -188,11 +189,13 @@ class StateSpaceSolver(eqx.Module):
             pred_var  = (Htest @ P_star @ Htest.T).squeeze()
             return pred_mean, pred_var
 
+        @jax.jit
         def retrodict(ktest):
             ''' Reverse-extrapolate from first datapoint t_star '''
             m_star, P_star = smooth(0, ktest, 0, Pinf)
             return project(ktest, m_star, P_star)
 
+        @jax.jit
         def interpolate(ktest):
             ''' Interpolate between nearest data points '''
             
@@ -201,21 +204,31 @@ class StateSpaceSolver(eqx.Module):
             k_prev = k_next - 1
 
             # 1. Kalman predict from most recent data point (in past)
-            m_star_pred, P_star_pred = predict(k_prev, ktest)
+            m_star_pred, P_star_pred = kalman(k_prev, ktest)
 
             # 2. RTS smooth from next nearest data point (in future)
             m_star_hat, P_star_hat = smooth(k_next, ktest, m_star_pred, P_star_pred)
 
             return project(ktest, m_star_hat, P_star_hat)
 
+        @jax.jit
         def extrapolate(ktest):
             ''' Kalman predict from from last datapoint t_star '''
-            m_star, P_star = predict(-1, ktest)
+            m_star, P_star = kalman(-1, ktest)
             return project(ktest, m_star, P_star)
+
+        @jax.jit
+        def predict_point(ktest):
+            '''
+            Switch between retrodiction, interpolation, and extrapolation
+            for a single test point ktest
+            '''
+            return jax.lax.switch(cases[ktest],
+                                  (retrodict, interpolate, extrapolate),
+                                  (ktest))
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
-        branches = (retrodict, interpolate, extrapolate)
-        (pred_mean, pred_var) = jax.vmap(lambda ktest: jax.lax.switch(cases[ktest], branches, (ktest)))(ktests)
+        (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
 
         return pred_mean, pred_var

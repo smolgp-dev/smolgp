@@ -9,7 +9,7 @@ __all__ = ["KalmanFilter", "kalman_filter"]
 
 def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     """
-    Wrapper for Kalman filter
+    Wrapper for jitted kalman_filter function
 
     Parameters:
         kernel: StateSpaceModel kernel
