@@ -28,3 +28,28 @@ def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXA
     G2 = VanLoanBlock[:b,b:]
     F3 = VanLoanBlock[b:,b:]
     return F3.T @ G2
+
+
+
+def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
+    """
+    Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
+
+    Parameters:
+        F: StateSpaceModel.design_matrix
+        dt: time step between measurements (dt = X2 - X1)
+
+    Returns:
+        Phibar: The integrated transition matrix over time step dt
+
+    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
+    PDF at https://www.olemartin.no/artikler/vanloan.pdf
+    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
+    """
+    b = len(F) # block size
+    Z = jnp.zeros((b,b))
+    I = jnp.eye(b)
+    C = jnp.block([[F, I],[Z, Z]])
+    VanLoanBlock = expm(C*dt)
+    G3 = VanLoanBlock[:b,b:]
+    return G3
