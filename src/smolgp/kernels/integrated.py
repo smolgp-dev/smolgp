@@ -48,12 +48,12 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     and `instid` is an index encoding which instrument the measurement corresponds to.
     """
 
-    dimension: JAXArray | float = eqx.field(static=True) # dimensionality of the augmented space
-    num_insts: JAXArray | int = eqx.field(static=True, default=1)  # number of integral states
-    base_model: StateSpaceModel = eqx.field(static=True)  # the underlying (non-integrated) SSM (dimension=d)
-    d: JAXArray | int = eqx.field(static=True)  # dimension of the base model
-    I: JAXArray = eqx.field(static=True)  # identity matrix of size dxd
-    Z: JAXArray = eqx.field(static=True)  # zero matrix of size dxd
+    dimension: float  # dimensionality of the augmented space
+    num_insts: int    # number of integral states
+    base_model: StateSpaceModel  # the underlying (non-integrated) SSM (dimension=d)
+    d: int       # dimension of the base model
+    I: JAXArray  # identity matrix of size dxd
+    Z: JAXArray  # zero matrix of size dxd
 
     def __init__(self, base_model: StateSpaceModel, num_insts: int = 1):
         """
@@ -203,9 +203,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
     quality: JAXArray | float
     sigma  : JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     eta    : JAXArray | float
-    dimension: JAXArray | float = eqx.field(init=False, default=4)
-    num_insts: JAXArray | int = eqx.field(static=True, default=1)  # number of integral states
-
+    
     def __init__(self, omega: JAXArray | float,
                  quality: JAXArray | float,
                  sigma: JAXArray | float = jnp.ones(()),
