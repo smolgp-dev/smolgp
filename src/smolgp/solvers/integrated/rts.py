@@ -37,6 +37,12 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
                              obsid, instid, stateid,
                              m_filtered, P_filtered,
                              m_predicted, P_predicted):
+    """
+    Jax implementation of the integrated RTS smoothing algorithm
+
+    See Section 3.2.2 in Rubenzahl & Hattori et al. (in prep) 
+    for detailed description of the algorithm and notation.
+    """
 
     def step(carry, k):
         # Outputs from Kalman filter, unpacked for notational consistency
@@ -48,11 +54,8 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
         # Unpack state and covariance from last iteration
         m_hat_next, P_hat_next = carry
 
-        # Time-lag between states
-        Delta = t_states[k+1] - t_states[k]
-        
         # Compute smoothing gain
-        A_k = A_aug(Delta)
+        A_k = A_aug(t_states[k], t_states[k+1])
 
         # If transition is from te_k to ts_k (i.e., over the exposure)
         def smooth_start():

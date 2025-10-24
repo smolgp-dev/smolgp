@@ -47,8 +47,7 @@ class StateSpaceSolver(eqx.Module):
 
     def Kalman(self, X, y, noise, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        X_states = X # states are at the data points here
-        return X_states, KalmanFilter(self.kernel, X_states, y, noise, return_v_S=return_v_S)
+        return KalmanFilter(self.kernel, X, y, noise, return_v_S=return_v_S)
 
     def RTS(self, X, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
@@ -61,7 +60,7 @@ class StateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        X_states, kalman_results = self.Kalman(self.X, y, self.noise, return_v_S=return_v_S)
+        kalman_results = self.Kalman(self.X, y, self.noise, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -75,7 +74,7 @@ class StateSpaceSolver(eqx.Module):
 
         # Pack-up results and return
         conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
-        return X_states, conditioned_states, v_S
+        return self.X, conditioned_states, v_S
     
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """

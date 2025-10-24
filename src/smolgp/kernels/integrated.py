@@ -48,10 +48,10 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     and `instid` is an index encoding which instrument the measurement corresponds to.
     """
 
-    dimension: float  # dimensionality of the augmented space
-    num_insts: int    # number of integral states
+    dimension: float = eqx.field(static=True) # dimensionality of the augmented space
+    num_insts: int   = eqx.field(static=True) # number of integral states
     base_model: StateSpaceModel  # the underlying (non-integrated) SSM (dimension=d)
-    d: int       # dimension of the base model
+    d: int = eqx.field(static=True)      # dimension of the base model
     I: JAXArray  # identity matrix of size dxd
     Z: JAXArray  # zero matrix of size dxd
 
@@ -97,20 +97,29 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
     def observation_model(self, X: JAXArray) -> JAXArray:
         """The augmented observation model for the process, $H$"""
-        t, delta, instid = X
-
-        ## TODO: make sure this works for multivariate data
-        # H_base = self.base_model.observation_model(t)
-        # H_z = H_base/delta # observe the average value over exposure
-        # H_aug = jnp.zeros((H_base.shape[0], self.dimension))
-        # H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
-        # return H_aug
-
-        # Hardcoded 1-D version for now
-        H_z = jnp.array([1] + [0]*(self.d-1))/delta
-        H_aug = jnp.zeros(self.d*(1+self.num_insts))
-        H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
-        return jnp.array([H_aug])
+        if isinstance(X, tuple) or isinstance(X, list):
+            # Observing integral state (z) with exposure time (delta)
+            t, delta, instid = X
+            
+            ## TODO: make sure this works for multivariate data
+            # H_base = self.base_model.observation_model(t)
+            # H_z = H_base/delta # observe the average value over exposure
+            # H_aug = jnp.zeros((H_base.shape[0], self.dimension))
+            # H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
+            # return H_aug
+            
+            # Hardcoded 1-D version for now
+            H_z = jnp.zeros(self.d).at[0].set(1)/delta
+            H_aug = jnp.zeros(self.dimension)
+            H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
+            return jnp.array([H_aug])
+        else:
+            # Observing only the base state (x)
+            # H_x = self.base_model.observation_model(X) # TODO: use this and get the shapes riht
+            H_x = jnp.zeros(self.d).at[0].set(1)  # hardcoded 1-D version for now
+            H_aug = jnp.zeros(self.dimension)
+            H_aug = jax.lax.dynamic_update_slice(H_aug, H_x, (0,))
+            return jnp.array([H_aug])
 
     def noise(self) -> JAXArray:
         ''' The spectral density of the white noise process, $Q_c$ '''
@@ -144,13 +153,11 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         t2 = self.coord_to_sortable(X2)
         PHI    = self.base_model.transition_matrix(t1, t2)
         INTPHI = self.integrated_transition_matrix(t1, t2)
-        top = [PHI] + [self.Z]*self.num_insts
-        mids = []
-        for inst in range(self.num_insts):
-            row = [INTPHI] + [self.Z]*self.num_insts
-            row[1+inst] = self.I
-            mids.append(row)
-        return jnp.block([top] + mids)
+        PHIAUG = jnp.eye(self.dimension)
+        PHIAUG = PHIAUG.at[:self.d, :self.d].set(PHI)
+        for i in range(self.num_insts):
+            PHIAUG = PHIAUG.at[(1+i)*self.d: (2+i)*self.d, :self.d].set(INTPHI)
+        return PHIAUG
  
     def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
         """
@@ -203,7 +210,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
     quality: JAXArray | float
     sigma  : JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     eta    : JAXArray | float
-    
+
     def __init__(self, omega: JAXArray | float,
                  quality: JAXArray | float,
                  sigma: JAXArray | float = jnp.ones(()),

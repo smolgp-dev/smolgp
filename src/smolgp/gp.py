@@ -211,7 +211,7 @@ class GaussianProcess(eqx.Module):
             evaluated at ``y``.
         """
         if isinstance(self.solver, StateSpaceSolver):
-            _, (_, _, _, _, v, S) = self.solver.Kalman(
+            _, _, _, _, v, S = self.solver.Kalman(
                 self.X, y, self.noise, return_v_S=True
             )
         elif isinstance(self.solver, ParallelStateSpaceSolver):

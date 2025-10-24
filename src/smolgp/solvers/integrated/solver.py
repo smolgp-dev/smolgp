@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from numpy import mean
-
-from smolgp.solvers.integrated.kalman import IntegratedKalmanFilter
-from smolgp.solvers.rts import RTSSmoother
-
 __all__ = ["IntegratedStateSpaceSolver"]
 
 from typing import Any
@@ -57,21 +52,15 @@ class IntegratedStateSpaceSolver(eqx.Module):
             # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
             return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
     
-    def Kalman(self, X, y, noise, return_v_S=False) -> Any:
+    def Kalman(self, X, y, X_states, return_v_S=False) -> Any:
             """Wrapper for Kalman filter used with this solver"""
-            t_states, instid, obsid, stateid = X # this gets encoded in 'condition' below
-            return X, IntegratedKalmanFilter(self.kernel, t_states, y, obsid, instid, stateid, noise, return_v_S=return_v_S)
+            t_states, instid, obsid, stateid = X_states # this gets encoded in 'condition' below
+            return IntegratedKalmanFilter(self.kernel, X, y, t_states, obsid, instid, stateid, self.noise, return_v_S=return_v_S)
 
-    def RTS(self, X, kalman_results) -> Any:
+    def RTS(self, X_states, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        t_states, instid, obsid, stateid = X # this gets encoded in 'condition' below
+        t_states, instid, obsid, stateid = X_states # this gets encoded in 'condition' below
         return IntegratedRTSSmoother(self.kernel, t_states, obsid, instid, stateid, kalman_results)
-
-    def condition(self, y, return_v_S=False) -> JAXArray:
-            """
-            Compute the Kalman predicted, filtered, and RTS smoothed 
-            means and covariances at each of the input coordinates
-            """
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
@@ -94,8 +83,8 @@ class IntegratedStateSpaceSolver(eqx.Module):
         # Interleave start and end times into one array (fastest)
         # https://stackoverflow.com/questions/5347065/interleaving-two-numpy-arrays-efficiently
         t_states = jnp.empty((ts.size + te.size,), dtype=tmid.dtype)
-        t_states[0::2] = ts  # evens are start times
-        t_states[1::2] = te  # odds are end times
+        t_states = t_states.at[0::2].set(ts)  # evens are start times
+        t_states = t_states.at[1::2].set(te)  # odds are end times
         # Have to re-sort because exposures can overlap
         sortidx  = jnp.argsort(t_states)
         t_states = t_states[sortidx]
@@ -106,7 +95,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         X_states = (t_states, instid, obsid, stateid)
         
         # Kalman filtering
-        X_states, kalman_results = self.Kalman(X_states, y, self.noise, return_v_S=return_v_S)
+        kalman_results = self.Kalman(self.X, y, X_states, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -160,13 +149,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         (m_smooth, P_smooth) = conditioned_states
 
         # Unpack test coordinates
-        if isinstance(X_test, tuple):
-            # Predictions with exposure times
-            t_test, delta_test = X_test
-        else:
-            # Instantaneous predictions
-            t_test = X_test
-            delta_test = jnp.zeros_like(t_test)
+        t_test = self.kernel.coord_to_sortable(X_test)
 
         # Array shapes
         N = len(self.X)   # number of data points
@@ -180,7 +163,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
         # Prior mean for retrodiction
         mean = jnp.zeros(self.kernel.d) # TODO: mean function of base kernel
-        m0 = jnp.block([mean] + self.kernel.num_inst*[jnp.zeros(self.kernel.d)])
+        m0 = jnp.block([mean] + self.kernel.num_insts*[jnp.zeros(self.kernel.d)])
 
         # Nearest (future) datapoint
         k_nexts = jnp.searchsorted(t_states, t_test, side='right')
