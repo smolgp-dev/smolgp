@@ -8,7 +8,7 @@ __all__ = ["IntegratedKalmanFilter", "integrated_kalman_filter"]
 
 def IntegratedKalmanFilter(kernel, X, y, t_states, obsid, instid, stateid, noise=None, return_v_S=False):
     '''
-    Wrapper for jitted integrated_kalman_filter function
+    Wrapper for integrated_kalman_filter function
 
     Parameters:
         kernel  : IntegratedStateSpaceModel kernel
@@ -49,7 +49,7 @@ def IntegratedKalmanFilter(kernel, X, y, t_states, obsid, instid, stateid, noise
         m_filtered, P_filtered, m_predicted, P_predicted, v, S = output
         return m_filtered, P_filtered, m_predicted, P_predicted
 
-@jax.jit
+
 def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
                              X, y, t_states, obsid, instid, stateid,
                              m0, P0):
@@ -60,6 +60,7 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
     for detailed description of the algorithm and notation.
     """
 
+    @jax.jit
     def step(carry, k):
         # Unpack previous state and covariance
         m_prev, P_prev = carry
@@ -98,9 +99,9 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
             Reset = RESET(instid[n])
             m_k = Reset @ m_pred 
             P_k = Reset @ P_pred @ Reset.T
-            Hk = H_aug(get_ith_elems(n, X)) 
-            v_k =  0 * (Hk @ m_pred)
-            S_k = Hk @ P_pred @ Hk.T + jnp.inf 
+            Hk = H_aug(get_ith_elems(n, X))    # TODO: Hacky way to 
+            v_k =  0 * (Hk @ m_pred)           # get v_k and S_k to 
+            S_k = Hk @ P_pred @ Hk.T + jnp.inf # have correct shape
             return m_k, P_k, m_pred, P_pred, v_k, S_k
         
         m_k, P_k, m_pred, P_pred, v, S = jax.lax.cond(
@@ -120,13 +121,6 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
     m_filtered, P_filtered, m_predicted, P_predicted, v, S = outputs
 
     # only return v,S at exposure ends (where there is data)
-    def extract_exposure_ends(stateids):
-        ends = jnp.argwhere(stateids == 1)
-        @jax.jit
-        def func(values):
-            return values[ends].squeeze()
-        return func
-    get_ends = extract_exposure_ends(stateid)
-    v = get_ends(v)
-    S = get_ends(S)
-    return m_filtered, P_filtered, m_predicted, P_predicted, v, S
+    ends = jnp.argwhere(stateid == 1)
+
+    return m_filtered, P_filtered, m_predicted, P_predicted, v[ends], S[ends]
