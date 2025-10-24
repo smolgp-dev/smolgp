@@ -24,6 +24,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
     X: JAXArray
     kernel : StateSpaceModel
     noise  : Noise
+    X_states : JAXArray
 
     def __init__(
         self,
@@ -48,33 +49,13 @@ class IntegratedStateSpaceSolver(eqx.Module):
         self.X = X
         self.noise = noise
 
-    def normalization(self) -> JAXArray:
-            # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-            return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
-    
-    def Kalman(self, X, y, X_states, return_v_S=False) -> Any:
-            """Wrapper for Kalman filter used with this solver"""
-            t_states, instid, obsid, stateid = X_states # this gets encoded in 'condition' below
-            return IntegratedKalmanFilter(self.kernel, X, y, t_states, obsid, instid, stateid, self.noise, return_v_S=return_v_S)
-
-    def RTS(self, X_states, kalman_results) -> Any:
-        """Wrapper for RTS smoother used with this solver"""
-        t_states, instid, obsid, stateid = X_states # this gets encoded in 'condition' below
-        return IntegratedRTSSmoother(self.kernel, t_states, obsid, instid, stateid, kalman_results)
-
-    def condition(self, y, return_v_S=False) -> JAXArray:
-        """
-        Compute the Kalman predicted, filtered, and RTS smoothed 
-        means and covariances at each of the input coordinates
-        """
-
+        ## Preprocess state coordinates (exposure start/stops)
+        ## and assign labels to each observation/state for bookkeeping:
+        ## obsid   -- array len(K): which observation (0,...,N-1) is being made at each state k
+        ## instids -- array len(N): which instrument (0,...,Ninst-1) recorded observation n
+        ## stateid -- array len(K): 0 for exposure-start, 1 for exposure-end
         tmid, delta, instid = self.X  # unpack coordinates
 
-        ## Bookkeeping/prepwork to assign labels to each observation/state
-        # obsid   -- array len(K): which observation (0,...,N-1) is being made at each state k
-        # instids -- array len(N): which instrument (0,...,Ninst-1) recorded observation n
-        # stateid -- array len(K): 0 for exposure-start, 1 for exposure-end
-       
         ## Construct interleaved time array of chronological exposure start/stop times
         ts = tmid - delta/2  # Exposure start times
         te = tmid + delta/2  # Exposure end times
@@ -92,10 +73,30 @@ class IntegratedStateSpaceSolver(eqx.Module):
         stateid = jnp.tile(jnp.array([0,1]), len(tmid))[sortidx] # 0 for t_s, 1 for t_e
 
         # Pack-up X_states for Kalman and RTS functions
-        X_states = (t_states, instid, obsid, stateid)
+        self.X_states = (t_states, instid, obsid, stateid)
+
+    def normalization(self) -> JAXArray:
+            # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
+            return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
+    
+    def Kalman(self, y, return_v_S=False) -> Any:
+            """Wrapper for Kalman filter used with this solver"""
+            t_states, instid, obsid, stateid = self.X_states # this gets encoded in 'condition' below
+            return IntegratedKalmanFilter(self.kernel, self.X, y, t_states, obsid, instid, stateid, self.noise, return_v_S=return_v_S)
+
+    def RTS(self, kalman_results) -> Any:
+        """Wrapper for RTS smoother used with this solver"""
+        t_states, instid, obsid, stateid = self.X_states # this gets encoded in 'condition' below
+        return IntegratedRTSSmoother(self.kernel, t_states, obsid, instid, stateid, kalman_results)
+
+    def condition(self, y, return_v_S=False) -> JAXArray:
+        """
+        Compute the Kalman predicted, filtered, and RTS smoothed 
+        means and covariances at each of the input coordinates
+        """
         
         # Kalman filtering
-        kalman_results = self.Kalman(self.X, y, X_states, return_v_S=return_v_S)
+        kalman_results = self.Kalman(y, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -104,10 +105,11 @@ class IntegratedStateSpaceSolver(eqx.Module):
             v_S = None
         
         # RTS smoothing
-        rts_results = self.RTS(X_states, (m_filtered, P_filtered, m_predicted, P_predicted))
+        rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
         # Pack-up results and return
+        t_states = self.X_states[0]
         conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
         return t_states, conditioned_states, v_S
     
@@ -127,8 +129,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
             if observation_model is None else observation_model
         return self._predict(X_test, conditioned_results, H)
     
-    
-
     @jax.jit
     def _predict(self, X_test, conditioned_results, H) -> JAXArray:
         """

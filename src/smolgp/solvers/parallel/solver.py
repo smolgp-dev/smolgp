@@ -49,14 +49,14 @@ class ParallelStateSpaceSolver(eqx.Module):
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
         return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
 
-    def Kalman(self, kernel, X, y, noise, return_v_S=True) -> Any:
+    def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        X_states = X  # states are at the data points here
-        return X_states, KalmanFilter(kernel, X_states, y, noise)
+        X_states = self.X  # states are at the data points here
+        return X_states, KalmanFilter(self.kernel, X_states, y, self.noise)
 
-    def RTS(self, kernel, X, kalman_results) -> Any:
+    def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        return RTSSmoother(kernel, X, kalman_results)
+        return RTSSmoother(self.kernel, self.X, kalman_results)
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
@@ -65,12 +65,12 @@ class ParallelStateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        X_states, kalman_results = self.Kalman(self.kernel, self.X, y, self.noise)
+        X_states, kalman_results = self.Kalman(y, return_v_S=return_v_S)
         (A, b, C, eta, J), (m_predicted, P_predicted, v, S) = kalman_results
         m_filtered, P_filtered = b, C
 
         # RTS smoothing
-        rts_results = self.RTS(self.kernel, self.X, (b, C))
+        rts_results = self.RTS((b, C))
         _, m_smoothed, P_smoothed = rts_results
 
         # Pack-up results and return

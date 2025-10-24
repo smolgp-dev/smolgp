@@ -210,17 +210,10 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
-        if isinstance(self.solver, StateSpaceSolver):
-            _, _, _, _, v, S = self.solver.Kalman(
-                self.X, y, self.noise, return_v_S=True
-            )
+        if isinstance(self.solver, StateSpaceSolver) or isinstance(self.solver, IntegratedStateSpaceSolver):
+            _, _, _, _, v, S = self.solver.Kalman(y, return_v_S=True)
         elif isinstance(self.solver, ParallelStateSpaceSolver):
-            _, _, outputs = self.solver.Kalman(
-                self.X,
-                y,
-                self.noise,
-                return_v_S=True,
-            )
+            _, _, outputs = self.solver.Kalman(y, return_v_S=True)
             _, _, v, S = outputs
 
         return self._compute_log_prob(v, S)
