@@ -108,10 +108,16 @@ class IntegratedStateSpaceSolver(eqx.Module):
         rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
+        # Extract the end-states and put into original order (i.e. that matches self.X)
+        t_states, instid, obsid, stateid = self.X_states
+        end_states = jnp.argwhere(stateid==1)
+        sort = obsid[end_states]
+
         # Pack-up results and return
-        t_states = self.X_states[0]
-        conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
-        return t_states, conditioned_states, v_S
+        conditioned_states = (m_predicted[sort], P_predicted[sort]), \
+                                (m_filtered[sort], P_filtered[sort]), \
+                                    (m_smoothed[sort], P_smoothed[sort])
+        return self.X, conditioned_states, v_S
     
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
@@ -231,7 +237,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
         def retrodict(ktest):
             ''' Reverse-extrapolate from first datapoint t_star '''
-            m_star, P_star = smooth(0, ktest, m0, Pinf, retro=True)
+            m_star, P_star = smooth(0, ktest, m0, Pinf)
             return project(ktest, m_star, P_star)
 
         @jax.jit

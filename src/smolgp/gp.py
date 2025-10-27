@@ -128,6 +128,8 @@ class GaussianProcess(eqx.Module):
         **solver_kwargs: Any,
     ):
         self.kernel = kernel
+
+
         self.X = X
 
         if isinstance(mean, means.MeanBase):
@@ -302,14 +304,18 @@ class GaussianProcess(eqx.Module):
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
             X_test = X_states
-            H = jax.vmap(observation_model)(X_test)
-            ks = jnp.arange(len(X_test))
-            # TODO: when we have integral states, we should have the solver
-            # return only the exposure-end states along with the data timestamps
-            # that way here we don't have to worry about H at exposure starts technically being "zero"
-            # if we implement it that way, we can remove X_test from everywhere
-            mu = jax.vmap(lambda k: H[k] @ m_smoothed[k])(ks).squeeze()
-            var = jax.vmap(lambda k: H[k] @ P_smoothed[k] @ H[k].T)(ks).squeeze()
+
+            def project(X, m, P):
+                H = observation_model(X)
+                # TODO: when we have integral states, we should have the solver
+                # return only the exposure-end states along with the data timestamps
+                # that way here we don't have to worry about H at exposure starts technically being "zero"
+                # if we implement it that way, we can remove X_test from everywhere
+                mu = H @ m
+                var = H @ P @ H.T
+                return mu, var
+            
+            mu, var = jax.vmap(project, in_axes=(0, 0, 0))(X_test, m_smoothed, P_smoothed)
 
         # Save the conditioned state values to a new GP object
         # so we can use them to make quick predictions at test
@@ -467,8 +473,8 @@ class GaussianProcess(eqx.Module):
         #     logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
         #     d = v_k.shape[0]
         #     return quad + logdetS_k + d*jnp.log(2*jnp.pi)
-
         # loglike = -0.5 * jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
+        
         L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
         w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
         w = jnp.squeeze(w, axis=-1)
