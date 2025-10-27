@@ -316,6 +316,8 @@ class GaussianProcess(eqx.Module):
                 return mu, var
             
             mu, var = jax.vmap(project, in_axes=(0, 0, 0))(X_test, m_smoothed, P_smoothed)
+            mu = mu.squeeze()
+            var = var.squeeze()
 
         # Save the conditioned state values to a new GP object
         # so we can use them to make quick predictions at test
