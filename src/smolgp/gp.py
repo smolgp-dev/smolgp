@@ -279,23 +279,23 @@ class GaussianProcess(eqx.Module):
 
         ## unpack into prediction at the states
         X_states, conditioned_states, (v, S) = conditioned_results
-        (
-            (m_predicted, P_predicted),
-            (m_filtered, P_filtered),
-            (m_smoothed, P_smoothed),
-        ) = conditioned_states
+        (m_predicted, P_predicted), \
+            (m_filtered, P_filtered), \
+                (m_smoothed, P_smoothed) = conditioned_states
 
         ## Grab likelihood
         log_prob = self._compute_log_prob(v, S)
 
-        # If no component kernel passed, use the full model
         if kernel is None:
+            # If no component kernel passed, use the full model
             observation_model = self.kernel.observation_model
         else:
-            kernel = self.kernel
-            # Pick out just the component of interest
+            # Otherwise use the observation model of the passed kernel
+            kernel = self.kernel # TEMPORARY/DEFAULT TO ABOVE FOR NOW
+            # TODO: below, use something like
+            # observation_model = [0,...,kernel.H,0,...] 
+            # where we zero out all the other components
             observation_model = self.kernel.observation_model
-            # TODO: zero out all the other components
 
         if X_test is not None:
             # If X_test was given, also predit at those points
@@ -305,12 +305,9 @@ class GaussianProcess(eqx.Module):
             # (at the data points) to observation space
             X_test = X_states
 
+            @jax.jit
             def project(X, m, P):
                 H = observation_model(X)
-                # TODO: when we have integral states, we should have the solver
-                # return only the exposure-end states along with the data timestamps
-                # that way here we don't have to worry about H at exposure starts technically being "zero"
-                # if we implement it that way, we can remove X_test from everywhere
                 mu = H @ m
                 var = H @ P @ H.T
                 return mu, var
@@ -344,7 +341,7 @@ class GaussianProcess(eqx.Module):
         )
 
         # Return the likelihood and conditioned GP
-        return log_prob, condGP
+        return ConditionResult(log_probability=log_prob, gp=condGP)
 
     def predict(
         self,
@@ -467,6 +464,7 @@ class GaussianProcess(eqx.Module):
         """
         Compute the log-likelihood given v and S from the Kalman filter
         """
+        ## More readable version:
         # def llh(k):
         #     v_k, S_k = v[k], S[k]
         #     L_k = jnp.linalg.cholesky(S_k)

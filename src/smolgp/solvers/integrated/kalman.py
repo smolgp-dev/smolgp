@@ -60,6 +60,8 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
     for detailed description of the algorithm and notation.
     """
 
+    H = jax.vmap(H_aug)(X)
+
     @jax.jit
     def step(carry, k):
         # Unpack previous state and covariance
@@ -80,12 +82,9 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
         m_pred = A_prev @ m_prev
         P_pred = A_prev @ P_prev @ A_prev.T + Q_prev 
 
-        def get_ith_elems(i, X):
-            return jax.tree.map(lambda x: x[i], X)
-
         # Update the end of the exposure
         def update_end():
-            Hk = H_aug(get_ith_elems(n, X))
+            Hk = H[n]
             y_pred = Hk @ m_pred            # predicted observation
             v_k = y[n] - y_pred             # "innovation" or "surprise" term
             S_k = Hk @ P_pred @ Hk.T + R[n] # uncertainy in predicted observation
@@ -99,9 +98,9 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
             Reset = RESET(instid[n])
             m_k = Reset @ m_pred 
             P_k = Reset @ P_pred @ Reset.T
-            Hk = H_aug(get_ith_elems(n, X))    # TODO: Hacky way to 
-            v_k =  0 * (Hk @ m_pred)           # get v_k and S_k to 
-            S_k = Hk @ P_pred @ Hk.T + jnp.inf # have correct shape
+            Hk = H[n] # TODO: change this and next two lines to better
+            v_k = 0 * (Hk @ m_pred)        # way to get v_k and S_k 
+            S_k = 0 * (Hk @ P_pred @ Hk.T) # with the correct shape
             return m_k, P_k, m_pred, P_pred, v_k, S_k
         
         m_k, P_k, m_pred, P_pred, v, S = jax.lax.cond(

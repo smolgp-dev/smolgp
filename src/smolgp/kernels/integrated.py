@@ -71,11 +71,12 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         self.Z = jnp.zeros((self.d,self.d))
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
-        """A helper function used to convert coordinates to sortable 1-D values
+        """
+        A helper function used to convert coordinates to sortable 1-D values
 
         If X is a tuple, e.g. of (time, delta, instid), this assumes the first coordinate is the sortable one
         """
-        if isinstance(X, tuple) or isinstance(X, list):
+        if isinstance(X, tuple):
             return X[0]
         else:
             return X
@@ -97,29 +98,41 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
     def observation_model(self, X: JAXArray) -> JAXArray:
         """The augmented observation model for the process, $H$"""
-        if isinstance(X, tuple) or isinstance(X, list):
-            # Observing integral state (z) with exposure time (delta)
-            t, delta, instid = X
-            
-            ## TODO: make sure this works for multivariate data
-            # H_base = self.base_model.observation_model(t)
-            # H_z = H_base/delta # observe the average value over exposure
-            # H_aug = jnp.zeros((H_base.shape[0], self.dimension))
-            # H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
-            # return H_aug
-            
-            # Hardcoded 1-D version for now
+        
+        ## TODO: make sure this works for multivariate data, e.g. like:
+        # H_base = self.base_model.observation_model(t)
+        # H_z = H_base/delta # observe the average value over exposure
+        # H_aug = jnp.zeros((H_base.shape[0], self.dimension))
+        # H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
+        ## Below is hardcoded for 1-D data
+
+        def H_integral(t: JAXArray, delta: JAXArray, instid: int) -> JAXArray:
+            ''' Observation model for integral state '''
             H_z = jnp.zeros(self.d).at[0].set(1)/delta
             H_aug = jnp.zeros(self.dimension)
             H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d*(1+instid),))
-            return jnp.array([H_aug])
-        else:
-            # Observing only the base state (x)
-            # H_x = self.base_model.observation_model(X) # TODO: use this and get the shapes riht
+            return H_aug
+
+        def H_latent(t: JAXArray, instid: int) -> JAXArray:
+            # H_x = self.base_model.observation_model(X) # TODO: use this to get the shapes right
+            ''' Observation model for latent (non-integral) state '''
             H_x = jnp.zeros(self.d).at[0].set(1)  # hardcoded 1-D version for now
             H_aug = jnp.zeros(self.dimension)
             H_aug = jax.lax.dynamic_update_slice(H_aug, H_x, (0,))
-            return jnp.array([H_aug])
+            return H_aug
+
+        if isinstance(X, tuple) or isinstance(X, list):
+            # Observing integral state (z) with exposure time (delta)
+            t, delta, instid = X
+            H_aug = jax.lax.cond(delta>0,
+                             lambda _: H_integral(t, delta, instid),
+                             lambda _: H_latent(t, instid),
+                             operand=None)
+        else:
+            # default to latent state if no exposure time provided
+            H_aug = H_latent(X, instid=0)
+         
+        return jnp.array([H_aug])
 
     def noise(self) -> JAXArray:
         ''' The spectral density of the white noise process, $Q_c$ '''
