@@ -278,7 +278,7 @@ class GaussianProcess(eqx.Module):
         conditioned_results = self.solver.condition(y, return_v_S=True)
 
         ## unpack into prediction at the states
-        X_states, conditioned_states, (v, S) = conditioned_results
+        t_states, conditioned_states, (v, S) = conditioned_results
         (m_predicted, P_predicted), \
             (m_filtered, P_filtered), \
                 (m_smoothed, P_smoothed) = conditioned_states
@@ -303,7 +303,7 @@ class GaussianProcess(eqx.Module):
         else:
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
-            X_test = X_states
+            X_test = self.X
 
             @jax.jit
             def project(X, m, P):
@@ -320,7 +320,7 @@ class GaussianProcess(eqx.Module):
         # so we can use them to make quick predictions at test
         # points with subsequent calls to self.predict
         states = ConditionedStates(
-            X_states,
+            t_states,
             m_predicted,
             P_predicted,
             m_filtered,

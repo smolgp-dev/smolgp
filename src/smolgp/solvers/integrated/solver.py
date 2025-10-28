@@ -112,12 +112,13 @@ class IntegratedStateSpaceSolver(eqx.Module):
         t_states, instid, obsid, stateid = self.state_coords
         ends = jnp.argwhere(stateid==1).squeeze()
         sort = obsid[ends]
+        t_ends = t_states[ends][sort]
 
         # Pack-up results and return
         conditioned_states = (m_predicted[ends][sort], P_predicted[ends][sort]), \
                                 (m_filtered[ends][sort], P_filtered[ends][sort]), \
                                     (m_smoothed[ends][sort], P_smoothed[ends][sort])
-        return self.X, conditioned_states, v_S
+        return t_ends, conditioned_states, v_S
     
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
@@ -146,6 +147,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         
         return self._predict(X_test, conditioned_results, H)
     
+    @jax.jit
     def _predict(self, X_test, conditioned_results, H) -> JAXArray:
         """
         Algorithm for making predictions at arbitrary coordinates X_test
@@ -159,23 +161,21 @@ class IntegratedStateSpaceSolver(eqx.Module):
         """
         
         # Unpack conditioned results
-        X_states, conditioned_states, _ = conditioned_results
+        t_states, conditioned_states, _ = conditioned_results
         (m_predicted, P_predicted), \
         (m_filtered, P_filtered), \
         (m_smooth, P_smooth) = conditioned_states
-        t_states = self.kernel.coord_to_sortable(X_states)
 
-        # Since these are for the exposure-end states, matched to
-        # the order of the data, they may not be sorted in time
-        # TODO: can we avoid this by storing sorted states in self.condition?
-        sortidx = jnp.argsort(t_states)
-        t_states = t_states[sortidx]
-        m_filtered = m_filtered[sortidx]
-        P_filtered = P_filtered[sortidx]
-        m_predicted = m_predicted[sortidx]
-        P_predicted = P_predicted[sortidx]
-        m_smooth = m_smooth[sortidx]
-        P_smooth = P_smooth[sortidx]
+        # conditioned states are in the same order as the data (X, y)
+        # but we need them chronological to choose nearest states
+        sorted_idx = jnp.argsort(t_states)
+        t_states = t_states[sorted_idx]
+        m_predicted = m_predicted[sorted_idx]
+        P_predicted = P_predicted[sorted_idx]
+        m_filtered  = m_filtered[sorted_idx]
+        P_filtered  = P_filtered[sorted_idx]
+        m_smooth    = m_smooth[sorted_idx]
+        P_smooth    = P_smooth[sorted_idx]
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)
@@ -194,29 +194,32 @@ class IntegratedStateSpaceSolver(eqx.Module):
         mean = jnp.zeros(self.kernel.d) # TODO: mean function of base kernel
         m0 = jnp.block([mean] + self.kernel.num_insts*[jnp.zeros(self.kernel.d)])
 
-        # Nearest (future) datapoint
+        # Nearest/next past/future state for each datapoint
         k_nexts = jnp.searchsorted(t_states, t_test, side='right')
-
+        
         # Method to use for test point
-        past   = (k_nexts<=0)    # Retrodict
-        future = (k_nexts>=N)    # Extrapolate
-        during = ~past & ~future # Interpolate
+        past   = t_test < t_states[0]  # Retrodict
+        future = t_test > t_states[-1] # Extrapolate
+        during = ~past & ~future       # Interpolate
         cases = (past.astype(int)*0 + during.astype(int)*1 + future.astype(int)*2)
 
         # Shorthand for matrices
         A_aug = lambda dt: self.kernel.transition_matrix(0, dt)
         Q_aug = lambda dt: self.kernel.process_noise(0, dt)
 
-        def kalman(k, ktest):
+        # Precompute H for all test points
+        H_test = jax.vmap(H)(X_test)
+
+        def kalman(k_prev, ktest):
             '''
             Kalman prediction from most recent 
             filtered (but not RTS smoothed) state
             '''
-            dt = t_test[ktest] - t_states[k]
-            m_k = m_filtered[k]
-            P_k = P_filtered[k]
-            A_star = A_aug(dt) # transition matrix from t_k to t_star
-            Q_star = Q_aug(dt) # process noise from t_k to t_star
+            dt = t_test[ktest] - t_states[k_prev]
+            m_k = m_filtered[k_prev]
+            P_k = P_filtered[k_prev]
+            A_star = A_aug(dt) 
+            Q_star = Q_aug(dt)
             m_star_pred = A_star @ m_k
             P_star_pred = A_star @ P_k @ A_star.T + Q_star
             return m_star_pred, P_star_pred
@@ -250,7 +253,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
             # TODO: if user specifies exposure time here, need to:
             ## 1. predict to start state & set z to zero
             ## 2. predict to the end state, then project using H and texp_test
-            Hk = H(X_test[ktest])
+            Hk = H_test[ktest]
             pred_mean = (Hk @ m_star.T).squeeze()
             pred_var  = (Hk @ P_star @ Hk.T).squeeze()
             return pred_mean, pred_var

@@ -114,8 +114,8 @@ class IntegratedStateSpaceModel(StateSpaceModel):
             return H_aug
 
         def H_latent(t: JAXArray, instid: int) -> JAXArray:
-            # H_x = self.base_model.observation_model(X) # TODO: use this to get the shapes right
             ''' Observation model for latent (non-integral) state '''
+            # H_x = self.base_model.observation_model(X) # TODO: use this to get the shapes right
             H_x = jnp.zeros(self.d).at[0].set(1)  # hardcoded 1-D version for now
             H_aug = jnp.zeros(self.dimension)
             H_aug = jax.lax.dynamic_update_slice(H_aug, H_x, (0,))
