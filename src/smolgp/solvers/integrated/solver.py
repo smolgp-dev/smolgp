@@ -108,18 +108,24 @@ class IntegratedStateSpaceSolver(eqx.Module):
         rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
-        # Extract the end-states and put into original order (i.e. that matches self.X)
-        t_states, instid, obsid, stateid = self.state_coords
-        ends = jnp.argwhere(stateid==1).squeeze()
-        sort = obsid[ends]
-        t_ends = t_states[ends][sort]
+        # # Extract the end-states and put into original order (i.e. that matches self.X)
+        # t_states, instid, obsid, stateid = self.state_coords
+        # ends = jnp.argwhere(stateid==1).squeeze()
+        # sort = obsid[ends]
+        # t_ends = t_states[ends][sort]
+
+        # # Pack-up results and return
+        # conditioned_states = (m_predicted[ends][sort], P_predicted[ends][sort]), \
+        #                         (m_filtered[ends][sort], P_filtered[ends][sort]), \
+        #                             (m_smoothed[ends][sort], P_smoothed[ends][sort])
+        # return t_ends, conditioned_states, v_S
 
         # Pack-up results and return
-        conditioned_states = (m_predicted[ends][sort], P_predicted[ends][sort]), \
-                                (m_filtered[ends][sort], P_filtered[ends][sort]), \
-                                    (m_smoothed[ends][sort], P_smoothed[ends][sort])
-        return t_ends, conditioned_states, v_S
-    
+        conditioned_states = (m_predicted, P_predicted), \
+                                (m_filtered, P_filtered), \
+                                    (m_smoothed, P_smoothed)
+        return self.state_coords, conditioned_states, v_S
+
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
         Wrapper fot jitted StateSpaceSolver._predict. 
@@ -161,21 +167,11 @@ class IntegratedStateSpaceSolver(eqx.Module):
         """
         
         # Unpack conditioned results
-        t_states, conditioned_states, _ = conditioned_results
+        state_coords, conditioned_states, _ = conditioned_results
         (m_predicted, P_predicted), \
         (m_filtered, P_filtered), \
         (m_smooth, P_smooth) = conditioned_states
-
-        # conditioned states are in the same order as the data (X, y)
-        # but we need them chronological to choose nearest states
-        sorted_idx = jnp.argsort(t_states)
-        t_states = t_states[sorted_idx]
-        m_predicted = m_predicted[sorted_idx]
-        P_predicted = P_predicted[sorted_idx]
-        m_filtered  = m_filtered[sorted_idx]
-        P_filtered  = P_filtered[sorted_idx]
-        m_smooth    = m_smooth[sorted_idx]
-        P_smooth    = P_smooth[sorted_idx]
+        t_states, instid, obsid, stateid = state_coords
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)
@@ -198,9 +194,9 @@ class IntegratedStateSpaceSolver(eqx.Module):
         k_nexts = jnp.searchsorted(t_states, t_test, side='right')
         
         # Method to use for test point
-        past   = t_test < t_states[0]  # Retrodict
-        future = t_test > t_states[-1] # Extrapolate
-        during = ~past & ~future       # Interpolate
+        past   = k_nexts<=0      # Retrodict
+        future = k_nexts>=K      # Extrapolate
+        during = ~past & ~future # Interpolate
         cases = (past.astype(int)*0 + during.astype(int)*1 + future.astype(int)*2)
 
         # Shorthand for matrices

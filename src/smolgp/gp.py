@@ -35,13 +35,19 @@ class ConditionedStates(eqx.Module):
     """
     An object to hold the conditioned means and variances
 
-    times : timestamp corresponding to each state
+    t_states: time coordinates of all states
+    instid: instrument IDs corresponding to the measurement at each state
+    obsid: observation IDs corresponding to the measurement at each state
+    stateid: state IDs corresponding to each state (0 for exposure-start, 1 for exposure-end)
     predicted_mean/var : Kalman predicted state
     filtered_mean/var  : Kalman filtered state
     smoothed_mean/var  : RTS smoothed state
     """
 
-    times: JAXArray
+    t_states: JAXArray
+    instid: JAXArray
+    obsid: JAXArray
+    stateid: JAXArray
     predicted_mean: JAXArray
     filtered_mean: JAXArray
     smoothed_mean: JAXArray
@@ -51,7 +57,10 @@ class ConditionedStates(eqx.Module):
 
     def __init__(
         self,
-        times,
+        t_states: JAXArray,
+        instid: JAXArray,
+        obsid: JAXArray,
+        stateid: JAXArray,
         m_pred: JAXArray,
         P_pred: JAXArray,
         m_filt: JAXArray,
@@ -59,21 +68,26 @@ class ConditionedStates(eqx.Module):
         m_smooth: JAXArray,
         P_smooth: JAXArray,
     ):
-        self.times = times
+        self.t_states = t_states
+        self.instid   = instid
+        self.obsid    = obsid
+        self.stateid  = stateid
         self.predicted_mean = m_pred
-        self.predicted_var = P_pred
+        self.predicted_var  = P_pred
         self.filtered_mean = m_filt
-        self.filtered_var = P_filt
+        self.filtered_var  = P_filt
         self.smoothed_mean = m_smooth
-        self.smoothed_var = P_smooth
+        self.smoothed_var  = P_smooth
 
     def __call__(self):
+        state_coords = (self.t_states, self.instid, self.obsid, self.stateid)
         packaged_results = (
             (self.predicted_mean, self.predicted_var),
             (self.filtered_mean, self.filtered_var),
             (self.smoothed_mean, self.smoothed_var),
         )
-        return self.times, packaged_results, None
+        # This should match the output of solver.condition
+        return state_coords, packaged_results, None
 
 
 class GaussianProcess(eqx.Module):
@@ -278,14 +292,25 @@ class GaussianProcess(eqx.Module):
         conditioned_results = self.solver.condition(y, return_v_S=True)
 
         ## unpack into prediction at the states
-        t_states, conditioned_states, (v, S) = conditioned_results
+        state_coords, conditioned_states, (v, S) = conditioned_results
         (m_predicted, P_predicted), \
             (m_filtered, P_filtered), \
                 (m_smoothed, P_smoothed) = conditioned_states
 
-        ## Grab likelihood
+        # If not integrated, this will just be t_states == X
+        if isinstance(state_coords, tuple):
+            t_states, instid, obsid, stateid = state_coords
+        else:
+            t_states = state_coords
+            instid  = jnp.zeros_like(t_states, dtype=int)
+            obsid   = jnp.arange(len(t_states), dtype=int)
+            stateid = jnp.ones_like(t_states, dtype=int)  # all "have data"
+
+        ## Grab likelihood (v and S will already be 
+        ## filtered down to the "at the data" states)
         log_prob = self._compute_log_prob(v, S)
 
+        ## Make predictions at X_test if given
         if kernel is None:
             # If no component kernel passed, use the full model
             observation_model = self.kernel.observation_model
@@ -303,7 +328,6 @@ class GaussianProcess(eqx.Module):
         else:
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
-            X_test = self.X
 
             @jax.jit
             def project(X, m, P):
@@ -312,7 +336,11 @@ class GaussianProcess(eqx.Module):
                 var = H @ P @ H.T
                 return mu, var
             
-            mu, var = jax.vmap(project, in_axes=(0, 0, 0))(X_test, m_smoothed, P_smoothed)
+            at_data = jnp.argwhere(stateid==1).squeeze()
+            sort = obsid[at_data]
+            mu, var = jax.vmap(project, in_axes=(0, 0, 0))(self.X, 
+                                                           m_smoothed[at_data][sort], 
+                                                           P_smoothed[at_data][sort])
             mu = mu.squeeze()
             var = var.squeeze()
 
@@ -320,13 +348,10 @@ class GaussianProcess(eqx.Module):
         # so we can use them to make quick predictions at test
         # points with subsequent calls to self.predict
         states = ConditionedStates(
-            t_states,
-            m_predicted,
-            P_predicted,
-            m_filtered,
-            P_filtered,
-            m_smoothed,
-            P_smoothed,
+            t_states, instid, obsid, stateid,
+            m_predicted, P_predicted,
+            m_filtered,  P_filtered,
+            m_smoothed, P_smoothed,
         )
 
         condGP = GaussianProcess(
