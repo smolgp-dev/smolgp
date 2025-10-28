@@ -55,7 +55,8 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
         m_hat_next, P_hat_next = carry
 
         # Compute smoothing gain
-        A_k = A_aug(t_states[k], t_states[k+1])
+        Delta = t_states[k+1] - t_states[k]
+        A_k = A_aug(0, Delta)
 
         # If transition is from te_k to ts_k (i.e., over the exposure)
         def smooth_start():
@@ -122,7 +123,7 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
     _, outputs = jax.lax.scan(step, init_carry, jnp.arange(K-2, -1, -1))
     m_smooth_reversed, P_smooth_reversed = outputs
 
-    # Reverse outputs to match time order
+    # Reverse outputs (with final filtered=smoothed state) to match time order
     m_smooth = jnp.vstack([m_smooth_reversed[::-1], m_filtered[-1][None, :]])
     P_smooth = jnp.vstack([P_smooth_reversed[::-1], P_filtered[-1][None, :, :]])
     return m_smooth, P_smooth
