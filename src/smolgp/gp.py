@@ -298,10 +298,10 @@ class GaussianProcess(eqx.Module):
                 (m_smoothed, P_smoothed) = conditioned_states
 
         # If not integrated, this will just be t_states == X
-        if isinstance(state_coords, tuple):
+        if isinstance(self.solver, IntegratedStateSpaceSolver):
             t_states, instid, obsid, stateid = state_coords
         else:
-            t_states = state_coords
+            t_states = self.kernel.coord_to_sortable(state_coords)
             instid  = jnp.zeros_like(t_states, dtype=int)
             obsid   = jnp.arange(len(t_states), dtype=int)
             stateid = jnp.ones_like(t_states, dtype=int)  # all "have data"
