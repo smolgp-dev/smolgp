@@ -58,15 +58,10 @@ class ConditionedStates(eqx.Module):
     def __init__(
         self,
         t_states: JAXArray,
-        instid: JAXArray,
-        obsid: JAXArray,
-        stateid: JAXArray,
-        m_pred: JAXArray,
-        P_pred: JAXArray,
-        m_filt: JAXArray,
-        P_filt: JAXArray,
-        m_smooth: JAXArray,
-        P_smooth: JAXArray,
+        instid: JAXArray, obsid: JAXArray, stateid: JAXArray,
+        m_pred: JAXArray, P_pred: JAXArray,
+        m_filt: JAXArray, P_filt: JAXArray,
+        m_smooth: JAXArray, P_smooth: JAXArray,
     ):
         self.t_states = t_states
         self.instid   = instid

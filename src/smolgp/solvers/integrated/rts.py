@@ -58,24 +58,18 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
         Delta = t_states[k+1] - t_states[k]
         A_k = A_aug(0, Delta)
 
-        # If transition is from te_k to ts_k (i.e., over the exposure)
         def smooth_start():
-            ''' Back-propagate state during an exposure '''
+            ''' RTS smooth an exposure-start state '''
 
-            ## What we're working with:
-            # pre-reset  at k+1: m_pred_next, P_pred_next (predicted)
-            # post-reset at k+1: m_hat_next, P_hat_next (smoothed)
-            # post-reset at k  : m_k, P_k (filtered)
-
-            ## 1. t_e to post-reset t_s
-            ##    aka t_k+1 to t_k+2/3
+            ## 1. next state to post-reset t_s
+            ##    aka t_k+1 to t_k+
             ##    it is the RTS equations over the exposure interval
             G_k_post = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T
             m_hat_k_post = m_k + G_k_post @ (m_hat_next - m_pred_next)
             P_hat_k_post = P_k + G_k_post @ (P_hat_next - P_pred_next) @ G_k_post.T
 
             ## 2. post-reset t_s to pre-reset t_s
-            ##    aka t_k+2/3 to t_k+1/3
+            ##    aka t_k+ to t_k
             ##    it is RTS but with 'Reset' as our 'transition matrix'
             m_k_pre = m_predicted[k]  # pre-reset start state
             P_k_pre = P_predicted[k]  # pre-reset start covariance
@@ -83,27 +77,24 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
             # This let's us calculate the inverse, but does not affect the end result
             # since we immedietely multiply by Reset.T which deletes those rows/cols again
             Reset = RESET(instid[obsid[k]])
-            # P_pred_post = Reset @ P_k_pre @ Reset.T + (jnp.eye(len(Reset))-Reset)  #### This changed
-            P_pred_post = P_k + (jnp.eye(len(Reset))-Reset)  #### This changed
+            P_pred_post = P_k + (jnp.eye(len(Reset))-Reset)
+            # P_pred_post_inv = jnp.linalg.inv(P_pred_post)  # explicit inverse,
+            # G_k_pre = P_k_pre @ Reset.T @ P_pred_post_inv  # solve should be more stable
             G_k_pre = jnp.linalg.solve(P_pred_post.T, (P_k_pre @ Reset.T).T).T 
 
             ## Final smoothed state at k
             m_hat_k = m_k_pre + G_k_pre @ (m_hat_k_post - m_k)
             P_hat_k = P_k_pre + G_k_pre @ (P_hat_k_post - P_k) @ G_k_pre.T
-
             return m_hat_k, P_hat_k
 
-        # If transition is from ts_k+1 to te_k (i.e., over the gap)
         def smooth_end():
-            ''' Back-propagate state between exposures '''
-
+            ''' RTS smooth an exposure-end state '''
             ## 3. pre-reset t_s to previous t_e
             ##    aka t_k+1/3 to t_k
             ##    this is simply the normal RTS update equations
             G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T
             m_hat_k = m_k + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k + G_k @ (P_hat_next - P_pred_next) @ G_k.T
-
             return m_hat_k, P_hat_k
 
         m_hat_k, P_hat_k = jax.lax.cond(

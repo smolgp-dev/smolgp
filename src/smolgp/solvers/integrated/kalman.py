@@ -72,6 +72,7 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
                           lambda i: t_states[i] - t_states[i-1],
                           lambda _: 0.0,
                           k)
+        Delta = jnp.where(Delta<1e-8, 0, Delta)
         n = obsid[k]
         
         # Get transition matrix
@@ -105,10 +106,10 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
         
         m_k, P_k, m_pred, P_pred, v, S = jax.lax.cond(
                         stateid[k]==0,
-                        lambda _: update_start(), # k=2,4,... is a t_e->t_s aka gap
-                        lambda _: update_end(),   # k=1,3,... is a t_s->t_e aka exposure
-                        operand=None              # note k=0 is -inf->t_s is also a 'gap' update
-                    )  
+                        lambda _: update_start(),
+                        lambda _: update_end(),
+                        operand=None
+                    )
         
         return (m_k, P_k), (m_k, P_k, m_pred, P_pred, v, S)
     
