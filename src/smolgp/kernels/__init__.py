@@ -21,7 +21,7 @@ __all__ = [
     "SHO",
     # "Exp",
     # "Matern32",
-    # "Matern52",
+    "Matern52",
     # "Cosine",
     "IntegratedSHO",
 ]
@@ -35,7 +35,7 @@ from smolgp.kernels.base import (
     SHO,
     # Exp,
     # Matern32,
-    # Matern52,
+    Matern52,
     # Cosine,
 )
 from smolgp.kernels.integrated import (
