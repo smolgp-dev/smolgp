@@ -48,10 +48,10 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     and `instid` is an index encoding which instrument the measurement corresponds to.
     """
 
-    dimension: float = eqx.field(static=True) # dimensionality of the augmented space
-    num_insts: int   = eqx.field(static=True) # number of integral states
-    base_model: StateSpaceModel  # the underlying (non-integrated) SSM (dimension=d)
-    d: int = eqx.field(static=True)      # dimension of the base model
+    base_model: StateSpaceModel             # the underlying/base (non-integrated) SSM
+    num_insts: int = eqx.field(static=True) # number of integral states
+    dimension: int = eqx.field(static=True) # dimensionality of the augmented space
+    d: int = eqx.field(static=True)           # dimension of the base model
     I: JAXArray  # identity matrix of size dxd
     Z: JAXArray  # zero matrix of size dxd
 

@@ -165,12 +165,12 @@ class GaussianProcess(eqx.Module):
         self.noise = noise
 
         if solver is None:
-            if isinstance(kernel, IntegratedStateSpaceModel):
-                # TODO: if any leaf kernels are integrated, use this
-                # will have to define a Sum between integrated/non
-                # (and Product) that creates a new integrated model
+            kernels = extract_leaf_kernels(kernel)
+            is_integrated = any([isinstance(k, IntegratedStateSpaceModel) for k in kernels])
+            is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
+            if is_integrated:
                 solver = IntegratedStateSpaceSolver
-            elif isinstance(self.kernel, StateSpaceModel):
+            elif is_instantaneous:
                 solver = StateSpaceSolver
             else:
                 raise ValueError(

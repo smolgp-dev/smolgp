@@ -72,7 +72,6 @@ def integrated_kalman_filter(A_aug, Q_aug, H_aug, R, RESET,
                           lambda i: t_states[i] - t_states[i-1],
                           lambda _: 0.0,
                           k)
-        Delta = jnp.where(Delta<1e-8, 0, Delta)
         n = obsid[k]
         
         # Get transition matrix

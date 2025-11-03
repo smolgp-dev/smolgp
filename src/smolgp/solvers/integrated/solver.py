@@ -35,14 +35,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
         """Build a :class:`IntegratedStateSpaceSolver` for a given kernel and coordinates
 
         Args:
+            kernel: The kernel function.
             X: The input coordinates. The coordinates for an integrated model should be a tuple of
                     X = (t, delta, instid), 
                 where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
                 `delta` is the integration range (e.g. exposure time) for each measurement,
                 and `instid` is an index encoding which instrument the measurement corresponds to.
-            kernel: The kernel function.
             noise: The noise model for the process.
-            state_coords : 
+            state_coords: Bookkeeping indices for the discretized states used in Kalman/RTS
         """
         self.kernel = kernel
         self.X = X
@@ -105,11 +105,11 @@ class IntegratedStateSpaceSolver(eqx.Module):
         
         # RTS smoothing
         rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
-        m_smootheded, P_smootheded = rts_results
+        m_smoothed, P_smoothed = rts_results
 
         conditioned_states = (m_predicted, P_predicted), \
                                 (m_filtered, P_filtered), \
-                                    (m_smootheded, P_smootheded)
+                                    (m_smoothed, P_smoothed)
         return self.state_coords, conditioned_states, v_S
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
@@ -268,9 +268,18 @@ class IntegratedStateSpaceSolver(eqx.Module):
             # return project(ktest, m_star, P_star)
             return m_star, P_star
         
+        @jax.jit
+        def predict_point(ktest):
+            '''
+            Switch between retrodiction, interpolation, and extrapolation
+            for a single test point ktest
+            '''
+            return jax.lax.switch(cases[ktest],
+                                  (retrodict, interpolate, extrapolate),
+                                  (ktest))
+        
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
-        branches = (retrodict, interpolate, extrapolate)
-        (pred_mean, pred_var) = jax.vmap(lambda ktest: jax.lax.switch(cases[ktest], branches, (ktest)))(ktests)
+        (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
 
         return pred_mean, pred_var
