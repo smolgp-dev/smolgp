@@ -20,7 +20,7 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-from smolgp.kernels import StateSpaceModel
+from smolgp.kernels import StateSpaceModel, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
 
 from smolgp.solvers import StateSpaceSolver
@@ -207,7 +207,8 @@ class GaussianProcess(eqx.Module):
     @property
     def covariance(self) -> JAXArray:
         # TODO: Eq. 12.55 in Sarkka & Solin 2019
-        return self.covariance_value
+        # return self.covariance_value
+        raise NotImplementedError
 
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
@@ -301,6 +302,16 @@ class GaussianProcess(eqx.Module):
             obsid   = jnp.arange(len(t_states), dtype=int)
             stateid = jnp.ones_like(t_states, dtype=int)  # all "have data"
 
+        # Save the conditioned state values to a new GP object
+        # so we can use them to make quick predictions at test
+        # points with subsequent calls to self.predict
+        states = ConditionedStates(
+            t_states, instid, obsid, stateid,
+            m_predicted, P_predicted,
+            m_filtered,  P_filtered,
+            m_smoothed, P_smoothed,
+        )
+
         ## Grab likelihood (v and S will already be 
         ## filtered down to the "at the data" states)
         log_prob = self._compute_log_prob(v, S)
@@ -339,16 +350,7 @@ class GaussianProcess(eqx.Module):
             mu = mu.squeeze()
             var = var.squeeze()
 
-        # Save the conditioned state values to a new GP object
-        # so we can use them to make quick predictions at test
-        # points with subsequent calls to self.predict
-        states = ConditionedStates(
-            t_states, instid, obsid, stateid,
-            m_predicted, P_predicted,
-            m_filtered,  P_filtered,
-            m_smoothed, P_smoothed,
-        )
-
+        ## Create the conditioned GP
         condGP = GaussianProcess(
             kernel=self.kernel,
             X=X_test,
@@ -368,7 +370,8 @@ class GaussianProcess(eqx.Module):
         X_test: JAXArray | None = None,
         y: JAXArray | None = None,
         *,
-        # kernel: kernels.Kernel | None = None, # TODO: here
+        return_full_state: bool = False,
+        kernel: int | None = None, 
         # include_mean: bool = True,
         return_var: bool = False,
         # return_cov: bool = False,
@@ -396,9 +399,13 @@ class GaussianProcess(eqx.Module):
             observation_model (Any, optional): optionally provide a function of
                                 X_test to define the output observation model.
                                 Default will use that of the kernel.
-            TODO: add an option to predict just at a given component kernel? or bake that into observation_model above
-
-
+            return_full_state (bool, optional): If ``True``, return the full predicted state
+                mean and covariance, rather than projecting to observation space. Default is
+                ``False``, i.e. the result is projected through kernel.observation_model.
+            kernel (int, optional): If specified, the index of the kernel in a
+                multi-component model (for example, a sum or product of kernels)
+                to extract and project (if return_full_state is False) the prediction for.
+                                
         Returns:
             The mean of the predictive model evaluated at ``X_test``, with shape
             ``(N_test,)`` where ``N_test`` is the zeroth dimension of
@@ -415,20 +422,43 @@ class GaussianProcess(eqx.Module):
             ), "The GP has not been conditioned yet, and no data array `y` was given."
             llh, condGP = self.condition(
                 y, X_test
-            )  # condition on data, also predicts at X_test
-            mu, var = condGP.loc, condGP.var  # which we can read off like so
+            )  # condition on data, also internally predicts at X_test
+            return condGP.predict(
+                X_test, return_full_state=return_full_state,
+                kernel=kernel, return_var=return_var,
+                # return_cov=return_cov,
+                observation_model=observation_model,
+            )
         else:
             if X_test is None:
-                mu = self.loc  # get pre-computed mean
-                var = self.var  # & var at the data points
+                # If no X_test given, predict at the data points
+                if return_full_state:
+                    mu  = self.states.smoothed_mean
+                    var = self.states.smoothed_var
+                else:
+                    if kernel is None:
+                        # already computed here
+                        mu, var = self.loc, self.var
+                    else:
+                        # extract component kernel & project
+                        kernels = extract_leaf_kernels(self.kernel)
+                        H_comp = kernels[kernel].observation_model
+                        # TODO: write the rest of this out here and below
             else:
-                # TODO: if component kernel is passed, fold that into H_test here
-                H_test = (
-                    self.kernel.observation_model
-                    if observation_model is None
-                    else observation_model
-                )
-                mu, var = self.solver.predict(X_test, self.states(), H_test)
+                # Predicting at new test points
+                H_test = self.kernel.observation_model \
+                         if observation_model is None else observation_model
+                t_test = self.kernel.coord_to_sortable(X_test)
+                mean, variance = self.solver.predict(X_test, self.states(), H_test)
+                if return_full_state:
+                    mu = mean
+                    var = variance
+                else:
+                    # TODO: if component kernel is passed, fold that into H_test here
+                    H = jax.vmap(H_test)(X_test)
+                    mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
+                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(H, variance).squeeze()
+
         if return_var:
             return mu, var
         # if return_cov:

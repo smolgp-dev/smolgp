@@ -35,15 +35,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
         """Build a :class:`IntegratedStateSpaceSolver` for a given kernel and coordinates
 
         Args:
-            kernel: The kernel function.
             X: The input coordinates. The coordinates for an integrated model should be a tuple of
                     X = (t, delta, instid), 
                 where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
                 `delta` is the integration range (e.g. exposure time) for each measurement,
                 and `instid` is an index encoding which instrument the measurement corresponds to.
-
-            y: The measurement values.
+            kernel: The kernel function.
             noise: The noise model for the process.
+            state_coords : 
         """
         self.kernel = kernel
         self.X = X
@@ -106,24 +105,11 @@ class IntegratedStateSpaceSolver(eqx.Module):
         
         # RTS smoothing
         rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
-        m_smoothed, P_smoothed = rts_results
+        m_smootheded, P_smootheded = rts_results
 
-        # # Extract the end-states and put into original order (i.e. that matches self.X)
-        # t_states, instid, obsid, stateid = self.state_coords
-        # ends = jnp.argwhere(stateid==1).squeeze()
-        # sort = obsid[ends]
-        # t_ends = t_states[ends][sort]
-
-        # # Pack-up results and return
-        # conditioned_states = (m_predicted[ends][sort], P_predicted[ends][sort]), \
-        #                         (m_filtered[ends][sort], P_filtered[ends][sort]), \
-        #                             (m_smoothed[ends][sort], P_smoothed[ends][sort])
-        # return t_ends, conditioned_states, v_S
-
-        # Pack-up results and return
         conditioned_states = (m_predicted, P_predicted), \
                                 (m_filtered, P_filtered), \
-                                    (m_smoothed, P_smoothed)
+                                    (m_smootheded, P_smootheded)
         return self.state_coords, conditioned_states, v_S
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
@@ -138,7 +124,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
                                   self.kernel.observation_model
         """
         
-        # # If the test points are for instantaneous measurements, 
+        # # TODO?: If the test points are for instantaneous measurements, 
         # # change the observation model to be for the latent state
         # t_test, texp_test, instid_test = X_test
         # if jnp.any(texp_test==0):
@@ -170,7 +156,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         state_coords, conditioned_states, _ = conditioned_results
         (m_predicted, P_predicted), \
         (m_filtered, P_filtered), \
-        (m_smooth, P_smooth) = conditioned_states
+        (m_smoothed, P_smoothed) = conditioned_states
         t_states, instid, obsid, stateid = state_coords
 
         # Unpack test coordinates
@@ -230,8 +216,8 @@ class IntegratedStateSpaceSolver(eqx.Module):
             # Next (future) data point predicted & smoothed state
             m_pred_next = m_predicted[k_next] # prediction (no kalman update) at next data point
             P_pred_next = P_predicted[k_next] # prediction (no kalman update) at next data point
-            m_hat_next = m_smooth[k_next]     # RTS smoothed state at next data point
-            P_hat_next = P_smooth[k_next]     # RTS smoothed covariance at next data point
+            m_hat_next = m_smoothed[k_next]     # RTS smoothed state at next data point
+            P_hat_next = P_smoothed[k_next]     # RTS smoothed covariance at next data point
             
             # Transition matrix
             dt = t_states[k_next] - t_test[ktest]
@@ -244,20 +230,21 @@ class IntegratedStateSpaceSolver(eqx.Module):
             
             return m_star_hat, P_star_hat
 
-        def project(ktest, m_star, P_star):
-            ''' Project the state vector to the observation space '''
-            # TODO: if user specifies exposure time here, need to:
-            ## 1. predict to start state & set z to zero
-            ## 2. predict to the end state, then project using H and texp_test
-            Hk = H_test[ktest]
-            pred_mean = (Hk @ m_star.T).squeeze()
-            pred_var  = (Hk @ P_star @ Hk.T).squeeze()
-            return pred_mean, pred_var
+        # def project(ktest, m_star, P_star):
+        #     ''' Project the state vector to the observation space '''
+        #     # TODO: if user specifies exposure time here, need to:
+        #     ## 1. predict to start state & set z to zero
+        #     ## 2. predict to the end state, then project using H and texp_test
+        #     Hk = H_test[ktest]
+        #     pred_mean = (Hk @ m_star.T).squeeze()
+        #     pred_var  = (Hk @ P_star @ Hk.T).squeeze()
+        #     return pred_mean, pred_var
 
         def retrodict(ktest):
             ''' Reverse-extrapolate from first datapoint t_star '''
             m_star, P_star = smooth(0, ktest, m0, Pinf)
-            return project(ktest, m_star, P_star)
+            # return project(ktest, m_star, P_star)
+            return m_star, P_star
 
         def interpolate(ktest):
             ''' Interpolate between nearest data points '''
@@ -272,12 +259,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
             # 2. RTS smooth from next nearest data point (in future)
             m_star_hat, P_star_hat = smooth(k_next, ktest, m_star_pred, P_star_pred)
 
-            return project(ktest, m_star_hat, P_star_hat)
+            # return project(ktest, m_star_hat, P_star_hat)
+            return m_star_hat, P_star_hat
 
         def extrapolate(ktest):
             ''' Kalman predict from from last datapoint t_star '''
             m_star, P_star = kalman(-1, ktest)
-            return project(ktest, m_star, P_star)
+            # return project(ktest, m_star, P_star)
+            return m_star, P_star
         
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

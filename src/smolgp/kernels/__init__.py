@@ -17,6 +17,8 @@ __all__ = [
     "StateSpaceModel",
     "Sum",
     "Product",
+    "extract_leaf_kernels",
+    "Wrapper",
     "Scale",
     "SHO",
     # "Exp",
@@ -26,11 +28,16 @@ __all__ = [
     "IntegratedSHO",
 ]
 
+# Model class and utilities
 from smolgp.kernels.base import (
-    Product,
-    Sum,
     StateSpaceModel,
+    Sum,
+    Product,
+    extract_leaf_kernels,
+    Wrapper,
+    Scale,
 )
+# Specific kernels
 from smolgp.kernels.base import (
     SHO,
     # Exp,
@@ -38,6 +45,7 @@ from smolgp.kernels.base import (
     Matern52,
     # Cosine,
 )
+# Integrated kernels
 from smolgp.kernels.integrated import (
     IntegratedSHO,
 )

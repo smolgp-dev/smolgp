@@ -73,16 +73,17 @@ class StateSpaceSolver(eqx.Module):
         m_smoothed, P_smoothed = rts_results
 
         # Pack-up results and return
+        t_states = self.kernel.coord_to_sortable(self.X)
         conditioned_states = (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed)
-        return self.X, conditioned_states, v_S
+        return t_states, conditioned_states, v_S
     
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
         Wrapper fot jitted StateSpaceSolver._predict. 
         
         Args:
-            X_test              : The test coordinates.
-            conditioned_results : The output of self.condition()
+            X_test              : The test coordinates; same shape as self.X
+            conditioned_results : The output of self.condition
             observation_model   : (optional) H for the test points
                                   should be a function just like 
                                   self.kernel.observation_model
@@ -106,22 +107,26 @@ class StateSpaceSolver(eqx.Module):
         """
 
         # Unpack conditioned results
-        X_states, conditioned_states, _ = conditioned_results
+        state_coords, conditioned_states, _ = conditioned_results
         (m_predicted, P_predicted), \
         (m_filtered, P_filtered), \
         (m_smoothed, P_smoothed) = conditioned_states
+        t_states, instid, obsid, stateid = state_coords
+
+        # Unpack test coordinates
+        t_test = self.kernel.coord_to_sortable(X_test)
 
         N = len(self.X)   # number of data points
-        K = len(X_states) # number of states
-        M = len(X_test)   # number of test points
-                
+        K = len(t_states) # number of states
+        M = len(t_test)   # number of test points
+
         Pinf = self.kernel.stationary_covariance()
         if not isinstance(Pinf, JAXArray): # if multicomponent model
             Pinf = Pinf.to_dense() # need dense version for jnp.linalg.solve in retrodict
 
         # Nearest (future) datapoint
         ## TODO: we assume X_states is sorted here; should we enforce that?
-        k_nexts = jnp.searchsorted(X_states, X_test, side='right')
+        k_nexts = jnp.searchsorted(t_states, t_test, side='right')
 
         # Which method to use for each test point:
         past   = (k_nexts<=0)    # Retrodiction
@@ -133,15 +138,18 @@ class StateSpaceSolver(eqx.Module):
         A = self.kernel.transition_matrix
         Q = self.kernel.process_noise
 
+        # Precompute H for all test points
+        H_test = jax.vmap(H)(X_test)
+
         @jax.jit
-        def kalman(k, ktest):
+        def kalman(k_prev, ktest):
             '''
             Kalman prediction from most recent 
             filtered (not smoothed) state
             '''
-            dt = X_test[ktest] - self.X[k]
-            m_k = m_filtered[k]
-            P_k = P_filtered[k]
+            dt = t_test[ktest] - t_states[k_prev]
+            m_k = m_filtered[k_prev]
+            P_k = P_filtered[k_prev]
             A_star = A(0,dt) # transition matrix from t_k to t_star
             Q_star = Q(0,dt) # process noise from t_k to t_star
             m_star_pred = A_star @ m_k
@@ -164,7 +172,7 @@ class StateSpaceSolver(eqx.Module):
             P_hat_next = P_smoothed[k_next]     # RTS smoothed covariance at next data point
 
             # Time-lag between states
-            dt = self.X[k_next] - X_test[ktest]
+            dt = t_states[k_next] - t_test[ktest]
 
             # Transition matrix for this step
             A_k = A(0,dt) 
@@ -180,19 +188,20 @@ class StateSpaceSolver(eqx.Module):
             
             return m_star_hat, P_star_hat
 
-        @jax.jit
-        def project(ktest, m_star, P_star):
-            ''' Project the state vector to the observation space '''
-            Htest = H(X_test[ktest])
-            pred_mean = (Htest @ m_star.T).squeeze()
-            pred_var  = (Htest @ P_star @ Htest.T).squeeze()
-            return pred_mean, pred_var
+        # @jax.jit
+        # def project(ktest, m_star, P_star):
+        #     ''' Project the state vector to the observation space '''
+        #     Hk = H_test[ktest]
+        #     pred_mean = (Hk @ m_star.T).squeeze()
+        #     pred_var  = (Hk @ P_star @ Hk.T).squeeze()
+        #     return pred_mean, pred_var
 
         @jax.jit
         def retrodict(ktest):
             ''' Reverse-extrapolate from first datapoint t_star '''
             m_star, P_star = smooth(0, ktest, 0, Pinf)
-            return project(ktest, m_star, P_star)
+            # return project(ktest, m_star, P_star)
+            return m_star, P_star
 
         @jax.jit
         def interpolate(ktest):
@@ -208,13 +217,15 @@ class StateSpaceSolver(eqx.Module):
             # 2. RTS smooth from next nearest data point (in future)
             m_star_hat, P_star_hat = smooth(k_next, ktest, m_star_pred, P_star_pred)
 
-            return project(ktest, m_star_hat, P_star_hat)
+            # return project(ktest, m_star_hat, P_star_hat)
+            return m_star_hat, P_star_hat
 
         @jax.jit
         def extrapolate(ktest):
             ''' Kalman predict from from last datapoint t_star '''
             m_star, P_star = kalman(-1, ktest)
-            return project(ktest, m_star, P_star)
+            # return project(ktest, m_star, P_star)
+            return m_star, P_star
 
         @jax.jit
         def predict_point(ktest):

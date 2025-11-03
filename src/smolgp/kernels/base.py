@@ -44,6 +44,13 @@ from tinygp.solvers.quasisep.block import Block
 
 from smolgp.helpers import Q_from_VanLoan
 
+def extract_leaf_kernels(kernel):
+    """Recursively extract all leaf kernels from a sum or product of kernels"""
+    if isinstance(kernel, (Sum, Product)):
+        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(kernel.kernel2)
+    else:
+        return [kernel]
+    
 class StateSpaceModel(Kernel):
     """
     The base class for an instantaneous linear Gaussian state space model
@@ -710,29 +717,29 @@ class Matern52(StateSpaceModel):
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The transition matrix A_k for the Matern-5/2 process"""
         dt = X2 - X1
-        lam2 = jnp.square(self.lam)
+        lam = self.lam
+        lam2 = jnp.square(lam)
         d2 = jnp.square(dt)
-        a11 = 0.5 * lam2 * d2 + self.lam * dt + 1
-        a12 = dt * (self.lam * dt + 1)
+        a11 = 0.5 * lam2 * d2 + lam * dt + 1
+        a12 = dt * (lam * dt + 1)
         a13 = 0.5 * d2
-        a21 = -0.5 * self.lam * lam2 * d2
-        a22 = -lam2 * d2 + self.lam * dt + 1
-        a23 = 0.5 * dt * (2 - self.lam * dt)
-        a31 = 0.5 * lam2 * self.lam * dt * (self.lam * dt - 2)
-        a32 = lam2 * dt * (self.lam * dt - 3)
-        a33 = 0.5 * lam2 * d2 - 2 * self.lam * dt + 1
-        return jnp.exp(-self.lam * dt) * jnp.array([
+        a21 = -0.5 * lam * lam2 * d2
+        a22 = -lam2 * d2 + lam * dt + 1
+        a23 = 0.5 * dt * (2 - lam * dt)
+        a31 = 0.5 * lam2 * lam * dt * (lam * dt - 2)
+        a32 = lam2 * dt * (lam * dt - 3)
+        a33 = 0.5 * lam2 * d2 - 2 * lam * dt + 1
+        return jnp.exp(-lam * dt) * jnp.array([
                             [a11, a12, a13],
                             [a21, a22, a23],
                             [a31, a32, a33],
                             ])
 
     # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the SHO process"""
+    #     """The process noise Q_k for the Matern-5/2 process"""
     #     dt = X2 - X1
-    #     n = self.eta
-    #     w = self.omega
-    #     q = self.quality
+    #     TODO: can implement here the analytic version, but by
+    #           default the parent class will generate w/ Van Loan
 
 
 
