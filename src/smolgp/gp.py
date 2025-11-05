@@ -58,21 +58,26 @@ class ConditionedStates(eqx.Module):
     def __init__(
         self,
         t_states: JAXArray,
-        instid: JAXArray, obsid: JAXArray, stateid: JAXArray,
-        m_pred: JAXArray, P_pred: JAXArray,
-        m_filt: JAXArray, P_filt: JAXArray,
-        m_smooth: JAXArray, P_smooth: JAXArray,
+        instid: JAXArray,
+        obsid: JAXArray,
+        stateid: JAXArray,
+        m_pred: JAXArray,
+        P_pred: JAXArray,
+        m_filt: JAXArray,
+        P_filt: JAXArray,
+        m_smooth: JAXArray,
+        P_smooth: JAXArray,
     ):
         self.t_states = t_states
-        self.instid   = instid
-        self.obsid    = obsid
-        self.stateid  = stateid
+        self.instid = instid
+        self.obsid = obsid
+        self.stateid = stateid
         self.predicted_mean = m_pred
-        self.predicted_var  = P_pred
+        self.predicted_var = P_pred
         self.filtered_mean = m_filt
-        self.filtered_var  = P_filt
+        self.filtered_var = P_filt
         self.smoothed_mean = m_smooth
-        self.smoothed_var  = P_smooth
+        self.smoothed_var = P_smooth
 
     def __call__(self):
         state_coords = (self.t_states, self.instid, self.obsid, self.stateid)
@@ -138,7 +143,6 @@ class GaussianProcess(eqx.Module):
     ):
         self.kernel = kernel
 
-
         self.X = X
 
         if isinstance(mean, means.MeanBase):
@@ -166,7 +170,9 @@ class GaussianProcess(eqx.Module):
 
         if solver is None:
             kernels = extract_leaf_kernels(kernel)
-            is_integrated = any([isinstance(k, IntegratedStateSpaceModel) for k in kernels])
+            is_integrated = any(
+                [isinstance(k, IntegratedStateSpaceModel) for k in kernels]
+            )
             is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
             if is_integrated:
                 solver = IntegratedStateSpaceSolver
@@ -222,7 +228,9 @@ class GaussianProcess(eqx.Module):
             The marginal log probability of this multivariate normal model,
             evaluated at ``y``.
         """
-        if isinstance(self.solver, StateSpaceSolver) or isinstance(self.solver, IntegratedStateSpaceSolver):
+        if isinstance(self.solver, StateSpaceSolver) or isinstance(
+            self.solver, IntegratedStateSpaceSolver
+        ):
             _, _, _, _, v, S = self.solver.Kalman(y, return_v_S=True)
         elif isinstance(self.solver, ParallelStateSpaceSolver):
             _, _, outputs = self.solver.Kalman(y, return_v_S=True)
@@ -289,30 +297,38 @@ class GaussianProcess(eqx.Module):
 
         ## unpack into prediction at the states
         state_coords, conditioned_states, (v, S) = conditioned_results
-        (m_predicted, P_predicted), \
-            (m_filtered, P_filtered), \
-                (m_smoothed, P_smoothed) = conditioned_states
+        (
+            (m_predicted, P_predicted),
+            (m_filtered, P_filtered),
+            (m_smoothed, P_smoothed),
+        ) = conditioned_states
 
         if isinstance(self.solver, IntegratedStateSpaceSolver):
             t_states, instid, obsid, stateid = state_coords
         else:
             # If not integrated, t_states = X and id arrays are 'defaulted'
             t_states = self.kernel.coord_to_sortable(state_coords)
-            instid  = jnp.zeros_like(t_states, dtype=int)
-            obsid   = jnp.arange(len(t_states), dtype=int)
+            instid = jnp.zeros_like(t_states, dtype=int)
+            obsid = jnp.arange(len(t_states), dtype=int)
             stateid = jnp.ones_like(t_states, dtype=int)  # all "have data"
 
         # Save the conditioned state values to a new GP object
         # so we can use them to make quick predictions at test
         # points with subsequent calls to self.predict
         states = ConditionedStates(
-            t_states, instid, obsid, stateid,
-            m_predicted, P_predicted,
-            m_filtered,  P_filtered,
-            m_smoothed, P_smoothed,
+            t_states,
+            instid,
+            obsid,
+            stateid,
+            m_predicted,
+            P_predicted,
+            m_filtered,
+            P_filtered,
+            m_smoothed,
+            P_smoothed,
         )
 
-        ## Grab likelihood (v and S will already be 
+        ## Grab likelihood (v and S will already be
         ## filtered down to the "at the data" states)
         log_prob = self._compute_log_prob(v, S)
 
@@ -322,9 +338,9 @@ class GaussianProcess(eqx.Module):
             observation_model = self.kernel.observation_model
         else:
             # Otherwise use the observation model of the passed kernel
-            kernel = self.kernel # TEMPORARY/DEFAULT TO ABOVE FOR NOW
+            kernel = self.kernel  # TEMPORARY/DEFAULT TO ABOVE FOR NOW
             # TODO: below, use something like
-            # observation_model = [0,...,kernel.H,0,...] 
+            # observation_model = [0,...,kernel.H,0,...]
             # where we zero out all the other components
             observation_model = self.kernel.observation_model
 
@@ -342,14 +358,14 @@ class GaussianProcess(eqx.Module):
                 mu = H @ m
                 var = H @ P @ H.T
                 return mu, var
-            
+
             # Project the states with measurements (exposure-ends)
             # and sort back into original order as the data
-            ends = stateid==1
+            ends = stateid == 1
             sort = jnp.argsort(obsid[ends])
-            mu, var = jax.vmap(project)(self.X, 
-                            m_smoothed[ends][sort], 
-                            P_smoothed[ends][sort])
+            mu, var = jax.vmap(project)(
+                self.X, m_smoothed[ends][sort], P_smoothed[ends][sort]
+            )
             mu = mu.squeeze()
             var = var.squeeze()
 
@@ -374,7 +390,7 @@ class GaussianProcess(eqx.Module):
         y: JAXArray | None = None,
         *,
         return_full_state: bool = False,
-        kernel: int | None = None, 
+        kernel: int | None = None,
         # include_mean: bool = True,
         return_var: bool = False,
         # return_cov: bool = False,
@@ -408,7 +424,7 @@ class GaussianProcess(eqx.Module):
             kernel (int, optional): If specified, the index of the kernel in a
                 multi-component model (for example, a sum or product of kernels)
                 to extract and project (if return_full_state is False) the prediction for.
-                                
+
         Returns:
             The mean of the predictive model evaluated at ``X_test``, with shape
             ``(N_test,)`` where ``N_test`` is the zeroth dimension of
@@ -427,8 +443,10 @@ class GaussianProcess(eqx.Module):
                 y, X_test
             )  # condition on data, also internally predicts at X_test
             return condGP.predict(
-                X_test, return_full_state=return_full_state,
-                kernel=kernel, return_var=return_var,
+                X_test,
+                return_full_state=return_full_state,
+                kernel=kernel,
+                return_var=return_var,
                 # return_cov=return_cov,
                 observation_model=observation_model,
             )
@@ -436,7 +454,7 @@ class GaussianProcess(eqx.Module):
             if X_test is None:
                 # If no X_test given, predict at the data points
                 if return_full_state:
-                    mu  = self.states.smoothed_mean
+                    mu = self.states.smoothed_mean
                     var = self.states.smoothed_var
                 else:
                     if kernel is None:
@@ -449,8 +467,11 @@ class GaussianProcess(eqx.Module):
                         # TODO: write the rest of this out here and below
             else:
                 # Predicting at new test points
-                H_test = self.kernel.observation_model \
-                         if observation_model is None else observation_model
+                H_test = (
+                    self.kernel.observation_model
+                    if observation_model is None
+                    else observation_model
+                )
                 t_test = self.kernel.coord_to_sortable(X_test)
                 mean, variance = self.solver.predict(X_test, self.states(), H_test)
                 if return_full_state:
@@ -460,7 +481,9 @@ class GaussianProcess(eqx.Module):
                     # TODO: if component kernel is passed, fold that into H_test here
                     H = jax.vmap(H_test)(X_test)
                     mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
-                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(H, variance).squeeze()
+                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(
+                        H, variance
+                    ).squeeze()
 
         if return_var:
             return mu, var
@@ -527,7 +550,7 @@ class GaussianProcess(eqx.Module):
         #     d = v_k.shape[0]
         #     return quad + logdetS_k + d*jnp.log(2*jnp.pi)
         # loglike = -0.5 * jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
-        
+
         L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
         w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
         w = jnp.squeeze(w, axis=-1)
