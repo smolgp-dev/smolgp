@@ -15,16 +15,17 @@ from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.integrated.kalman import IntegratedKalmanFilter
 from smolgp.solvers.integrated.rts import IntegratedRTSSmoother
 
+
 class IntegratedStateSpaceSolver(eqx.Module):
     """
-    A solver that uses ``jax.lax.scan`` to implement Kalman filtering 
+    A solver that uses ``jax.lax.scan`` to implement Kalman filtering
     and RTS smoothing for integrated measurements
     """
 
     X: JAXArray
-    kernel : StateSpaceModel
-    noise  : Noise
-    state_coords : JAXArray
+    kernel: StateSpaceModel
+    noise: Noise
+    state_coords: JAXArray
 
     def __init__(
         self,
@@ -37,7 +38,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         Args:
             kernel: The kernel function.
             X: The input coordinates. The coordinates for an integrated model should be a tuple of
-                    X = (t, delta, instid), 
+                    X = (t, delta, instid),
                 where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
                 `delta` is the integration range (e.g. exposure time) for each measurement,
                 and `instid` is an index encoding which instrument the measurement corresponds to.
@@ -56,44 +57,62 @@ class IntegratedStateSpaceSolver(eqx.Module):
         tmid, delta, instid = self.X  # unpack coordinates
 
         ## Construct interleaved time array of chronological exposure start/stop times
-        ts = tmid - delta/2  # Exposure start times
-        te = tmid + delta/2  # Exposure end times
-        obsid = jnp.arange(len(tmid)).repeat(2)  # which observation does each time belong to
+        ts = tmid - delta / 2  # Exposure start times
+        te = tmid + delta / 2  # Exposure end times
+        obsid = jnp.arange(len(tmid)).repeat(
+            2
+        )  # which observation does each time belong to
 
         # Interleave start and end times into one array (fastest)
         # https://stackoverflow.com/questions/5347065/interleaving-two-numpy-arrays-efficiently
         t_states = jnp.empty((ts.size + te.size,), dtype=tmid.dtype)
         t_states = t_states.at[0::2].set(ts)  # evens are start times
         t_states = t_states.at[1::2].set(te)  # odds are end times
+        stateid = jnp.tile(jnp.array([0, 1]), len(tmid))  # 0 for start, 1 for end
         # Have to re-sort because exposures can overlap
-        sortidx  = jnp.argsort(t_states)
+        # sortidx  = jnp.argsort(t_states)
+        sortidx = jnp.lexsort(
+            (-stateid, t_states)
+        )  # enforce end times before start times at same t
         t_states = t_states[sortidx]
-        obsid    = obsid[sortidx] 
-        stateid = jnp.tile(jnp.array([0,1]), len(tmid))[sortidx] # 0 for t_s, 1 for t_e
+        obsid = obsid[sortidx]
+        stateid = stateid[sortidx]  # 0 for t_s, 1 for t_e
 
         # Pack-up state_coords for Kalman and RTS functions
         self.state_coords = (t_states, instid, obsid, stateid)
 
     def normalization(self) -> JAXArray:
-            # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-            return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
-    
+        # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
+        return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
+
     def Kalman(self, y, return_v_S=False) -> Any:
-            """Wrapper for Kalman filter used with this solver"""
-            t_states, instid, obsid, stateid = self.state_coords
-            return IntegratedKalmanFilter(self.kernel, self.X, y, t_states, obsid, instid, stateid, self.noise, return_v_S=return_v_S)
+        """Wrapper for Kalman filter used with this solver"""
+        t_states, instid, obsid, stateid = self.state_coords
+        return IntegratedKalmanFilter(
+            self.kernel,
+            self.X,
+            y,
+            t_states,
+            obsid,
+            instid,
+            stateid,
+            self.noise,
+            return_v_S=return_v_S,
+        )
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
         t_states, instid, obsid, stateid = self.state_coords
-        return IntegratedRTSSmoother(self.kernel, t_states, obsid, instid, stateid, kalman_results)
+        return IntegratedRTSSmoother(
+            self.kernel, t_states, obsid, instid, stateid, kalman_results
+        )
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
-        Compute the Kalman predicted, filtered, and RTS smoothed 
+        Compute the Kalman predicted, filtered, and RTS smoothed
         means and covariances at each of the input coordinates
         """
-        
+
         # Kalman filtering
         kalman_results = self.Kalman(y, return_v_S=return_v_S)
         if return_v_S:
@@ -102,29 +121,31 @@ class IntegratedStateSpaceSolver(eqx.Module):
         else:
             m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
             v_S = None
-        
+
         # RTS smoothing
         rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
         m_smoothed, P_smoothed = rts_results
 
-        conditioned_states = (m_predicted, P_predicted), \
-                                (m_filtered, P_filtered), \
-                                    (m_smoothed, P_smoothed)
+        conditioned_states = (
+            (m_predicted, P_predicted),
+            (m_filtered, P_filtered),
+            (m_smoothed, P_smoothed),
+        )
         return self.state_coords, conditioned_states, v_S
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
-        Wrapper fot jitted StateSpaceSolver._predict. 
-        
+        Wrapper fot jitted StateSpaceSolver._predict.
+
         Args:
             X_test              : The test coordinates.
             conditioned_results : The output of self.condition()
             observation_model   : (optional) H for the test points
-                                  should be a function just like 
+                                  should be a function just like
                                   self.kernel.observation_model
         """
-        
-        # # TODO?: If the test points are for instantaneous measurements, 
+
+        # # TODO?: If the test points are for instantaneous measurements,
         # # change the observation model to be for the latent state
         # t_test, texp_test, instid_test = X_test
         # if jnp.any(texp_test==0):
@@ -134,11 +155,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
         #     H = H_latent
         # else:
         # Observation model to call at each of the X_test
-        H = self.kernel.observation_model \
-            if observation_model is None else observation_model
-        
+        H = (
+            self.kernel.observation_model
+            if observation_model is None
+            else observation_model
+        )
+
         return self._predict(X_test, conditioned_results, H)
-    
+
     @jax.jit
     def _predict(self, X_test, conditioned_results, H) -> JAXArray:
         """
@@ -151,39 +175,42 @@ class IntegratedStateSpaceSolver(eqx.Module):
                                and smoothing from next future point
             3. Extrapolation : predicting from final filtered point
         """
-        
+
         # Unpack conditioned results
         state_coords, conditioned_states, _ = conditioned_results
-        (m_predicted, P_predicted), \
-        (m_filtered, P_filtered), \
-        (m_smoothed, P_smoothed) = conditioned_states
+        (
+            (m_predicted, P_predicted),
+            (m_filtered, P_filtered),
+            (m_smoothed, P_smoothed),
+        ) = conditioned_states
         t_states, instid, obsid, stateid = state_coords
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)
 
         # Array shapes
-        N = len(self.X)   # number of data points
-        K = len(t_states) # number of states
-        M = len(t_test)   # number of test points
+        N = len(self.X)  # number of data points
+        K = len(t_states)  # number of states
+        M = len(t_test)  # number of test points
 
         # Prior covariance for retrodiction
         Pinf = self.kernel.stationary_covariance()
-        if not isinstance(Pinf, JAXArray): # if multicomponent model
+        if not isinstance(Pinf, JAXArray):  # if multicomponent model
             Pinf = Pinf.to_dense()  # needs to be array form here
 
         # Prior mean for retrodiction
-        mean = jnp.zeros(self.kernel.d) # TODO: mean function of base kernel
-        m0 = jnp.block([mean] + self.kernel.num_insts*[jnp.zeros(self.kernel.d)])
+        # mean = jnp.zeros(self.kernel.d)  # TODO: mean function of base kernel
+        # m0 = jnp.block([mean] + self.kernel.num_insts * [jnp.zeros(self.kernel.d)])
+        m0 = jnp.zeros(self.kernel.dimension)
 
         # Nearest/next past/future state for each datapoint
-        k_nexts = jnp.searchsorted(t_states, t_test, side='right')
-        
+        k_nexts = jnp.searchsorted(t_states, t_test, side="right")
+
         # Method to use for test point
-        past   = k_nexts<=0      # Retrodict
-        future = k_nexts>=K      # Extrapolate
-        during = ~past & ~future # Interpolate
-        cases = (past.astype(int)*0 + during.astype(int)*1 + future.astype(int)*2)
+        past = k_nexts <= 0  # Retrodict
+        future = k_nexts >= K  # Extrapolate
+        during = ~past & ~future  # Interpolate
+        cases = past.astype(int) * 0 + during.astype(int) * 1 + future.astype(int) * 2
 
         # Shorthand for matrices
         A_aug = lambda dt: self.kernel.transition_matrix(0, dt)
@@ -193,32 +220,38 @@ class IntegratedStateSpaceSolver(eqx.Module):
         H_test = jax.vmap(H)(X_test)
 
         def kalman(k_prev, ktest):
-            '''
-            Kalman prediction from most recent 
+            """
+            Kalman prediction from most recent
             filtered (but not RTS smoothed) state
-            '''
+            """
             dt = t_test[ktest] - t_states[k_prev]
             m_k = m_filtered[k_prev]
             P_k = P_filtered[k_prev]
-            A_star = A_aug(dt) 
+            A_star = A_aug(dt)
             Q_star = Q_aug(dt)
             m_star_pred = A_star @ m_k
             P_star_pred = A_star @ P_k @ A_star.T + Q_star
             return m_star_pred, P_star_pred
-        
+
         def smooth(k_next, ktest, m_star_pred, P_star_pred):
-            '''
-            RTS smooth the prediction (ktest) using 
+            """
+            RTS smooth the prediction (ktest) using
             the nearest future data point (k_next)
 
             m_star_pred and P_star_pred are the output of kalman(k, k_star)
-            '''
+            """
             # Next (future) data point predicted & smoothed state
-            m_pred_next = m_predicted[k_next] # prediction (no kalman update) at next data point
-            P_pred_next = P_predicted[k_next] # prediction (no kalman update) at next data point
-            m_hat_next = m_smoothed[k_next]     # RTS smoothed state at next data point
-            P_hat_next = P_smoothed[k_next]     # RTS smoothed covariance at next data point
-            
+            m_pred_next = m_predicted[
+                k_next
+            ]  # prediction (no kalman update) at next data point
+            P_pred_next = P_predicted[
+                k_next
+            ]  # prediction (no kalman update) at next data point
+            m_hat_next = m_smoothed[k_next]  # RTS smoothed state at next data point
+            P_hat_next = P_smoothed[
+                k_next
+            ]  # RTS smoothed covariance at next data point
+
             # Transition matrix
             dt = t_states[k_next] - t_test[ktest]
             A_k = A_aug(dt)
@@ -227,7 +260,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
             G_k = jnp.linalg.solve(P_pred_next.T, (P_star_pred @ A_k.T).T).T
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
             P_star_hat = P_star_pred + G_k @ (P_hat_next - P_pred_next) @ G_k.T
-            
+
             return m_star_hat, P_star_hat
 
         # def project(ktest, m_star, P_star):
@@ -241,14 +274,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
         #     return pred_mean, pred_var
 
         def retrodict(ktest):
-            ''' Reverse-extrapolate from first datapoint t_star '''
+            """Reverse-extrapolate from first datapoint t_star"""
             m_star, P_star = smooth(0, ktest, m0, Pinf)
             # return project(ktest, m_star, P_star)
             return m_star, P_star
 
         def interpolate(ktest):
-            ''' Interpolate between nearest data points '''
-            
+            """Interpolate between nearest data points"""
+
             # Get nearest data point before and after the test point
             k_next = k_nexts[ktest]
             k_prev = k_next - 1
@@ -263,21 +296,21 @@ class IntegratedStateSpaceSolver(eqx.Module):
             return m_star_hat, P_star_hat
 
         def extrapolate(ktest):
-            ''' Kalman predict from from last datapoint t_star '''
+            """Kalman predict from from last datapoint t_star"""
             m_star, P_star = kalman(-1, ktest)
             # return project(ktest, m_star, P_star)
             return m_star, P_star
-        
+
         @jax.jit
         def predict_point(ktest):
-            '''
+            """
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
-            '''
-            return jax.lax.switch(cases[ktest],
-                                  (retrodict, interpolate, extrapolate),
-                                  (ktest))
-        
+            """
+            return jax.lax.switch(
+                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
+            )
+
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
         (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
