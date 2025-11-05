@@ -293,10 +293,10 @@ class GaussianProcess(eqx.Module):
             (m_filtered, P_filtered), \
                 (m_smoothed, P_smoothed) = conditioned_states
 
-        # If not integrated, this will just be t_states == X
         if isinstance(self.solver, IntegratedStateSpaceSolver):
             t_states, instid, obsid, stateid = state_coords
         else:
+            # If not integrated, t_states = X and id arrays are 'defaulted'
             t_states = self.kernel.coord_to_sortable(state_coords)
             instid  = jnp.zeros_like(t_states, dtype=int)
             obsid   = jnp.arange(len(t_states), dtype=int)
@@ -332,6 +332,7 @@ class GaussianProcess(eqx.Module):
             # If X_test was given, also predit at those points
             mu, var = self.solver.predict(X_test, conditioned_results)
         else:
+            X_test = self.X
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
 
@@ -342,11 +343,13 @@ class GaussianProcess(eqx.Module):
                 var = H @ P @ H.T
                 return mu, var
             
-            at_data = jnp.argwhere(stateid==1).squeeze()
-            sort = obsid[at_data]
-            mu, var = jax.vmap(project, in_axes=(0, 0, 0))(self.X, 
-                                                           m_smoothed[at_data][sort], 
-                                                           P_smoothed[at_data][sort])
+            # Project the states with measurements (exposure-ends)
+            # and sort back into original order as the data
+            ends = stateid==1
+            sort = jnp.argsort(obsid[ends])
+            mu, var = jax.vmap(project)(self.X, 
+                            m_smoothed[ends][sort], 
+                            P_smoothed[ends][sort])
             mu = mu.squeeze()
             var = var.squeeze()
 
@@ -355,7 +358,7 @@ class GaussianProcess(eqx.Module):
             kernel=self.kernel,
             X=X_test,
             noise=self.noise,
-            mean=self.mean,
+            # mean=self.mean,
             solver=self.solver,
             mean_value=mu,
             variance_value=var,
