@@ -55,12 +55,18 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     I: JAXArray  # identity matrix of size dxd
     Z: JAXArray  # zero matrix of size dxd
 
-    def __init__(self, base_model: StateSpaceModel, num_insts: int = 1):
+    def __init__(
+        self,
+        base_model: StateSpaceModel,
+        num_insts: int = 1,
+        name: str = "IntegratedStateSpaceModel",
+    ):
         """
         Augment the base_model (:class:`StateSpaceModel`) with `num_insts` integral states.
         """
         self.base_model = base_model
         self.num_insts = num_insts
+        self.name = name
 
         # set dimension of integrated model from num_insts and base model
         self.d = self.base_model.dimension
@@ -96,7 +102,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         Pinf_aug = jnp.diag(jnp.ones(self.dimension)).at[: self.d, : self.d].set(Pinf)
         return Pinf_aug
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
         """The augmented observation model for the process, $H$"""
 
         ## TODO: make sure this works for multivariate data, e.g. like:
@@ -234,6 +240,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         quality: JAXArray | float,
         sigma: JAXArray | float = jnp.ones(()),
         num_insts: int = 1,
+        name: str = "IntegratedSHO",
     ):
 
         # SHO parameters
@@ -241,6 +248,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         self.quality = quality
         self.sigma = sigma
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
+        self.name = name
 
         base_model = base_kernels.SHO(
             omega=self.omega, quality=self.quality, sigma=self.sigma

@@ -7,9 +7,9 @@ tutorial. The kernels implemented here are extensions of those defined in
 
 For modeling integrated measurements, use the kernels in ``smolgp.kernels.integrated``.
 
-Sums and Products of ``smolgp`` kernels are also ``smolgp`` kernels. 
+Sums and Products of ``smolgp`` kernels are also ``smolgp`` kernels.
 
-For mixed kernels containing some integrated and some instantaneous components, 
+For mixed kernels containing some integrated and some instantaneous components,
 the integrated solver will be used to handle the entire kernel.
 """
 
@@ -33,10 +33,10 @@ from smolgp.kernels.base import (
     StateSpaceModel,
     Sum,
     Product,
-    extract_leaf_kernels,
     Wrapper,
     Scale,
 )
+
 # Specific kernels
 from smolgp.kernels.base import (
     SHO,
@@ -45,6 +45,7 @@ from smolgp.kernels.base import (
     Matern52,
     # Cosine,
 )
+
 # Integrated kernels
 from smolgp.kernels.integrated import (
     IntegratedSHO,
