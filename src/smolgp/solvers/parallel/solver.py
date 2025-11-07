@@ -73,13 +73,22 @@ class ParallelStateSpaceSolver(eqx.Module):
         rts_results = self.RTS((b, C))
         _, m_smoothed, P_smoothed = rts_results
 
+        # # Pack-up results and return
+        # conditioned_states = (
+        #     (m_predicted, P_predicted),
+        #     (m_filtered, P_filtered),
+        #     (m_smoothed, P_smoothed),
+        # )
+        # return X_states, conditioned_states, (v, S)
+
         # Pack-up results and return
+        t_states = self.kernel.coord_to_sortable(self.X)
         conditioned_states = (
             (m_predicted, P_predicted),
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         )
-        return X_states, conditioned_states, (v, S)
+        return t_states, conditioned_states, (v, S)
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
