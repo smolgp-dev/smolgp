@@ -5,8 +5,9 @@ import jax.numpy as jnp
 
 __all__ = ["IntegratedRTSSmoother", "integrated_rts_smoother"]
 
+
 def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_results):
-    '''
+    """
     Wrapper for jitted integrated_rts_smoother function
 
     Parameters:
@@ -22,25 +23,34 @@ def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_resul
         P_filtered: filtered covariances
         m_predicted: predicted means
         P_predicted: predicted covariances
-    '''
+    """
 
     # Model components
     A_aug = kernel.transition_matrix
     RESET = kernel.reset_matrix
-    
-    return integrated_rts_smoother(A_aug, RESET, t_states, 
-                                     obsid, instid, stateid,
-                                     *kalman_results)
+
+    return integrated_rts_smoother(
+        A_aug, RESET, t_states, obsid, instid, stateid, *kalman_results
+    )
+
 
 @jax.jit
-def integrated_rts_smoother(A_aug, RESET, t_states,
-                             obsid, instid, stateid,
-                             m_filtered, P_filtered,
-                             m_predicted, P_predicted):
+def integrated_rts_smoother(
+    A_aug,
+    RESET,
+    t_states,
+    obsid,
+    instid,
+    stateid,
+    m_filtered,
+    P_filtered,
+    m_predicted,
+    P_predicted,
+):
     """
     Jax implementation of the integrated RTS smoothing algorithm
 
-    See Section 3.2.2 in Rubenzahl & Hattori et al. (in prep) 
+    See Section 3.2.2 in Rubenzahl & Hattori et al. (in prep)
     for detailed description of the algorithm and notation.
     """
 
@@ -48,70 +58,54 @@ def integrated_rts_smoother(A_aug, RESET, t_states,
         # Outputs from Kalman filter, unpacked for notational consistency
         m_k = m_filtered[k]
         P_k = P_filtered[k]
-        m_pred_next = m_predicted[k+1] # has superscript minus
-        P_pred_next = P_predicted[k+1] # has superscript minus
+        m_pred_next = m_predicted[k + 1]  # has superscript minus
+        P_pred_next = P_predicted[k + 1]  # has superscript minus
 
         # Unpack state and covariance from last iteration
         m_hat_next, P_hat_next = carry
 
         # Compute smoothing gain
-        Delta = t_states[k+1] - t_states[k]
+        Delta = t_states[k + 1] - t_states[k]
         A_k = A_aug(0, Delta)
 
         def smooth_start():
-            ''' RTS smooth an exposure-start state '''
+            """RTS smooth an exposure-start state"""
 
-            ## 1. next state to post-reset t_s
-            ##    aka t_k+1 to t_k+
-            ##    it is the RTS equations over the exposure interval
-            G_k_post = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T
-            m_hat_k_post = m_k + G_k_post @ (m_hat_next - m_pred_next)
-            P_hat_k_post = P_k + G_k_post @ (P_hat_next - P_pred_next) @ G_k_post.T
-
-            ## 2. post-reset t_s to pre-reset t_s
-            ##    aka t_k+ to t_k
-            ##    it is RTS but with 'Reset' as our 'transition matrix'
             m_k_pre = m_predicted[k]  # pre-reset start state
             P_k_pre = P_predicted[k]  # pre-reset start covariance
-            # After undoing the reset, add a nonzero value to the diagonal at the zeroed-out z
-            # This let's us calculate the inverse, but does not affect the end result
-            # since we immedietely multiply by Reset.T which deletes those rows/cols again
-            Reset = RESET(instid[obsid[k]])
-            P_pred_post = P_k + (jnp.eye(len(Reset))-Reset)
-            # P_pred_post_inv = jnp.linalg.inv(P_pred_post)  # explicit inverse,
-            # G_k_pre = P_k_pre @ Reset.T @ P_pred_post_inv  # solve should be more stable
-            G_k_pre = jnp.linalg.solve(P_pred_post.T, (P_k_pre @ Reset.T).T).T 
 
-            ## Final smoothed state at k
-            m_hat_k = m_k_pre + G_k_pre @ (m_hat_k_post - m_k)
-            P_hat_k = P_k_pre + G_k_pre @ (P_hat_k_post - P_k) @ G_k_pre.T
+            ## Use the combined transition & reset matrix
+            Reset = RESET(instid[obsid[k]])
+            AR = A_k @ Reset
+            G_k = jnp.linalg.solve(P_pred_next.T, (P_k_pre @ AR.T).T).T
+            # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
+            # G_k = P_k_pre @ AR.T @ P_pred_next_inv
+            m_hat_k = m_k_pre + G_k @ (m_hat_next - m_pred_next)
+            P_hat_k = P_k_pre + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
 
         def smooth_end():
-            ''' RTS smooth an exposure-end state '''
-            ## 3. pre-reset t_s to previous t_e
-            ##    aka t_k+1/3 to t_k
-            ##    this is simply the normal RTS update equations
+            """RTS smooth an exposure-end state"""
             G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T
             m_hat_k = m_k + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
 
         m_hat_k, P_hat_k = jax.lax.cond(
-                    stateid[k]==0,
-                    lambda _: smooth_start(), 
-                    lambda _: smooth_end(),   
-                    operand=None
-                )
-        
+            stateid[k] == 0,
+            lambda _: smooth_start(),
+            lambda _: smooth_end(),
+            operand=None,
+        )
+
         return (m_hat_k, P_hat_k), (m_hat_k, P_hat_k)
 
     # Start smoothing from final filtered state
     init_carry = (m_filtered[-1], P_filtered[-1])
 
     # Run backward from N-2 down to 0
-    K = len(t_states) # number of iterations
-    _, outputs = jax.lax.scan(step, init_carry, jnp.arange(K-2, -1, -1))
+    K = len(t_states)  # number of iterations
+    _, outputs = jax.lax.scan(step, init_carry, jnp.arange(K - 2, -1, -1))
     m_smooth_reversed, P_smooth_reversed = outputs
 
     # Reverse outputs (with final filtered=smoothed state) to match time order
