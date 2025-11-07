@@ -55,9 +55,30 @@ def extract_leaf_kernels(kernel):
         return [kernel]
 
 
+def get_unique_kernel_names(kernels):
+    """Generate unique names for kernels by appending _0, _1, etc. for duplicates"""
+    name_counts = {}
+    unique_names = []
+
+    for kernel in kernels:
+        name = kernel.name
+        if name in name_counts:
+            unique_names.append(f"{name}_{name_counts[name]}")
+            name_counts[name] += 1
+        else:
+            unique_names.append(f"{name}_0")
+            name_counts[name] = 1
+
+    return unique_names
+
+
 class StateSpaceModel(Kernel):
     """
     The base class for an instantaneous linear Gaussian state space model
+
+    Has attributes
+        `name` (str) : used for unique identification in multicomponent models
+        `dimension` (int) : dimensionality $d$ of the state space model
 
     The components of a state space model are:
     1. design_matrix         : The feedback matrix, F
@@ -75,9 +96,8 @@ class StateSpaceModel(Kernel):
 
     """
 
-    dimension: JAXArray | float = eqx.field(
-        static=True
-    )  # dimensionality $d$ of the state vector
+    name: str = eqx.field(static=True)
+    dimension: JAXArray | float = eqx.field(static=True)
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """A helper function used to convert coordinates to sortable 1-D values
@@ -98,9 +118,14 @@ class StateSpaceModel(Kernel):
         """The stationary covariance of the process, Pinf"""
         raise NotImplementedError
 
-    @abstractmethod
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_model(self, X: JAXArray, component: str | None = None) -> JAXArray:
         """The observation model for the process, $H$"""
+        keep = (component is None) or (self.name == component)
+        return self.observation_matrix(X) * int(keep)
+
+    @abstractmethod
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation matrix for the process, $H$"""
         raise NotImplementedError
 
     @abstractmethod
@@ -227,6 +252,7 @@ class Sum(StateSpaceModel):
     def __init__(self, kernel1, kernel2):
         self.kernel1 = kernel1
         self.kernel2 = kernel2
+        self.name = f"Sum({kernel1.name}, {kernel2.name})"
         self.dimension = self.kernel1.dimension + self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
@@ -265,12 +291,21 @@ class Sum(StateSpaceModel):
             self.kernel1.process_noise(X1, X2), self.kernel2.process_noise(X1, X2)
         ).to_dense()
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_model(self, X: JAXArray, component=None) -> JAXArray:
+        """H = [H1, H2] with component extraction"""
+        return jnp.hstack(
+            (
+                self.kernel1.observation_model(X, component=component),
+                self.kernel2.observation_model(X, component=component),
+            )
+        )
+
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
         """H = [H1, H2]"""
         return jnp.hstack(
             (
-                self.kernel1.observation_model(X),
-                self.kernel2.observation_model(X),
+                self.kernel1.observation_matrix(X),
+                self.kernel2.observation_matrix(X),
             )
         )
 
@@ -302,6 +337,7 @@ class Product(StateSpaceModel):
     def __init__(self, kernel1, kernel2):
         self.kernel1 = kernel1
         self.kernel2 = kernel2
+        self.name = f"Product({kernel1.name}, {kernel2.name})"
         self.dimension = self.kernel1.dimension * self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
@@ -343,13 +379,24 @@ class Product(StateSpaceModel):
             self.kernel1.process_noise(X1, X2), self.kernel2.process_noise(X1, X2)
         )
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_model(self, X: JAXArray, component=None) -> JAXArray:
+        """H = H1 ⊗ H2 with component extraction"""
+        return jnp.array(
+            [
+                _prod_helper(
+                    self.kernel1.observation_model(X, component=component),
+                    self.kernel2.observation_model(X, component=component),
+                )
+            ]
+        )
+
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
         """H = H1 ⊗ H2"""
         return jnp.array(
             [
                 _prod_helper(
-                    self.kernel1.observation_model(X)[0],
-                    self.kernel2.observation_model(X)[0],
+                    self.kernel1.observation_matrix(X),
+                    self.kernel2.observation_matrix(X),
                 )
             ]
         )
@@ -450,7 +497,6 @@ class SHO(StateSpaceModel):
     omega: JAXArray | float
     quality: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
-    dimension: JAXArray | float = eqx.field(init=False, default=2)
     eta: JAXArray | float
 
     def __init__(
@@ -458,6 +504,7 @@ class SHO(StateSpaceModel):
         omega: JAXArray | float,
         quality: JAXArray | float,
         sigma: JAXArray | float = jnp.ones(()),
+        name: str = "SHO",
         **kwargs,
     ):
 
@@ -465,10 +512,9 @@ class SHO(StateSpaceModel):
         self.omega = omega
         self.quality = quality
         self.sigma = sigma
-
-    @property
-    def eta(self):
-        return jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
+        self.name = name
+        self.dimension = 2
+        self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
@@ -485,7 +531,7 @@ class SHO(StateSpaceModel):
         omega3 = jnp.power(self.omega, 3)
         return jnp.array([[2 * omega3 * jnp.square(self.sigma) / self.quality]])
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
         """The observation model H for the SHO process"""
         del X
         return jnp.array([[1, 0]])
@@ -686,20 +732,23 @@ class Matern52(StateSpaceModel):
     """
 
     scale: JAXArray | float
-    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
-    dimension: JAXArray | float = eqx.field(init=False, default=3)
+    sigma: JAXArray | float
+    lam: JAXArray | float
 
     def __init__(
-        self, scale: JAXArray | float, sigma: JAXArray | float = jnp.ones(()), **kwargs
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "Matern52",
+        **kwargs,
     ):
 
         # Matern-5/2 parameters
         self.scale = scale
         self.sigma = sigma
-
-    @property
-    def lam(self) -> JAXArray:
-        return jnp.sqrt(5) / self.scale
+        self.name = name
+        self.dimension = 3
+        self.lam = jnp.sqrt(5) / self.scale
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Matern-5/2 process, F"""
@@ -715,7 +764,7 @@ class Matern52(StateSpaceModel):
             [[1, 0, -lam2o3], [0, lam2o3, 0], [-lam2o3, 0, jnp.square(lam2)]]
         )
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
         """The observation model H for the Matern-5/2 process"""
         del X
         return jnp.array([[1, 0, 0]])

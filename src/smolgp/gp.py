@@ -20,7 +20,8 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-from smolgp.kernels import StateSpaceModel, extract_leaf_kernels
+from smolgp.kernels import StateSpaceModel
+from smolgp.kernels.base import extract_leaf_kernels, get_unique_kernel_names
 from smolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
 
 from smolgp.solvers import StateSpaceSolver
@@ -337,20 +338,19 @@ class GaussianProcess(eqx.Module):
             # If no component kernel passed, use the full model
             observation_model = self.kernel.observation_model
         else:
-            # Otherwise use the observation model of the passed kernel
-            kernel = self.kernel  # TEMPORARY/DEFAULT TO ABOVE FOR NOW
-            # TODO: below, use something like
-            # observation_model = [0,...,kernel.H,0,...]
-            # where we zero out all the other components
-            observation_model = self.kernel.observation_model
+            # Otherwise use the observation model of the passed
+            # kernel, where we zero out all the other components
+            observation_model = lambda X: self.kernel.observation_model(
+                X, component=kernel.name
+            )
 
         if X_test is not None:
             # If X_test was given, also predit at those points
             mu, var = self.solver.predict(X_test, conditioned_results)
         else:
-            X_test = self.X
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
+            X_test = self.X
 
             @jax.jit
             def project(X, m, P):
@@ -462,8 +462,8 @@ class GaussianProcess(eqx.Module):
                         mu, var = self.loc, self.var
                     else:
                         # extract component kernel & project
-                        kernels = extract_leaf_kernels(self.kernel)
-                        H_comp = kernels[kernel].observation_model
+                        name = kernel if isinstance(kernel, str) else kernel.name
+                        H_comp = kernels.observation_model(self.X, component=name)
                         # TODO: write the rest of this out here and below
             else:
                 # Predicting at new test points
@@ -572,8 +572,66 @@ class GaussianProcess(eqx.Module):
     # ) -> tuple[JAXArray, JAXArray, JAXArray]:
     #     alpha = self._get_alpha(y)
     #     log_prob = self._compute_log_prob(alpha)
-
     #     return alpha, log_prob, mean_value
+
+    def component_means(self, return_var: bool = False) -> Any:
+        """Get the means of each component kernel in a multi-component model
+
+        Args:
+            return_var (bool, optional): If ``True``, also return the variances
+                of each component. Default is ``False``.
+
+        Returns:
+            If ``return_var`` is ``False``, a list of JAX arrays containing the
+            means of each component kernel evaluated at the data points.
+            If ``return_var`` is ``True``, a tuple where the first element is
+            the list of means as before, and the second element is a list of
+            JAX arrays containing the variances of each component kernel
+            evaluated at the data points.
+        """
+        if self.states is None:
+            raise ValueError(
+                "The GP must be conditioned before getting component means."
+            )
+
+        means_list = []
+        vars_list = []
+
+        ## First, extract all kernels
+        kernels = extract_leaf_kernels(self.kernel)
+
+        # ## TODO: Make sure they have unique names
+        # names = get_unique_kernel_names(kernels)
+
+        ## Loop through and project each component
+        for k, kernel in enumerate(kernels):
+
+            # name = names[k]
+            # kernel.name = name  # TODO: overwrite with unique name?
+
+            @jax.jit
+            def project(X, m, P):
+                H = self.kernel.observation_model(X, component=kernel.name)
+                mu = H @ m
+                var = H @ P @ H.T
+                return mu, var
+
+            # Project the states with measurements (exposure-ends)
+            # and sort back into original order as the data
+            ends = self.states.stateid == 1
+            sort = jnp.argsort(self.states.obsid[ends])
+            mu, var = jax.vmap(project)(
+                self.X,
+                self.states.smoothed_mean[ends][sort],
+                self.states.smoothed_var[ends][sort],
+            )
+            means_list.append(mu.squeeze())
+            vars_list.append(var.squeeze())
+
+        if return_var:
+            return means_list, vars_list
+        else:
+            return means_list
 
 
 class ConditionResult(NamedTuple):
