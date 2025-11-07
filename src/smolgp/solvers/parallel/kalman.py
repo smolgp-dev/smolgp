@@ -112,7 +112,7 @@ def make_associative_params(
         Phi_dt = Phi(0, t_delta)
         I = jnp.eye(Phi_dt.shape[-1])
 
-        Hk = H(t_delta)  # this is wrong
+        Hk = H(t_delta)  # TODO: this is wrong, pass data coordinate here
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
