@@ -59,9 +59,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
         ## Construct interleaved time array of chronological exposure start/stop times
         ts = tmid - delta / 2  # Exposure start times
         te = tmid + delta / 2  # Exposure end times
-        obsid = jnp.arange(len(tmid)).repeat(
-            2
-        )  # which observation does each time belong to
+        obsid = jnp.arange(len(tmid)).repeat(2)
 
         # Interleave start and end times into one array (fastest)
         # https://stackoverflow.com/questions/5347065/interleaving-two-numpy-arrays-efficiently
@@ -70,10 +68,8 @@ class IntegratedStateSpaceSolver(eqx.Module):
         t_states = t_states.at[1::2].set(te)  # odds are end times
         stateid = jnp.tile(jnp.array([0, 1]), len(tmid))  # 0 for start, 1 for end
         # Have to re-sort because exposures can overlap
-        # sortidx  = jnp.argsort(t_states)
-        sortidx = jnp.lexsort(
-            (-stateid, t_states)
-        )  # enforce end times before start times at same t
+        # enforce end times before start times at same t
+        sortidx = jnp.lexsort((-stateid, t_states))
         t_states = t_states[sortidx]
         obsid = obsid[sortidx]
         stateid = stateid[sortidx]  # 0 for t_s, 1 for t_e
@@ -216,9 +212,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
         A_aug = lambda dt: self.kernel.transition_matrix(0, dt)
         Q_aug = lambda dt: self.kernel.process_noise(0, dt)
 
-        # Precompute H for all test points
-        H_test = jax.vmap(H)(X_test)
-
         def kalman(k_prev, ktest):
             """
             Kalman prediction from most recent
@@ -240,17 +233,11 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
             m_star_pred and P_star_pred are the output of kalman(k, k_star)
             """
-            # Next (future) data point predicted & smoothed state
-            m_pred_next = m_predicted[
-                k_next
-            ]  # prediction (no kalman update) at next data point
-            P_pred_next = P_predicted[
-                k_next
-            ]  # prediction (no kalman update) at next data point
-            m_hat_next = m_smoothed[k_next]  # RTS smoothed state at next data point
-            P_hat_next = P_smoothed[
-                k_next
-            ]  # RTS smoothed covariance at next data point
+            # Next (future) predicted & smoothed state
+            m_pred_next = m_predicted[k_next]
+            P_pred_next = P_predicted[k_next]
+            m_hat_next = m_smoothed[k_next]
+            P_hat_next = P_smoothed[k_next]
 
             # Transition matrix
             dt = t_states[k_next] - t_test[ktest]
@@ -263,20 +250,9 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
             return m_star_hat, P_star_hat
 
-        # def project(ktest, m_star, P_star):
-        #     ''' Project the state vector to the observation space '''
-        #     # TODO: if user specifies exposure time here, need to:
-        #     ## 1. predict to start state & set z to zero
-        #     ## 2. predict to the end state, then project using H and texp_test
-        #     Hk = H_test[ktest]
-        #     pred_mean = (Hk @ m_star.T).squeeze()
-        #     pred_var  = (Hk @ P_star @ Hk.T).squeeze()
-        #     return pred_mean, pred_var
-
         def retrodict(ktest):
             """Reverse-extrapolate from first datapoint t_star"""
             m_star, P_star = smooth(0, ktest, m0, Pinf)
-            # return project(ktest, m_star, P_star)
             return m_star, P_star
 
         def interpolate(ktest):
@@ -298,7 +274,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
         def extrapolate(ktest):
             """Kalman predict from from last datapoint t_star"""
             m_star, P_star = kalman(-1, ktest)
-            # return project(ktest, m_star, P_star)
             return m_star, P_star
 
         @jax.jit
