@@ -361,24 +361,24 @@ class GaussianProcess(eqx.Module):
 
             # Project the states with measurements (exposure-ends)
             # and sort back into original order as the data
-            mu_all, var_all = jax.vmap(project)(
-                t_states,
-                m_smoothed,
-                P_smoothed,
-            )
-            SIZE = y.shape[0]
-            sort_key = jnp.where(
+            ends_idx = jnp.nonzero(
                 stateid == 1,
-                obsid,
-                obsid + SIZE,
+                size=y.shape[0],
+            )[0]
+            sort = jnp.argsort(obsid[ends_idx])
+            idx = ends_idx[sort]
+
+            m_sel = jnp.take(m_smoothed, idx, axis=0)
+            P_sel = jnp.take(P_smoothed, idx, axis=0)
+
+            mu, var = jax.vmap(project)(
+                self.X,
+                m_sel,
+                P_sel,
             )
-            sort = jnp.argsort(sort_key)
 
-            mu_ordered = mu_all[sort]
-            var_ordered = var_all[sort]
-
-            mu = mu_ordered[:SIZE].squeeze()
-            var = var_ordered[:SIZE].squeeze()
+            mu = mu.squeeze()
+            var = var.squeeze()
 
         ## Create the conditioned GP
         condGP = GaussianProcess(
