@@ -52,9 +52,9 @@ class ConditionedStates(eqx.Module):
     predicted_mean: JAXArray
     filtered_mean: JAXArray
     smoothed_mean: JAXArray
-    predicted_var: JAXArray
-    filtered_var: JAXArray
-    smoothed_var: JAXArray
+    predicted_cov: JAXArray
+    filtered_cov: JAXArray
+    smoothed_cov: JAXArray
 
     def __init__(
         self,
@@ -74,18 +74,18 @@ class ConditionedStates(eqx.Module):
         self.obsid = obsid
         self.stateid = stateid
         self.predicted_mean = m_pred
-        self.predicted_var = P_pred
+        self.predicted_cov = P_pred
         self.filtered_mean = m_filt
-        self.filtered_var = P_filt
+        self.filtered_cov = P_filt
         self.smoothed_mean = m_smooth
-        self.smoothed_var = P_smooth
+        self.smoothed_cov = P_smooth
 
     def __call__(self):
         state_coords = (self.t_states, self.instid, self.obsid, self.stateid)
         packaged_results = (
-            (self.predicted_mean, self.predicted_var),
-            (self.filtered_mean, self.filtered_var),
-            (self.smoothed_mean, self.smoothed_var),
+            (self.predicted_mean, self.predicted_cov),
+            (self.filtered_mean, self.filtered_cov),
+            (self.smoothed_mean, self.smoothed_cov),
         )
         # This should match the output of solver.condition
         return state_coords, packaged_results, None
@@ -361,22 +361,13 @@ class GaussianProcess(eqx.Module):
 
             # Project the states with measurements (exposure-ends)
             # and sort back into original order as the data
-            ends_idx = jnp.nonzero(
-                stateid == 1,
-                size=y.shape[0],
-            )[0]
+            ends_idx = jnp.nonzero(stateid == 1, size=y.shape[0])[0]
             sort = jnp.argsort(obsid[ends_idx])
             idx = ends_idx[sort]
-
             m_sel = jnp.take(m_smoothed, idx, axis=0)
             P_sel = jnp.take(P_smoothed, idx, axis=0)
 
-            mu, var = jax.vmap(project)(
-                self.X,
-                m_sel,
-                P_sel,
-            )
-
+            mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
             mu = mu.squeeze()
             var = var.squeeze()
 
@@ -466,7 +457,7 @@ class GaussianProcess(eqx.Module):
                 # If no X_test given, predict at the data points
                 if return_full_state:
                     mu = self.states.smoothed_mean
-                    var = self.states.smoothed_var
+                    var = self.states.smoothed_cov
                 else:
                     if kernel is None:
                         # already computed here
@@ -634,7 +625,7 @@ class GaussianProcess(eqx.Module):
             mu, var = jax.vmap(project)(
                 self.X,
                 self.states.smoothed_mean[ends][sort],
-                self.states.smoothed_var[ends][sort],
+                self.states.smoothed_cov[ends][sort],
             )
             means_list.append(mu.squeeze())
             vars_list.append(var.squeeze())
