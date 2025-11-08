@@ -248,12 +248,11 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         self.quality = quality
         self.sigma = sigma
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
-        self.name = name
 
         base_model = base_kernels.SHO(
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
-        super().__init__(base_model=base_model, num_insts=num_insts)
+        super().__init__(base_model=base_model, num_insts=num_insts, name=name)
 
     def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The integrated transition matrix Phibar for the SHO process"""
