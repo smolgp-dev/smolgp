@@ -20,9 +20,9 @@ from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 from tinygp.noise import Diagonal, Noise
 
-from smolgp.kernels import StateSpaceModel
-from smolgp.kernels.base import extract_leaf_kernels, get_unique_kernel_names
-from smolgp.kernels.integrated import IntegratedStateSpaceModel  # TODO: define this
+from smolgp.kernels import StateSpaceModel, Sum, Product
+from smolgp.kernels.base import extract_leaf_kernels
+from smolgp.kernels.integrated import IntegratedStateSpaceModel
 
 from smolgp.solvers import StateSpaceSolver
 from smolgp.solvers import ParallelStateSpaceSolver
@@ -30,6 +30,48 @@ from smolgp.solvers.integrated import IntegratedStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
+
+import dataclasses
+
+
+def assign_unique_kernel_names(kernel: StateSpaceModel) -> StateSpaceModel:
+    """
+    Return a new kernel where leaf kernel names
+    are made unique by appending _1, _2, etc.
+    """
+    leaves = extract_leaf_kernels(kernel)
+    names = [k.name for k in leaves]
+    # Early exit if all names are unique (no duplicates)
+    if len(set(names)) == len(names):
+        return kernel
+
+    # Otherwise, count occurrences
+    counts = {}
+    for k in leaves:
+        counts[k.name] = counts.get(k.name, 0) + 1
+    # counter for how many times we've used each duplicated name
+    used = {name: 1 for name, c in counts.items() if c > 1}
+
+    def _rename(k: StateSpaceModel) -> StateSpaceModel:
+        if isinstance(k, Sum):
+            k1 = _rename(k.kernel1)
+            k2 = _rename(k.kernel2)
+            return Sum(k1, k2)
+        if isinstance(k, Product):
+            k1 = _rename(k.kernel1)
+            k2 = _rename(k.kernel2)
+            return Product(k1, k2)
+        # Leaf
+        if counts[k.name] > 1:
+            idx = used[k.name]
+            used[k.name] += 1
+            newname = f"{k.name}_{idx}"
+            return dataclasses.replace(k, name=newname)
+        else:
+            # Single occurrence: leave unchanged
+            return k
+
+    return _rename(kernel)
 
 
 class ConditionedStates(eqx.Module):
@@ -140,9 +182,13 @@ class GaussianProcess(eqx.Module):
         variance_value: JAXArray | None = None,
         covariance_value: Any | None = None,
         states: JAXArray | None = None,
+        use_unique_names: bool = True,
         **solver_kwargs: Any,
     ):
-        self.kernel = kernel
+        if use_unique_names:
+            self.kernel = assign_unique_kernel_names(kernel)
+        else:
+            self.kernel = kernel
 
         self.X = X
 
@@ -189,6 +235,7 @@ class GaussianProcess(eqx.Module):
                 kernel,
                 self.X,
                 self.noise,
+                **solver_kwargs,
             )
         # If solver type is passed
         elif solver is ParallelStateSpaceSolver:
@@ -196,8 +243,9 @@ class GaussianProcess(eqx.Module):
                 kernel,
                 self.X,
                 self.noise,
+                **solver_kwargs,
             )
-        # If an instantiated solver is passed like condGP
+        # If a pre-instantiated solver is passed (e.g. like condGP)
         else:
             self.solver = solver
 
@@ -576,6 +624,7 @@ class GaussianProcess(eqx.Module):
     #     log_prob = self._compute_log_prob(alpha)
     #     return alpha, log_prob, mean_value
 
+    @jax.jit
     def component_means(self, return_var: bool = False) -> Any:
         """Get the means of each component kernel in a multi-component model
 
@@ -602,16 +651,9 @@ class GaussianProcess(eqx.Module):
         ## First, extract all kernels
         kernels = extract_leaf_kernels(self.kernel)
 
-        # ## TODO: Make sure they have unique names
-        # names = get_unique_kernel_names(kernels)
-
         ## Loop through and project each component
         for k, kernel in enumerate(kernels):
 
-            # name = names[k]
-            # kernel.name = name  # TODO: overwrite with unique name?
-
-            @jax.jit
             def project(X, m, P):
                 H = self.kernel.observation_model(X, component=kernel.name)
                 mu = H @ m

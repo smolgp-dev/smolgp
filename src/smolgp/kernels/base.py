@@ -55,23 +55,6 @@ def extract_leaf_kernels(kernel):
         return [kernel]
 
 
-def get_unique_kernel_names(kernels):
-    """Generate unique names for kernels by appending _0, _1, etc. for duplicates"""
-    name_counts = {}
-    unique_names = []
-
-    for kernel in kernels:
-        name = kernel.name
-        if name in name_counts:
-            unique_names.append(f"{name}_{name_counts[name]}")
-            name_counts[name] += 1
-        else:
-            unique_names.append(f"{name}_0")
-            name_counts[name] = 1
-
-    return unique_names
-
-
 class StateSpaceModel(Kernel):
     """
     The base class for an instantaneous linear Gaussian state space model
