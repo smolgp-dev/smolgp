@@ -624,7 +624,7 @@ class GaussianProcess(eqx.Module):
     #     log_prob = self._compute_log_prob(alpha)
     #     return alpha, log_prob, mean_value
 
-    @jax.jit
+    # @jax.jit
     def component_means(self, return_var: bool = False) -> Any:
         """Get the means of each component kernel in a multi-component model
 
@@ -662,6 +662,7 @@ class GaussianProcess(eqx.Module):
 
             # Project the states with measurements (exposure-ends)
             # and sort back into original order as the data
+            # TODO: use jit friendly version from condition above
             ends = self.states.stateid == 1
             sort = jnp.argsort(self.states.obsid[ends])
             mu, var = jax.vmap(project)(

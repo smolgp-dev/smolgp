@@ -50,31 +50,17 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
     base_model: StateSpaceModel  # the base (non-integrated) SSM
     num_insts: int = eqx.field(static=True)  # number of integral states
-    dimension: int = eqx.field(static=True)  # dimensionality of the augmented space
-    d: int = eqx.field(static=True)  # dimension of the base model
-    I: JAXArray  # identity matrix of size dxd
-    Z: JAXArray  # zero matrix of size dxd
 
-    def __init__(
-        self,
-        base_model: StateSpaceModel,
-        num_insts: int = 1,
-        name: str = "IntegratedStateSpaceModel",
-    ):
-        """
-        Augment the base_model (:class:`StateSpaceModel`) with `num_insts` integral states.
-        """
-        self.base_model = base_model
-        self.num_insts = num_insts
-        self.name = name
+    @property
+    def d(self) -> int:
+        """The dimension of the base (non-integrated) state space model"""
+        return self.base_model.dimension
 
-        # set dimension of integrated model from num_insts and base model
-        self.d = self.base_model.dimension
-        self.dimension = self.d * (1 + self.num_insts)
+    @property
+    def dimension(self) -> int:
+        """The dimension of the augmented state space model"""
 
-        # Useful identity and zero matrices
-        self.I = jnp.eye(self.d)
-        self.Z = jnp.zeros((self.d, self.d))
+        return self.d * (1 + self.num_insts)
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """
@@ -212,6 +198,17 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         )
         return jnp.diag(diag)
 
+    # Helper matrices, identity and zero
+    @property
+    def I(self) -> JAXArray:
+        """Identity matrix of size dxd"""
+        return jnp.eye(self.d)
+
+    @property
+    def Z(self) -> JAXArray:
+        """Zero matrix of size dxd"""
+        return jnp.zeros((self.d, self.d))
+
 
 class IntegratedSHO(IntegratedStateSpaceModel):
     r"""The damped, driven simple harmonic oscillator kernel
@@ -241,7 +238,10 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         sigma: JAXArray | float = jnp.ones(()),
         num_insts: int = 1,
         name: str = "IntegratedSHO",
+        **kwargs,
     ):
+        self.num_insts = num_insts
+        self.name = name
 
         # SHO parameters
         self.omega = omega
@@ -249,10 +249,10 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         self.sigma = sigma
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
-        base_model = base_kernels.SHO(
+        # Base model
+        self.base_model = base_kernels.SHO(
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
-        super().__init__(base_model=base_model, num_insts=num_insts, name=name)
 
     def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The integrated transition matrix Phibar for the SHO process"""

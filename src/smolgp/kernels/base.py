@@ -80,7 +80,6 @@ class StateSpaceModel(Kernel):
     """
 
     name: str = eqx.field(static=True)
-    dimension: JAXArray | float = eqx.field(static=True)
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """A helper function used to convert coordinates to sortable 1-D values
@@ -90,6 +89,11 @@ class StateSpaceModel(Kernel):
         that structure.
         """
         return X
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of the state space model, d"""
+        raise NotImplementedError
 
     @abstractmethod
     def design_matrix(self) -> JAXArray:
@@ -236,7 +240,11 @@ class Sum(StateSpaceModel):
         self.kernel1 = kernel1
         self.kernel2 = kernel2
         self.name = f"Sum({kernel1.name}, {kernel2.name})"
-        self.dimension = self.kernel1.dimension + self.kernel2.dimension
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of the summed state space model"""
+        return self.kernel1.dimension + self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """We assume that both kernels use the same coordinates"""
@@ -321,7 +329,11 @@ class Product(StateSpaceModel):
         self.kernel1 = kernel1
         self.kernel2 = kernel2
         self.name = f"Product({kernel1.name}, {kernel2.name})"
-        self.dimension = self.kernel1.dimension * self.kernel2.dimension
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of the product state space model"""
+        return self.kernel1.dimension * self.kernel2.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """We assume that both kernels use the same coordinates"""
@@ -408,6 +420,10 @@ class Wrapper(StateSpaceModel):
     """A base class for wrapping kernels with some custom implementations"""
 
     kernel: StateSpaceModel
+
+    @property
+    def dimension(self) -> int:
+        return self.kernel.dimension
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         return self.kernel.coord_to_sortable(X)
@@ -496,8 +512,12 @@ class SHO(StateSpaceModel):
         self.quality = quality
         self.sigma = sigma
         self.name = name
-        self.dimension = 2
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of a SHO model, d"""
+        return 2
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
@@ -730,8 +750,12 @@ class Matern52(StateSpaceModel):
         self.scale = scale
         self.sigma = sigma
         self.name = name
-        self.dimension = 3
         self.lam = jnp.sqrt(5) / self.scale
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of a Matern52 model, d"""
+        return 3
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Matern-5/2 process, F"""
