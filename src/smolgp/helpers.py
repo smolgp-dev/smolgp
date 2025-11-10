@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from jax.scipy.linalg import expm
 from tinygp.helpers import JAXArray
 
+
 def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXArray:
     """
     Van Loan method to compute Q = ∫0^dt exp(F (dt-s)) L Qc L^T exp(F^T (dt-s)) ds
@@ -19,16 +20,14 @@ def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXA
     PDF at https://www.olemartin.no/artikler/vanloan.pdf
     https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
     """
-    QL = L*Qc@L.T
-    b = len(F) # block size
+    QL = L @ Qc @ L.T
+    b = len(F)  # block size
     Z = jnp.zeros_like(F)
-    C = jnp.block([[-F, QL],
-                   [Z, F.T]])
-    VanLoanBlock = expm(C*dt)
-    G2 = VanLoanBlock[:b,b:]
-    F3 = VanLoanBlock[b:,b:]
+    C = jnp.block([[-F, QL], [Z, F.T]])
+    VanLoanBlock = expm(C * dt)
+    G2 = VanLoanBlock[:b, b:]
+    F3 = VanLoanBlock[b:, b:]
     return F3.T @ G2
-
 
 
 def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
@@ -46,10 +45,10 @@ def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
     PDF at https://www.olemartin.no/artikler/vanloan.pdf
     https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
     """
-    b = len(F) # block size
-    Z = jnp.zeros((b,b))
+    b = len(F)  # block size
+    Z = jnp.zeros((b, b))
     I = jnp.eye(b)
-    C = jnp.block([[F, I],[Z, Z]])
-    VanLoanBlock = expm(C*dt)
-    G3 = VanLoanBlock[:b,b:]
+    C = jnp.block([[F, I], [Z, Z]])
+    VanLoanBlock = expm(C * dt)
+    G3 = VanLoanBlock[:b, b:]
     return G3

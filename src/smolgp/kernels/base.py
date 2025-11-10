@@ -45,9 +45,17 @@ from tinygp.solvers.quasisep.block import Block
 from smolgp.helpers import Q_from_VanLoan
 
 
-def extract_leaf_kernels(kernel):
-    """Recursively extract all leaf kernels from a sum or product of kernels"""
-    if isinstance(kernel, (Sum, Product)):
+def extract_leaf_kernels(kernel, all=False):
+    """
+    Recursively extract leaf kernels from a sum or product of kernels
+
+    If all==True, extract from both Sum and Product nodes
+        (useful for returning all kernel elements).
+    Default is False, which only extracts from Sum nodes.
+        (as used in decomposing multi-component models, only valid for sums)
+    """
+    leaf_level = (Sum, Product) if all else (Sum)
+    if isinstance(kernel, leaf_level):
         return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
             kernel.kernel2
         )
@@ -313,12 +321,8 @@ class Sum(StateSpaceModel):
         ).to_dense()
 
     def noise(self) -> JAXArray:
-        """TODO: is it just Qc = Qc1 + Qc2 ??"""
-        ## TODO: we might not need to even implement this
-        ##  since practically we only need process_noise
-        ##  which can be has each component process_noise
-        ##  defined by its own Qc already
-        raise NotImplementedError
+        """Qc = BlockDiag(Qc1, Qc2)"""
+        return Block(self.kernel1.noise(), self.kernel2.noise()).to_dense()
 
 
 class Product(StateSpaceModel):
@@ -349,77 +353,73 @@ class Product(StateSpaceModel):
         """F = F1 ⊗ I + I ⊗ F2"""
         F1 = self.kernel1.design_matrix()
         F2 = self.kernel2.design_matrix()
-        return _prod_helper(F1, jnp.eye(F2.shape[0])) + _prod_helper(
-            jnp.eye(F2.shape[0]), F2
-        )
+        I1 = jnp.eye(F1.shape[0])
+        I2 = jnp.eye(F2.shape[0])
+        # return jnp.kron(I2, F1) + jnp.kron(F2, I1)
+        return _prod_helper(F1, I2) + _prod_helper(I1, F2)
 
     def noise_effect_matrix(self) -> JAXArray:
         """L = L1 ⊗ L2"""
-        return _prod_helper(
-            self.kernel1.noise_effect_matrix(),
-            self.kernel2.noise_effect_matrix(),
-        )
+        L1 = self.kernel1.noise_effect_matrix()
+        L2 = self.kernel2.noise_effect_matrix()
+        return jnp.kron(L2, L1)
+        # return _prod_helper(L1, L2)
 
     def stationary_covariance(self) -> JAXArray:
         """Pinf = Pinf1 ⊗ Pinf2"""
-        return _prod_helper(
-            self.kernel1.stationary_covariance(),
-            self.kernel2.stationary_covariance(),
-        )
+        Pinf1 = self.kernel1.stationary_covariance()
+        Pinf2 = self.kernel2.stationary_covariance()
+        # return jnp.kron(Pinf2, Pinf1)
+        return _prod_helper(Pinf1, Pinf2)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """A = A1 ⊗ A2"""
-        return _prod_helper(
-            self.kernel1.transition_matrix(X1, X2),
-            self.kernel2.transition_matrix(X1, X2),
-        )
+        A1 = self.kernel1.transition_matrix(X1, X2)
+        A2 = self.kernel2.transition_matrix(X1, X2)
+        # return jnp.kron(A2, A1)
+        return _prod_helper(A1, A2)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """Q = Q1 ⊗ Q2"""
-        return _prod_helper(
-            self.kernel1.process_noise(X1, X2), self.kernel2.process_noise(X1, X2)
-        )
+        # Q1 = self.kernel1.process_noise(X1, X2)
+        # Q2 = self.kernel2.process_noise(X1, X2)
+        # # return jnp.kron(Q2, Q1)
+        # return _prod_helper(Q1, Q2)
+        F = self.design_matrix()
+        L = self.noise_effect_matrix()
+        Qc = self.noise()
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        return Q_from_VanLoan(F, L, Qc, dt)
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
         """H = H1 ⊗ H2 with component extraction"""
-        return jnp.array(
-            [
-                _prod_helper(
-                    self.kernel1.observation_model(X, component=component),
-                    self.kernel2.observation_model(X, component=component),
-                )
-            ]
-        )
+        H1 = self.kernel1.observation_model(X, component=component)
+        H2 = self.kernel2.observation_model(X, component=component)
+        return jnp.kron(H2, H1)
+        # return _prod_helper(H1, H2)
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         """H = H1 ⊗ H2"""
-        return jnp.array(
-            [
-                _prod_helper(
-                    self.kernel1.observation_matrix(X),
-                    self.kernel2.observation_matrix(X),
-                )
-            ]
-        )
+        H1 = self.kernel1.observation_matrix(X)
+        H2 = self.kernel2.observation_matrix(X)
+        return jnp.kron(H2, H1)
+        # return _prod_helper(H1, H2)
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
         """RESET = RESET1 ⊗ RESET2"""
-        return jnp.array(
-            [
-                _prod_helper(
-                    self.kernel1.reset_matrix(instid),
-                    self.kernel2.reset_matrix(instid),
-                )
-            ]
-        )
+        Reset1 = self.kernel1.reset_matrix(instid)
+        Reset2 = self.kernel2.reset_matrix(instid)
+        # return jnp.kron(Reset2, Reset1)
+        return _prod_helper(Reset1, Reset2)
 
     def noise(self) -> JAXArray:
-        """TODO: is it Qc = Qc1 * Qc2 ??"""
-        ## TODO: we might not need to even implement this
-        ##  since practically we only need process_noise
-        ##  which can be has each component process_noise
-        ##  defined by its own Qc already
-        raise NotImplementedError
+        """Qc = Qc1 * Qc2"""
+        Qc1 = self.kernel1.noise()
+        Qc2 = self.kernel2.noise()
+        # return jnp.kron(Qc2, Qc1)
+        return _prod_helper(Qc1, Qc2)
 
 
 class Wrapper(StateSpaceModel):
