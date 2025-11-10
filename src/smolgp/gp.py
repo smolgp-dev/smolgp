@@ -682,13 +682,22 @@ class GaussianProcess(eqx.Module):
         ## First, extract all kernels
         kernels = extract_leaf_kernels(self.kernel)
 
+        ## Predict full state at test points
+        m_test, P_test = self.predict(X_test, return_full_state=True, return_var=True)
+
+        @jax.jit
+        def project(H, m, P):
+            mu = H @ m
+            var = H @ P @ H.T
+            return mu, var
+
         ## Loop through and project each component
         for k, kernel in enumerate(kernels):
-            mu, var = self.predict(
-                X_test, return_var=True, kernel=kernel.name, **kwargs
-            )
-            means_list.append(mu)
-            vars_list.append(var)
+            H_comp = lambda X: self.kernel.observation_model(X, component=kernel.name)
+            H = jax.vmap(H_comp)(X_test)
+            mu, var = jax.vmap(project)(H, m_test, P_test)
+            means_list.append(mu.squeeze())
+            vars_list.append(var.squeeze())
 
         if return_var:
             return means_list, vars_list
