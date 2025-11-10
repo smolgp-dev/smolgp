@@ -399,25 +399,7 @@ class GaussianProcess(eqx.Module):
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
             X_test = self.X
-
-            @jax.jit
-            def project(X, m, P):
-                H = observation_model(X)
-                mu = H @ m
-                var = H @ P @ H.T
-                return mu, var
-
-            # Project the states with measurements (exposure-ends)
-            # and sort back into original order as the data
-            ends_idx = jnp.nonzero(stateid == 1, size=y.shape[0])[0]
-            sort = jnp.argsort(obsid[ends_idx])
-            idx = ends_idx[sort]
-            m_sel = jnp.take(m_smoothed, idx, axis=0)
-            P_sel = jnp.take(P_smoothed, idx, axis=0)
-
-            mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
-            mu = mu.squeeze()
-            var = var.squeeze()
+            mu, var = self._project_at_data(observation_model, states)
 
         ## Create the conditioned GP
         condGP = GaussianProcess(
@@ -624,7 +606,6 @@ class GaussianProcess(eqx.Module):
     #     log_prob = self._compute_log_prob(alpha)
     #     return alpha, log_prob, mean_value
 
-    # @jax.jit
     def component_means(self, return_var: bool = False) -> Any:
         """Get the means of each component kernel in a multi-component model
 
@@ -653,30 +634,42 @@ class GaussianProcess(eqx.Module):
 
         ## Loop through and project each component
         for k, kernel in enumerate(kernels):
-
-            def project(X, m, P):
-                H = self.kernel.observation_model(X, component=kernel.name)
-                mu = H @ m
-                var = H @ P @ H.T
-                return mu, var
-
-            # Project the states with measurements (exposure-ends)
-            # and sort back into original order as the data
-            # TODO: use jit friendly version from condition above
-            ends = self.states.stateid == 1
-            sort = jnp.argsort(self.states.obsid[ends])
-            mu, var = jax.vmap(project)(
-                self.X,
-                self.states.smoothed_mean[ends][sort],
-                self.states.smoothed_cov[ends][sort],
-            )
-            means_list.append(mu.squeeze())
-            vars_list.append(var.squeeze())
+            H = lambda X: self.kernel.observation_model(X, component=kernel.name)
+            mu, var = self._project_at_data(H, self.states)
+            means_list.append(mu)
+            vars_list.append(var)
 
         if return_var:
             return means_list, vars_list
         else:
             return means_list
+
+    # @jax.jit
+    def _project_at_data(self, observation_model=None, states=None):
+        """
+        Project the states with measurements (e.g. exposure-ends)
+        and sort back into original order as the data
+        """
+        if states is None:
+            states = self.states
+        if observation_model is None:
+            observation_model = self.kernel.observation_model
+
+        @jax.jit
+        def project(X, m, P):
+            H = observation_model(X)
+            mu = H @ m
+            var = H @ P @ H.T
+            return mu, var
+
+        t_data = self.kernel.coord_to_sortable(self.X)
+        ends_idx = jnp.nonzero(states.stateid == 1, size=t_data.shape[0])[0]
+        sort = jnp.argsort(states.obsid[ends_idx])
+        idx = ends_idx[sort]
+        m_sel = jnp.take(states.smoothed_mean, idx, axis=0)
+        P_sel = jnp.take(states.smoothed_cov, idx, axis=0)
+        mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
+        return mu.squeeze(), var.squeeze()
 
 
 class ConditionResult(NamedTuple):
