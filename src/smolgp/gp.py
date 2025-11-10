@@ -495,8 +495,10 @@ class GaussianProcess(eqx.Module):
                     else:
                         # extract component kernel & project
                         name = kernel if isinstance(kernel, str) else kernel.name
-                        H_comp = kernels.observation_model(self.X, component=name)
-                        # TODO: write the rest of this out here and below
+                        H_comp = lambda X: self.kernel.observation_model(
+                            X, component=name
+                        )
+                        mu, var = self._project_at_data(H_comp, self.states)
             else:
                 # Predicting at new test points
                 H_test = (
@@ -510,7 +512,11 @@ class GaussianProcess(eqx.Module):
                     mu = mean
                     var = variance
                 else:
-                    # TODO: if component kernel is passed, fold that into H_test here
+                    if not kernel is None:
+                        name = kernel if isinstance(kernel, str) else kernel.name
+                        H_test = lambda X: self.kernel.observation_model(
+                            X, component=name
+                        )
                     H = jax.vmap(H_test)(X_test)
                     mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
                     var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(
@@ -636,6 +642,51 @@ class GaussianProcess(eqx.Module):
         for k, kernel in enumerate(kernels):
             H = lambda X: self.kernel.observation_model(X, component=kernel.name)
             mu, var = self._project_at_data(H, self.states)
+            means_list.append(mu)
+            vars_list.append(var)
+
+        if return_var:
+            return means_list, vars_list
+        else:
+            return means_list
+
+    def predict_component_means(
+        self, X_test, return_var: bool = False, **kwargs
+    ) -> Any:
+        """Get the means of each component kernel in a multi-component model
+        at new test points
+
+        Args:
+            X_test (JAXArray): The coordinates where the prediction
+                should be evaluated. This should have a data type compatible
+                with the ``X`` data provided when instantiating this object.
+            return_var (bool, optional): If ``True``, also return the variances
+                of each component. Default is ``False``.
+
+        Returns:
+            If ``return_var`` is ``False``, a list of JAX arrays containing the
+            means of each component kernel evaluated at the test points.
+            If ``return_var`` is ``True``, a tuple where the first element is
+            the list of means as before, and the second element is a list of
+            JAX arrays containing the variances of each component kernel
+            evaluated at the test points.
+        """
+        if self.states is None:
+            raise ValueError(
+                "The GP must be conditioned before getting component means."
+            )
+
+        means_list = []
+        vars_list = []
+
+        ## First, extract all kernels
+        kernels = extract_leaf_kernels(self.kernel)
+
+        ## Loop through and project each component
+        for k, kernel in enumerate(kernels):
+            mu, var = self.predict(
+                X_test, return_var=True, kernel=kernel.name, **kwargs
+            )
             means_list.append(mu)
             vars_list.append(var)
 
