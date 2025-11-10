@@ -88,6 +88,8 @@ class StateSpaceModel(Kernel):
         (e.g. multivariate inputs), this can be used to appropriately unwrap
         that structure.
         """
+        if isinstance(X, tuple):
+            return X[0]
         return X
 
     @property
@@ -136,7 +138,9 @@ class StateSpaceModel(Kernel):
         define the transition matrix analytically.
         """
         F = self.design_matrix()
-        dt = X2 - X1
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
         return expm(F * dt)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
@@ -153,7 +157,9 @@ class StateSpaceModel(Kernel):
         """
         if use_van_loan:
             # use Van Loan matrix exponential given F, L, Qc
-            dt = X2 - X1
+            t1 = self.coord_to_sortable(X1)
+            t2 = self.coord_to_sortable(X2)
+            dt = t2 - t1
             F = self.design_matrix()
             L = self.noise_effect_matrix()
             Qc = self.noise()
@@ -440,18 +446,14 @@ class Wrapper(StateSpaceModel):
     def stationary_covariance(self) -> JAXArray:
         return self.kernel.stationary_covariance()
 
-    def observation_model(self, X: JAXArray) -> JAXArray:
-        return self.kernel.observation_model(self.coord_to_sortable(X))
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        return self.kernel.observation_matrix(X)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        return self.kernel.transition_matrix(
-            self.coord_to_sortable(X1), self.coord_to_sortable(X2)
-        )
+        return self.kernel.transition_matrix(X1, X2)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        return self.kernel.process_noise(
-            self.coord_to_sortable(X1), self.coord_to_sortable(X2)
-        )
+        return self.kernel.process_noise(X1, X2)
 
 
 class Scale(Wrapper):
@@ -545,7 +547,9 @@ class SHO(StateSpaceModel):
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The transition matrix A_k for the SHO process"""
-        dt = X2 - X1
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
         n = self.eta
         w = self.omega
         q = self.quality
@@ -582,7 +586,9 @@ class SHO(StateSpaceModel):
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The process noise Q_k for the SHO process"""
-        dt = X2 - X1
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
         n = self.eta
         w = self.omega
         q = self.quality
@@ -787,7 +793,9 @@ class Matern52(StateSpaceModel):
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The transition matrix A_k for the Matern-5/2 process"""
-        dt = X2 - X1
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
         lam = self.lam
         lam2 = jnp.square(lam)
         d2 = jnp.square(dt)
