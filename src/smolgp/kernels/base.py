@@ -355,71 +355,73 @@ class Product(StateSpaceModel):
         F2 = self.kernel2.design_matrix()
         I1 = jnp.eye(F1.shape[0])
         I2 = jnp.eye(F2.shape[0])
-        # return jnp.kron(I2, F1) + jnp.kron(F2, I1)
-        return _prod_helper(F1, I2) + _prod_helper(I1, F2)
+        return jnp.kron(I2, F1) + jnp.kron(F2, I1)
 
     def noise_effect_matrix(self) -> JAXArray:
-        """L = L1 ⊗ L2"""
-        L1 = self.kernel1.noise_effect_matrix()
-        L2 = self.kernel2.noise_effect_matrix()
-        return jnp.kron(L2, L1)
-        # return _prod_helper(L1, L2)
+        """
+        L for products is not uniquely defined!
+        We choose a convenient form here where
+        L is simply the identity, and choose
+        Qc such that we get the correct L@Qc@L^T
+        """
+        return jnp.eye(self.dimension)
 
     def stationary_covariance(self) -> JAXArray:
         """Pinf = Pinf1 ⊗ Pinf2"""
         Pinf1 = self.kernel1.stationary_covariance()
         Pinf2 = self.kernel2.stationary_covariance()
-        # return jnp.kron(Pinf2, Pinf1)
-        return _prod_helper(Pinf1, Pinf2)
+        return jnp.kron(Pinf2, Pinf1)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """A = A1 ⊗ A2"""
         A1 = self.kernel1.transition_matrix(X1, X2)
         A2 = self.kernel2.transition_matrix(X1, X2)
-        # return jnp.kron(A2, A1)
-        return _prod_helper(A1, A2)
+        return jnp.kron(A2, A1)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """Q = Q1 ⊗ Q2"""
-        # Q1 = self.kernel1.process_noise(X1, X2)
-        # Q2 = self.kernel2.process_noise(X1, X2)
-        # # return jnp.kron(Q2, Q1)
-        # return _prod_helper(Q1, Q2)
-        F = self.design_matrix()
-        L = self.noise_effect_matrix()
-        Qc = self.noise()
-        t1 = self.coord_to_sortable(X1)
-        t2 = self.coord_to_sortable(X2)
-        dt = t2 - t1
-        return Q_from_VanLoan(F, L, Qc, dt)
+        """
+        Q for a product is best determined via the identity
+        Q = Pinf - A Pinf A^T
+        """
+        Pinf = self.stationary_covariance()
+        A = self.transition_matrix(X1, X2)
+        return Pinf - A @ Pinf @ A.T
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
         """H = H1 ⊗ H2 with component extraction"""
         H1 = self.kernel1.observation_model(X, component=component)
         H2 = self.kernel2.observation_model(X, component=component)
         return jnp.kron(H2, H1)
-        # return _prod_helper(H1, H2)
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         """H = H1 ⊗ H2"""
         H1 = self.kernel1.observation_matrix(X)
         H2 = self.kernel2.observation_matrix(X)
         return jnp.kron(H2, H1)
-        # return _prod_helper(H1, H2)
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
         """RESET = RESET1 ⊗ RESET2"""
         Reset1 = self.kernel1.reset_matrix(instid)
         Reset2 = self.kernel2.reset_matrix(instid)
-        # return jnp.kron(Reset2, Reset1)
-        return _prod_helper(Reset1, Reset2)
+        return jnp.kron(Reset2, Reset1)
 
     def noise(self) -> JAXArray:
-        """Qc = Qc1 * Qc2"""
+        """
+        Qc for products is not uniquely defined!
+        Here we choose a convenient form where
+        Qc = L1 Qc1 L1^T ⊗ Pinf2 + Pinf1 ⊗ L2 Qc2 L2^T
+        and L is the identity, so that L Qc L^T gives the correct process noise
+        """
         Qc1 = self.kernel1.noise()
         Qc2 = self.kernel2.noise()
-        # return jnp.kron(Qc2, Qc1)
-        return _prod_helper(Qc1, Qc2)
+        L1 = self.kernel1.noise_effect_matrix()
+        L2 = self.kernel2.noise_effect_matrix()
+        Pinf1 = self.kernel1.stationary_covariance()
+        Pinf2 = self.kernel2.stationary_covariance()
+        B1 = L1 @ Qc1 @ L1.T
+        B2 = L2 @ Qc2 @ L2.T
+        B = jnp.kron(Pinf2, B1) + jnp.kron(B2, Pinf1)
+        return B
 
 
 class Wrapper(StateSpaceModel):
@@ -465,6 +467,8 @@ class Scale(Wrapper):
         return self.scale * self.kernel.stationary_covariance()
 
     # TODO: also scale Qc?
+    def noise(self) -> JAXArray:
+        return self.scale * self.kernel.noise()
 
 
 class SHO(StateSpaceModel):
@@ -865,15 +869,3 @@ class Matern52(StateSpaceModel):
 #         cos = jnp.cos(f * dt)
 #         sin = jnp.sin(f * dt)
 #         return jnp.array([[cos, sin], [-sin, cos]])
-
-
-def _prod_helper(a1: JAXArray, a2: JAXArray) -> JAXArray:
-    i, j = np.meshgrid(np.arange(a1.shape[0]), np.arange(a2.shape[0]))
-    i = i.flatten()
-    j = j.flatten()
-    if a1.ndim == 1:
-        return a1[i] * a2[j]
-    elif a1.ndim == 2:
-        return a1[i[:, None], i[None, :]] * a2[j[:, None], j[None, :]]
-    else:
-        raise NotImplementedError
