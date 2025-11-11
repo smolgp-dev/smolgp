@@ -472,6 +472,19 @@ class Scale(Wrapper):
         return self.scale * self.kernel.noise()
 
 
+################ GP KERNEL DEFINITIONS ################
+## TODO: tinygp base kernels not yet implemented
+##       some will require approximations
+# Constant
+# Polynomial
+# Exp
+# ExpSquared (RBF, will need approx)
+# ExpSineSquared (will need approx)
+# RationalQuadratic
+# Quasiperiodic (not explicitly in tinygp, but is: ExpSquared * ExpSineSquared
+##    some also define ExpSquared * ExpSineSquared * ExpCosineSquared for P/2 term
+
+
 class SHO(StateSpaceModel):
     r"""The damped, driven simple harmonic oscillator kernel
 
@@ -635,45 +648,77 @@ class SHO(StateSpaceModel):
         )
 
 
-# class Exp(StateSpaceModel):
-#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Exp`
+class Exp(StateSpaceModel):
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Exp`
 
-#     This kernel takes the form:
+    This kernel takes the form:
 
-#     .. math::
+    .. math::
 
-#         k(\tau)=\sigma^2\,\exp\left(-\frac{\tau}{\ell}\right)
+        k(\Delta)=\sigma^2\,\exp\left(-\frac{\Delta}{\ell}\right)
 
-#     for :math:`\tau = |x_i - x_j|`.
+    for :math:`\Delta = |x_i - x_j|`. Also known as the "Ornstein-Uhlenbeck" kernel,
+    and is also equivalent to a Matérn-1/2 kernel.
 
-#     Args:
-#         scale: The parameter :math:`\ell`.
-#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-#             1. Specifying the explicit value here provides a slight performance
-#             boost compared to independently multiplying the kernel with a
-#             prefactor.
-#     """
+    Args:
+        scale: The parameter :math:`\ell`.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
+    """
 
-#     scale: JAXArray | float
-#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
 
-#     def design_matrix(self) -> JAXArray:
-#         return jnp.array([[-1 / self.scale]])
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "Exp",
+        **kwargs,
+    ):
+        # Exp parameters
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.lam = 1 / self.scale
 
-#     def stationary_covariance(self) -> JAXArray:
-#         return jnp.ones((1, 1))
+    @property
+    def dimension(self) -> int:
+        """The dimension of a Exp model, d"""
+        return 1
 
-#     def observation_model(self, X: JAXArray) -> JAXArray:
-#         del X
-#         return jnp.array([self.sigma])
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for the Exp process, F"""
+        return jnp.array([[-self.lam]])
 
-#     def noise_effect_matrix(self) -> JAXArray:
-#         """ The noise effect matrix L for the process """
-#         return jnp.array([[0], [1]])
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of the Exp process, Pinf"""
+        return jnp.square(self.sigma) * jnp.ones((1, 1))
 
-#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-#         dt = X2 - X1
-#         return jnp.exp(-dt[None, None] / self.scale)
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for the Exp process"""
+        del X
+        return jnp.array([[1]])
+
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for the Exp process"""
+        return jnp.array([[1]])
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for the Exp process"""
+        return jnp.array([[2 * self.lam * jnp.square(self.sigma)]])
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The transition matrix A_k for the Exp process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        return jnp.exp(-dt[None, None] / self.scale)
+
+    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """The process noise Q_k for the Exp process"""
+    #     dt = X2 - X1
+    #     TODO: can implement here the analytic version, but by
+    #         default the parent class will generate w/ Pinf - A Pinf A^T
 
 
 class Matern32(StateSpaceModel):
@@ -683,9 +728,9 @@ class Matern32(StateSpaceModel):
 
     .. math::
 
-        k(\tau)=\sigma^2\,\left(1+f\,\tau\right)\,\exp(-f\,\tau)
+        k(\Delta)=\sigma^2\,\left(1+f\,\Delta\right)\,\exp(-f\,\Delta)
 
-    for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
+    for :math:`\Delta = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
 
     Args:
         scale: The parameter :math:`\ell`.
@@ -761,10 +806,10 @@ class Matern52(StateSpaceModel):
 
     .. math::
 
-        k(\tau)=\sigma^2\,\left(1+f\,\tau + \frac{f^2\,\tau^2}{3}\right)
-            \,\exp(-f\,\tau)
+        k(\Delta)=\sigma^2\,\left(1+f\,\Delta + \frac{f^2\,\Delta^2}{3}\right)
+            \,\exp(-f\,\Delta)
 
-    for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{5} / \ell`.
+    for :math:`\Delta = |x_i - x_j|` and :math:`f = \sqrt{5} / \ell`.
 
     Args:
         scale: The parameter :math:`\ell`.
@@ -860,9 +905,9 @@ class Cosine(StateSpaceModel):
 
     .. math::
 
-        k(\tau)=\sigma^2\,\cos(-2\,\pi\,\tau/\ell)
+        k(\Delta)=\sigma^2\,\cos(-2\,\pi\,\Delta/\ell)
 
-    for :math:`\tau = |x_i - x_j|`.
+    for :math:`\Delta = |x_i - x_j|`.
 
     Args:
         scale: The parameter :math:`\ell`.
