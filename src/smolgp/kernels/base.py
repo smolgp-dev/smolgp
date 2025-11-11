@@ -355,7 +355,7 @@ class Product(StateSpaceModel):
         F2 = self.kernel2.design_matrix()
         I1 = jnp.eye(F1.shape[0])
         I2 = jnp.eye(F2.shape[0])
-        return jnp.kron(I2, F1) + jnp.kron(F2, I1)
+        return jnp.kron(F1, I2) + jnp.kron(I1, F2)
 
     def noise_effect_matrix(self) -> JAXArray:
         """
@@ -370,13 +370,13 @@ class Product(StateSpaceModel):
         """Pinf = Pinf1 ⊗ Pinf2"""
         Pinf1 = self.kernel1.stationary_covariance()
         Pinf2 = self.kernel2.stationary_covariance()
-        return jnp.kron(Pinf2, Pinf1)
+        return jnp.kron(Pinf1, Pinf2)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """A = A1 ⊗ A2"""
         A1 = self.kernel1.transition_matrix(X1, X2)
         A2 = self.kernel2.transition_matrix(X1, X2)
-        return jnp.kron(A2, A1)
+        return jnp.kron(A1, A2)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
@@ -387,25 +387,25 @@ class Product(StateSpaceModel):
         Q2 = self.kernel2.process_noise(X1, X2)
         Pinf1 = self.kernel1.stationary_covariance()
         Pinf2 = self.kernel2.stationary_covariance()
-        return jnp.kron(Q2, Pinf1) + jnp.kron(Pinf2, Q1) - jnp.kron(Q2, Q1)
+        return jnp.kron(Pinf1, Q2) + jnp.kron(Q1, Pinf2) - jnp.kron(Q1, Q2)
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
         """H = H1 ⊗ H2 with component extraction"""
         H1 = self.kernel1.observation_model(X, component=component)
         H2 = self.kernel2.observation_model(X, component=component)
-        return jnp.kron(H2, H1)
+        return jnp.kron(H1, H2)
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         """H = H1 ⊗ H2"""
         H1 = self.kernel1.observation_matrix(X)
         H2 = self.kernel2.observation_matrix(X)
-        return jnp.kron(H2, H1)
+        return jnp.kron(H1, H2)
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
         """RESET = RESET1 ⊗ RESET2"""
         Reset1 = self.kernel1.reset_matrix(instid)
         Reset2 = self.kernel2.reset_matrix(instid)
-        return jnp.kron(Reset2, Reset1)
+        return jnp.kron(Reset1, Reset2)
 
     def noise(self) -> JAXArray:
         """
@@ -422,7 +422,7 @@ class Product(StateSpaceModel):
         Pinf2 = self.kernel2.stationary_covariance()
         B1 = L1 @ Qc1 @ L1.T
         B2 = L2 @ Qc2 @ L2.T
-        B = jnp.kron(Pinf2, B1) + jnp.kron(B2, Pinf1)
+        B = jnp.kron(B1, Pinf2) + jnp.kron(Pinf1, B2)
         return B
 
 
