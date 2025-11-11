@@ -35,7 +35,6 @@ from typing import Any
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax.scipy.linalg import expm
 
 from tinygp.helpers import JAXArray
@@ -514,7 +513,6 @@ class SHO(StateSpaceModel):
         name: str = "SHO",
         **kwargs,
     ):
-
         # SHO parameters
         self.omega = omega
         self.quality = quality
@@ -535,7 +533,7 @@ class SHO(StateSpaceModel):
 
     def stationary_covariance(self) -> JAXArray:
         """The stationary covariance of the SHO process, Pinf"""
-        return jnp.diag(jnp.square(self.sigma) * jnp.array([1, jnp.square(self.omega)]))
+        return jnp.square(self.sigma) * jnp.diag(jnp.array([1, jnp.square(self.omega)]))
 
     def noise(self) -> JAXArray:
         """The scalar Qc for the SHO process"""
@@ -678,52 +676,82 @@ class SHO(StateSpaceModel):
 #         return jnp.exp(-dt[None, None] / self.scale)
 
 
-# class Matern32(StateSpaceModel):
-#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern32`
+class Matern32(StateSpaceModel):
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Matern32`
 
-#     This kernel takes the form:
+    This kernel takes the form:
 
-#     .. math::
+    .. math::
 
-#         k(\tau)=\sigma^2\,\left(1+f\,\tau\right)\,\exp(-f\,\tau)
+        k(\tau)=\sigma^2\,\left(1+f\,\tau\right)\,\exp(-f\,\tau)
 
-#     for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
+    for :math:`\tau = |x_i - x_j|` and :math:`f = \sqrt{3} / \ell`.
 
-#     Args:
-#         scale: The parameter :math:`\ell`.
-#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-#             1. Specifying the explicit value here provides a slight performance
-#             boost compared to independently multiplying the kernel with a
-#             prefactor.
-#     """
+    Args:
+        scale: The parameter :math:`\ell`.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
+    """
 
-#     scale: JAXArray | float
-#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    scale: JAXArray | float
+    sigma: JAXArray | float
+    lam: JAXArray | float
 
-#     def noise(self) -> JAXArray:
-#         f = np.sqrt(3) / self.scale
-#         return 4 * f**3
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "Matern32",
+        **kwargs,
+    ):
+        # Matern-3/2 parameters
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.lam = jnp.sqrt(3) / self.scale
 
-#     def design_matrix(self) -> JAXArray:
-#         f = np.sqrt(3) / self.scale
-#         return jnp.array([[0, 1], [-jnp.square(f), -2 * f]])
+    @property
+    def dimension(self) -> int:
+        """The dimension of a Matern-3/2 model, d"""
+        return 2
 
-#     def stationary_covariance(self) -> JAXArray:
-#         return jnp.diag(jnp.array([1, 3 / jnp.square(self.scale)]))
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for the Matern-3/2 process, F"""
+        lam2 = jnp.square(self.lam)
+        return jnp.array([[0, 1], [-lam2, -2 * self.lam]])
 
-#     def observation_model(self, X: JAXArray) -> JAXArray:
-#         return jnp.array([self.sigma, 0])
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of the Matern-3/2 process, Pinf"""
+        return jnp.square(self.sigma) * jnp.diag(jnp.array([1, jnp.square(self.lam)]))
 
-#     def noise_effect_matrix(self) -> JAXArray:
-#         """ The noise effect matrix L for the process """
-#         return jnp.array([[0], [1]])
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for the Matern-3/2 process"""
+        del X
+        return jnp.array([[1, 0]])
 
-#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-#         dt = X2 - X1
-#         f = np.sqrt(3) / self.scale
-#         return jnp.exp(-f * dt) * jnp.array(
-#             [[1 + f * dt, -jnp.square(f) * dt], [dt, 1 - f * dt]]
-#         )
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for the Matern-3/2 process"""
+        return jnp.array([[0], [1]])
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for the Matern-3/2 process"""
+        lam3 = jnp.power(self.lam, 3)
+        return jnp.array([[4 * lam3 * jnp.square(self.sigma)]])
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The transition matrix A_k for the Matern-3/2 process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        lam = self.lam
+        return jnp.exp(-lam * dt) * jnp.array(
+            [[1 + lam * dt, dt], [-jnp.square(lam) * dt, 1 - lam * dt]]
+        )
+
+    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """The process noise Q_k for the Matern-3/2 process"""
+    #     dt = X2 - X1
+    #     TODO: can implement here the analytic version, but by
+    #         default the parent class will generate w/ Pinf - A Pinf A^T
 
 
 class Matern52(StateSpaceModel):
@@ -740,10 +768,7 @@ class Matern52(StateSpaceModel):
 
     Args:
         scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
     """
 
     scale: JAXArray | float
@@ -757,7 +782,6 @@ class Matern52(StateSpaceModel):
         name: str = "Matern52",
         **kwargs,
     ):
-
         # Matern-5/2 parameters
         self.scale = scale
         self.sigma = sigma
@@ -766,7 +790,7 @@ class Matern52(StateSpaceModel):
 
     @property
     def dimension(self) -> int:
-        """The dimension of a Matern52 model, d"""
+        """The dimension of a Matern-5/2 model, d"""
         return 3
 
     def design_matrix(self) -> JAXArray:
@@ -779,7 +803,7 @@ class Matern52(StateSpaceModel):
         """The stationary covariance of the Matern-5/2 process, Pinf"""
         lam2 = jnp.square(self.lam)
         lam2o3 = lam2 / 3
-        return jnp.array(
+        return jnp.square(self.sigma) * jnp.array(
             [[1, 0, -lam2o3], [0, lam2o3, 0], [-lam2o3, 0, jnp.square(lam2)]]
         )
 
@@ -826,48 +850,78 @@ class Matern52(StateSpaceModel):
     #     """The process noise Q_k for the Matern-5/2 process"""
     #     dt = X2 - X1
     #     TODO: can implement here the analytic version, but by
-    #           default the parent class will generate w/ Van Loan
+    #           default the parent class will generate w/ Pinf - A Pinf A^T
 
 
-# class Cosine(StateSpaceModel):
-#     r"""A state space implementation of :class:`tinygp.kernels.quasisep.Cosine`
+class Cosine(StateSpaceModel):
+    r"""A state space implementation of :class:`tinygp.kernels.quasisep.Cosine`
 
-#     This kernel takes the form:
+    This kernel takes the form:
 
-#     .. math::
+    .. math::
 
-#         k(\tau)=\sigma^2\,\cos(-2\,\pi\,\tau/\ell)
+        k(\tau)=\sigma^2\,\cos(-2\,\pi\,\tau/\ell)
 
-#     for :math:`\tau = |x_i - x_j|`.
+    for :math:`\tau = |x_i - x_j|`.
 
-#     Args:
-#         scale: The parameter :math:`\ell`.
-#         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-#             1. Specifying the explicit value here provides a slight performance
-#             boost compared to independently multiplying the kernel with a
-#             prefactor.
-#     """
+    Args:
+        scale: The parameter :math:`\ell`.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
+            1. Specifying the explicit value here provides a slight performance
+            boost compared to independently multiplying the kernel with a
+            prefactor.
+    """
 
-#     scale: JAXArray | float
-#     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    omega: JAXArray | float
 
-#     def design_matrix(self) -> JAXArray:
-#         f = 2 * np.pi / self.scale
-#         return jnp.array([[0, -f], [f, 0]])
+    def __init__(self, scale, sigma=jnp.ones(()), name="Cosine", **kwargs):
+        # Cosine parameters
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.omega = 2 * jnp.pi / self.scale
 
-#     def stationary_covariance(self) -> JAXArray:
-#         return jnp.eye(2)
+    @property
+    def dimension(self) -> int:
+        """The dimension of a Cosine model, d"""
+        return 2
 
-#     def observation_model(self, X: JAXArray) -> JAXArray:
-#         return jnp.array([self.sigma, 0])
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for the Cosine process, F"""
+        return jnp.array([[0, -self.omega], [self.omega, 0]])
 
-#     def noise_effect_matrix(self) -> JAXArray:
-#         """ The noise effect matrix L for the process """
-#         return jnp.array([[0], [1]])
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of the Cosine process, Pinf"""
+        return jnp.square(self.sigma) * jnp.eye(2) / 2
 
-#     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-#         dt = X2 - X1
-#         f = 2 * np.pi / self.scale
-#         cos = jnp.cos(f * dt)
-#         sin = jnp.sin(f * dt)
-#         return jnp.array([[cos, sin], [-sin, cos]])
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for the Cosine process"""
+        del X
+        return jnp.array([[1, 0]])
+
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for the Cosine process"""
+        return jnp.array([[0], [1]])
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for the Cosine process"""
+        Qc = 0.0  # Does not have a white noise driving process
+        return jnp.array([[Qc]])
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The transition matrix A_k for the Cosine process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        arg = self.omega * dt
+        cos = jnp.cos(arg)
+        sin = jnp.sin(arg)
+        return jnp.array([[cos, -sin], [sin, cos]])
+
+    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """The process noise Q_k for the Cosine process"""
+    #     dt = X2 - X1
+    #     TODO: can implement here the analytic version, but by
+    #           default the parent class will generate w/ Pinf - A Pinf A^T
