@@ -383,9 +383,11 @@ class Product(StateSpaceModel):
         Q for a product is best determined via the identity
         Q = Pinf - A Pinf A^T
         """
-        Pinf = self.stationary_covariance()
-        A = self.transition_matrix(X1, X2)
-        return Pinf - A @ Pinf @ A.T
+        Q1 = self.kernel1.process_noise(X1, X2)
+        Q2 = self.kernel2.process_noise(X1, X2)
+        Pinf1 = self.kernel1.stationary_covariance()
+        Pinf2 = self.kernel2.stationary_covariance()
+        return jnp.kron(Q2, Pinf1) + jnp.kron(Pinf2, Q1) - jnp.kron(Q2, Q1)
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
         """H = H1 ⊗ H2 with component extraction"""
