@@ -34,4 +34,6 @@ dev = [
 tinygp = { git = "https://github.com/dfm/tinygp" }
 
 [tool.ruff]
-ignore = ["E731"]
+ignore = ["E731", # lambda functions
+          "E743", # ambiguous variable names (e.g. I)
+         ]
