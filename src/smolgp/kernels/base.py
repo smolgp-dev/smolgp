@@ -102,7 +102,7 @@ class StateSpaceModel(Kernel):
     @property
     def dimension(self) -> int:
         """The dimension of the state space model, d"""
-        raise NotImplementedError
+        return self.design_matrix().shape[0]
 
     @abstractmethod
     def design_matrix(self) -> JAXArray:
@@ -533,11 +533,6 @@ class SHO(StateSpaceModel):
         self.name = name
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
-    @property
-    def dimension(self) -> int:
-        """The dimension of a SHO model, d"""
-        return 2
-
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
         return jnp.array(
@@ -667,6 +662,7 @@ class Exp(StateSpaceModel):
 
     scale: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
 
     def __init__(
         self,
@@ -680,11 +676,6 @@ class Exp(StateSpaceModel):
         self.sigma = sigma
         self.name = name
         self.lam = 1 / self.scale
-
-    @property
-    def dimension(self) -> int:
-        """The dimension of a Exp model, d"""
-        return 1
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Exp process, F"""
@@ -753,11 +744,6 @@ class Matern32(StateSpaceModel):
         self.sigma = sigma
         self.name = name
         self.lam = jnp.sqrt(3) / self.scale
-
-    @property
-    def dimension(self) -> int:
-        """The dimension of a Matern-3/2 model, d"""
-        return 2
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Matern-3/2 process, F"""
@@ -833,11 +819,6 @@ class Matern52(StateSpaceModel):
         self.name = name
         self.lam = jnp.sqrt(5) / self.scale
 
-    @property
-    def dimension(self) -> int:
-        """The dimension of a Matern-5/2 model, d"""
-        return 3
-
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Matern-5/2 process, F"""
         lam2 = jnp.square(self.lam)
@@ -911,10 +892,7 @@ class Cosine(StateSpaceModel):
 
     Args:
         scale: The parameter :math:`\ell`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
     """
 
     scale: JAXArray | float
@@ -927,11 +905,6 @@ class Cosine(StateSpaceModel):
         self.sigma = sigma
         self.name = name
         self.omega = 2 * jnp.pi / self.scale
-
-    @property
-    def dimension(self) -> int:
-        """The dimension of a Cosine model, d"""
-        return 2
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the Cosine process, F"""
