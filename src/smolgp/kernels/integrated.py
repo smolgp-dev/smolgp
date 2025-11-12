@@ -17,22 +17,21 @@ from __future__ import annotations
 
 __all__ = [
     "IntegratedSHO",
+    "IntegratedExp",
+    "IntegratedMatern32",
+    "IntegratedMatern52",
+    "IntegratedCosine",
 ]
-
-from abc import abstractmethod
-from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
-from jax.scipy.linalg import expm
 
 from tinygp.helpers import JAXArray
 
-import smolgp.kernels as base_kernels
+import smolgp.kernels
 from smolgp.kernels import StateSpaceModel
-from smolgp.helpers import Q_from_VanLoan, Phibar_from_VanLoan
+from smolgp.helpers import Phibar_from_VanLoan
 
 
 class IntegratedStateSpaceModel(StateSpaceModel):
@@ -168,7 +167,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
             )
         return PHIAUG
 
-    def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
         The augmented process noise matrix $Q_k$
 
@@ -177,13 +176,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
         Overload this method if you wish to define the process noise analytically.
         """
-        t1 = self.coord_to_sortable(X1)
-        t2 = self.coord_to_sortable(X2)
-        dt = t2 - t1
-        F_aug = self.design_matrix()
-        L_aug = self.noise_effect_matrix()
-        Qc = self.noise()
-        return Q_from_VanLoan(F_aug, L_aug, Qc, dt)
+        return super().process_noise(X1, X2, use_van_loan=True)
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
         """
@@ -250,7 +243,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
         # Base model
-        self.base_model = base_kernels.SHO(
+        self.base_model = smolgp.kernels.SHO(
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
 
@@ -274,7 +267,6 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             return Phibar_from_VanLoan(F, t2 - t1)
 
         def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
-
             def Int_ecos(t):
                 return jnp.exp(a * t) * (a * jnp.cos(b * t) + b * jnp.sin(b * t))
 
@@ -308,8 +300,88 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         )
 
 
-### TODO: is it just these for all the named kernels?
-# class IntegratedMatern32(IntegratedStateSpaceModel):
-#     def __init__(self, **kwargs):
-#         base_model = StateSpaceModel.Matern32(**kwargs)
-#         super().__init__(base_model=base_model, **kwargs)
+## Default constructions for all kernels in smolgp.kernels.base
+## IntegratedStateSpaceModel parent class will handle the augmentation
+## All component matrices will be auto-generated numerically (e.g. A via expm, Q via Van Loan)
+class IntegratedExp(IntegratedStateSpaceModel):
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        num_insts: int = 1,
+        name: str = "IntegratedExp",
+        **kwargs,
+    ):
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.num_insts = num_insts
+        self.base_model = smolgp.kernels.Exp(scale=self.scale, sigma=self.sigma)
+        self.lam = self.base_model.lam
+
+
+class IntegratedMatern32(IntegratedStateSpaceModel):
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        num_insts: int = 1,
+        name: str = "IntegratedMatern32",
+        **kwargs,
+    ):
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.num_insts = num_insts
+        self.base_model = smolgp.kernels.Matern32(scale=self.scale, sigma=self.sigma)
+        self.lam = self.base_model.lam
+
+
+class IntegratedMatern52(IntegratedStateSpaceModel):
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        num_insts: int = 1,
+        name: str = "IntegratedMatern52",
+        **kwargs,
+    ):
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.num_insts = num_insts
+        self.base_model = smolgp.kernels.Matern52(scale=self.scale, sigma=self.sigma)
+        self.lam = self.base_model.lam
+
+
+class IntegratedCosine(IntegratedStateSpaceModel):
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    omega: JAXArray | float
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        num_insts: int = 1,
+        name: str = "IntegratedCosine",
+        **kwargs,
+    ):
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.num_insts = num_insts
+        self.base_model = smolgp.kernels.Cosine(scale=self.scale, sigma=self.sigma)
+        self.omega = self.base_model.omega

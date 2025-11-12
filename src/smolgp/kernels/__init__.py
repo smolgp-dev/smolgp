@@ -20,12 +20,17 @@ __all__ = [
     "extract_leaf_kernels",
     "Wrapper",
     "Scale",
+    "Constant",
     "SHO",
-    # "Exp",
-    # "Matern32",
+    "Exp",
+    "Matern32",
     "Matern52",
-    # "Cosine",
+    "Cosine",
     "IntegratedSHO",
+    "IntegratedExp",
+    "IntegratedMatern32",
+    "IntegratedMatern52",
+    "IntegratedCosine",
 ]
 
 # Model class and utilities
@@ -39,14 +44,19 @@ from smolgp.kernels.base import (
 
 # Specific kernels
 from smolgp.kernels.base import (
+    Constant,
     SHO,
-    # Exp,
-    # Matern32,
+    Exp,
+    Matern32,
     Matern52,
-    # Cosine,
+    Cosine,
 )
 
 # Integrated kernels
 from smolgp.kernels.integrated import (
     IntegratedSHO,
+    IntegratedExp,
+    IntegratedMatern32,
+    IntegratedMatern52,
+    IntegratedCosine,
 )
