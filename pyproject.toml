@@ -32,3 +32,6 @@ dev = [
 
 [tool.uv.sources]
 tinygp = { git = "https://github.com/dfm/tinygp" }
+
+[tool.ruff]
+ignore = ["E731"]
