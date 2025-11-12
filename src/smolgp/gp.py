@@ -26,6 +26,7 @@ from smolgp.kernels.integrated import IntegratedStateSpaceModel
 from smolgp.solvers import StateSpaceSolver
 from smolgp.solvers import ParallelStateSpaceSolver
 from smolgp.solvers.integrated import IntegratedStateSpaceSolver
+from smolgp.solvers.integrated import ParallelIntegratedStateSpaceSolver
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
@@ -233,6 +234,7 @@ class GaussianProcess(eqx.Module):
         self.noise = noise
 
         # Set up the solver
+        # TODO: add parallel flag and if so use ParallelIntegratedStateSpaceSolver?
         if solver is None:
             if is_integrated:
                 solver = IntegratedStateSpaceSolver
@@ -250,8 +252,13 @@ class GaussianProcess(eqx.Module):
                 self.noise,
                 **solver_kwargs,
             )
-        # If solver type is passed
-        elif solver is ParallelStateSpaceSolver:
+        # If solver type (uninstantiated) is passed
+        elif solver in [
+            StateSpaceSolver,
+            IntegratedStateSpaceSolver,
+            ParallelStateSpaceSolver,
+            ParallelIntegratedStateSpaceSolver,
+        ]:
             self.solver = solver(
                 kernel,
                 self.X,
