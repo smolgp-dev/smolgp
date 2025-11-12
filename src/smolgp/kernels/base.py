@@ -22,6 +22,7 @@ __all__ = [
     "Sum",
     "Product",
     "Scale",
+    "Constant",
     "SHO",
     "Exp",
     "Matern32",
@@ -36,6 +37,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import expm
+from jax.scipy.special import gammaln
 
 from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
@@ -223,20 +225,25 @@ class StateSpaceModel(Kernel):
         return Scale(kernel=self, scale=other)
 
     def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """The kernel evaluated via the state space representation"""
+        """
+        The kernel evaluated via the state space representatio
+
+        See Eq. 4 in Hartikainen & Särkkä 2010
+        https://users.aalto.fi/~ssarkka/pub/gp-ts-kfrts.pdf
+        """
         Pinf = self.stationary_covariance()
         h1 = self.observation_model(X1)
         h2 = self.observation_model(X2)
         return jnp.where(
             self.coord_to_sortable(X1) < self.coord_to_sortable(X2),
-            h2 @ Pinf @ self.transition_matrix(X1, X2) @ h1,
-            h1 @ Pinf @ self.transition_matrix(X2, X1) @ h2,
+            (h2 @ Pinf @ self.transition_matrix(X1, X2).T @ h1.T).squeeze(),
+            (h1 @ self.transition_matrix(X2, X1) @ Pinf @ h2.T).squeeze(),
         )
 
     def evaluate_diag(self, X: JAXArray) -> JAXArray:
         """For state space kernels, the variance is simple to compute"""
         h = self.observation_model(X)
-        return h @ self.stationary_covariance() @ h
+        return h @ self.stationary_covariance() @ h.T
 
 
 class Sum(StateSpaceModel):
@@ -452,11 +459,17 @@ class Wrapper(StateSpaceModel):
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         return self.kernel.observation_matrix(X)
 
+    def observation_model(self, X: JAXArray, component=None) -> JAXArray:
+        return self.kernel.observation_model(X, component=component)
+
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         return self.kernel.transition_matrix(X1, X2)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         return self.kernel.process_noise(X1, X2)
+
+    def reset_matrix(self, instid=0):
+        return self.kernel.reset_matrix(instid)
 
 
 class Scale(Wrapper):
@@ -475,14 +488,69 @@ class Scale(Wrapper):
 ################ GP KERNEL DEFINITIONS ################
 ## TODO: tinygp base kernels not yet implemented
 ##       some will require approximations
-# Constant
 # Polynomial
-# Exp
-# ExpSquared (RBF, will need approx)
+# ExpSquared (RBF), will need approx. via Taylor expannsion
+#     see Hartikainen and Särkkä, 2010; Särkkä et al., 2013
 # ExpSineSquared (will need approx)
 # RationalQuadratic
 # Quasiperiodic (not explicitly in tinygp, but is: ExpSquared * ExpSineSquared
 ##    some also define ExpSquared * ExpSineSquared * ExpCosineSquared for P/2 term
+## RotationTerm (sum of SHO as in celerite)
+
+
+class Constant(StateSpaceModel):
+    r"""A constant kernel
+
+    .. math::
+
+        k(\mathbf{x}_i,\,\mathbf{x}_j) = \sigma^2
+
+    where :math:`\sigma` is a parameter.
+
+    Args:
+        sigma: The parameter :math:`\sigma` in the above equation.
+    """
+
+    sigma: JAXArray | float
+
+    def __init__(
+        self,
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "Constant",
+        **kwargs,
+    ):
+        self.sigma = sigma
+        self.name = name
+
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for a Constant process, F"""
+        return jnp.array([[0]])
+
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of a Constant process, Pinf"""
+        return jnp.array([[jnp.square(self.sigma)]])
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for a Constant process"""
+        return jnp.array([[0]])
+
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for a Constant process"""
+        del X
+        return jnp.array([[1]])
+
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for a Constant process"""
+        return jnp.array([[1]])
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The transition matrix A_k for a Constant process"""
+        del X1, X2
+        return self.eye(self.dimension)
+
+    def process_noise(self, X1, X2, use_van_loan=False):
+        """The process noise Q_k for a Constant process"""
+        return jnp.array([[0]])
 
 
 class SHO(StateSpaceModel):
@@ -912,7 +980,7 @@ class Cosine(StateSpaceModel):
 
     def stationary_covariance(self) -> JAXArray:
         """The stationary covariance of the Cosine process, Pinf"""
-        return jnp.square(self.sigma) * jnp.eye(2) / 2
+        return jnp.square(self.sigma) * jnp.eye(2)
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         """The observation model H for the Cosine process"""
@@ -943,3 +1011,149 @@ class Cosine(StateSpaceModel):
     #     dt = X2 - X1
     #     TODO: can implement here the analytic version, but by
     #           default the parent class will generate w/ Pinf - A Pinf A^T
+
+
+class ExpSineSquared(Wrapper):
+    r"""The exponential sine squared or "periodic" kernel
+
+    .. math::
+
+        k(\mathbf{x}_i,\,\mathbf{x}_j) = \sigma^2 \exp(-\Gamma\,\sin^2 \pi r)
+
+    where, by default,
+
+    .. math::
+
+        r = ||(\mathbf{x}_i - \mathbf{x}_j) / P||_1
+
+    In the state space representation, this kernel is approximated using
+    a finite number of basis functions. The method was introduced by
+    `Solin & Särkkä (2014) <https://proceedings.mlr.press/v33/solin14.html`_.
+    See their Figure 2 for number of basis functions to reach desired accuracy.
+    Default behavior will automatically select the number of basis functions
+    based on the length scale :math:`\ell`.
+
+    Args:
+        period: The parameter :math:`P`.
+        gamma: The parameter :math:`\Gamma`.
+        sigma: The parameter :math:`\sigma`. Defaults to a value of 1.
+    """
+
+    gamma: JAXArray | float | None = None
+    period: JAXArray | float
+    scale: JAXArray | float
+    omega: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    order: int | None
+    kernel: StateSpaceModel
+
+    def __init__(
+        self,
+        period: JAXArray | float,
+        gamma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "ExpSineSquared",
+        order: int | None = None,
+        **kwargs,
+    ):
+        self.period = period  # P
+        self.gamma = gamma  # \Gamma
+        self.sigma = sigma  # \sigma
+        self.name = name
+
+        self.scale = 2 / self.gamma  # \ell^2 in Solin & Särkkä (2014)
+        self.omega = 2 * jnp.pi / self.period  # \omega_0 in Solin & Särkkä (2014)
+
+        # Auto-select order (J) using Fig 2 of
+        # Solin & Särkkä (2014) as a
+        ell = jnp.sqrt(self.scale)
+        if order is None:
+            if ell >= 1:
+                self.order = 4
+            elif ell >= 0.5:
+                self.order = 8
+            elif ell >= 0.25:
+                self.order = 14
+            else:
+                self.order = 20
+                raise Warning(
+                    "ExpSineSquared kernel with scale < 0.25 (gamma > 16) may require a high order approximation; "
+                    "it may be worthwhile to change units to a more compatible scale (recommended)"
+                    "or specify the 'order' parameter explicitly."
+                )
+        else:
+            self.order = order
+
+        # Construct the kernel as a sum of PeriodicTerms
+        kernel = self.PeriodicTerm(0, self.omega, self.scale)
+        for j in range(1, self.order):
+            kernel += self.PeriodicTerm(j, self.omega, self.scale)
+        self.kernel = kernel
+
+    def error_bound(self):
+        """
+        An upper bound on the error in the covariance
+        from the Taylor series approximation.
+
+        See Sec 3.4 of Solin & Särkkä (2014).
+        """
+        J = self.order
+        return jnp.exp(1 - self.scale) / jax.scipy.special.factorial(J + 1)
+
+    def stationary_covariance(self) -> JAXArray:
+        return jnp.square(self.sigma) * self.kernel.stationary_covariance()
+
+    # Class for each periodic term in the Taylor series expansion
+    class PeriodicTerm(StateSpaceModel):
+        """
+        A single term in the state space representation of the
+        exponential sine squared or "periodic" kernel
+
+        See Solin & Särkkä (2014) for details.
+        """
+
+        order: int
+        omega: JAXArray | float
+        scale: JAXArray | float
+
+        def __init__(self, order, omega, scale, **kwargs):
+            self.order = order
+            self.omega = omega  # \omega_0
+            self.scale = scale  # \ell^2
+            self.name = f"PeriodicTerm_{order}"
+
+        def design_matrix(self) -> JAXArray:
+            """The design (also called the feedback) matrix for the process, $F$"""
+            j = self.order
+            w = self.omega
+            return jnp.array([[0, -w * j], [w * j, 0]])
+
+        def stationary_covariance(self) -> JAXArray:
+            """The stationary covariance of the process, Pinf"""
+            j = self.order
+            arg = 1 / self.scale
+            coeff = jax.lax.cond(j == 0, lambda _: 1.0, lambda _: 2.0, j)
+            qj2 = coeff * self.Ij(j, arg) / jnp.exp(arg)
+            return qj2 * jnp.eye(self.dimension)
+
+        def observation_matrix(self, X: JAXArray) -> JAXArray:
+            """The observation matrix for the process, $H$"""
+            return jnp.array([[1, 0]])
+
+        def noise(self) -> JAXArray:
+            """The spectral density of the white noise process, $Q_c$"""
+            return jnp.zeros((self.dimension, self.dimension))
+
+        def noise_effect_matrix(self) -> JAXArray:
+            """The noise effect matrix, $L$"""
+            return jnp.eye(self.dimension)
+
+        def Ij(self, j, x, terms=50):
+            """The modified Bessel function of the first kind, order j, at x."""
+            k = jnp.arange(terms)
+            log_terms = (
+                -gammaln(k + 1)  # log(k!)
+                - gammaln(k + j + 1)
+                + (2 * k + j) * jnp.log(x / 2)
+            )
+            return jnp.sum(jnp.exp(log_terms))
