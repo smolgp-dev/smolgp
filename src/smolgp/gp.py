@@ -14,7 +14,6 @@ from typing import (
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
@@ -159,7 +158,7 @@ class GaussianProcess(eqx.Module):
     """
 
     num_data: int = eqx.field(static=True)
-    dtype: np.dtype = eqx.field(static=True)
+    dtype: jnp.dtype = eqx.field(static=True)
     kernel: kernels.Kernel
     X: JAXArray
     mean_function: means.MeanBase
@@ -185,13 +184,30 @@ class GaussianProcess(eqx.Module):
         use_unique_names: bool = True,
         **solver_kwargs: Any,
     ):
+        # First, assign unique kernel names if needed
         if use_unique_names:
             self.kernel = assign_unique_kernel_names(kernel)
         else:
             self.kernel = kernel
 
+        # Check if the kernel contains any integrated components
+        kernels = extract_leaf_kernels(self.kernel)
+        is_integrated = any([isinstance(k, IntegratedStateSpaceModel) for k in kernels])
+        is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
+
+        # If using an integrated solver, ensure X has both coords and bin sizes
+        if is_integrated:
+            assert isinstance(X, tuple) and len(X) > 1, (
+                "IntegratedStateSpaceSolver requires both the data coordinates (e.g. times)"
+                " and bin sizes (e.g. exposure times). These should be passed as X=(t, texp)"
+                " where t is the midpoint of each measurement and texp is the exposure time"
+                " (i.e. each measurement is over the interval [t - texp/2, t + texp/2])."
+            )
+
+        # Data coordinates (or tuple of coordinates)
         self.X = X
 
+        # Mean function
         if isinstance(mean, means.MeanBase):
             self.mean_function = mean
         elif mean is None:
@@ -207,20 +223,17 @@ class GaussianProcess(eqx.Module):
         self.states = states
         if self.mean.ndim != 1:
             raise ValueError(
-                "Invalid mean shape: " f"expected ndim = 1, got ndim={self.mean.ndim}"
+                f"Invalid mean shape: expected ndim = 1, got ndim={self.mean.ndim}"
             )
 
+        # Observation noise model
         if noise is None:
             diag = _default_diag(self.mean) if diag is None else diag
             noise = Diagonal(diag=jnp.broadcast_to(diag, self.mean.shape))
         self.noise = noise
 
+        # Set up the solver
         if solver is None:
-            kernels = extract_leaf_kernels(kernel)
-            is_integrated = any(
-                [isinstance(k, IntegratedStateSpaceModel) for k in kernels]
-            )
-            is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
             if is_integrated:
                 solver = IntegratedStateSpaceSolver
             elif is_instantaneous:
@@ -251,17 +264,25 @@ class GaussianProcess(eqx.Module):
 
     @property
     def loc(self) -> JAXArray:
-        # TODO: Return H @ m_smooth
+        """
+        If conditioned, this will be the mean at the data points
+        Otherwise, it is just the prior mean.
+        """
         return self.mean
 
     @property
     def variance(self) -> JAXArray:
-        # TODO: Return H @ P_smooth @ H.T
+        """
+        If conditioned, this will be the variance at the data points
+        Otherwise, it is just the prior variance.
+        """
         return self.var
 
     @property
     def covariance(self) -> JAXArray:
         # TODO: Eq. 12.55 in Sarkka & Solin 2019
+        #   if G = states.smoothing_gains exists, otherwise
+        #   I guess we raise an error that its not conditioned?
         # return self.covariance_value
         raise NotImplementedError
 
@@ -468,9 +489,9 @@ class GaussianProcess(eqx.Module):
 
         if self.states is None:
             # Need to condition the GP first
-            assert (
-                y is not None
-            ), "The GP has not been conditioned yet, and no data array `y` was given."
+            assert y is not None, (
+                "The GP has not been conditioned yet, and no data array `y` was given."
+            )
             llh, condGP = self.condition(
                 y, X_test
             )  # condition on data, also internally predicts at X_test
@@ -506,13 +527,12 @@ class GaussianProcess(eqx.Module):
                     if observation_model is None
                     else observation_model
                 )
-                t_test = self.kernel.coord_to_sortable(X_test)
                 mean, variance = self.solver.predict(X_test, self.states(), H_test)
                 if return_full_state:
                     mu = mean
                     var = variance
                 else:
-                    if not kernel is None:
+                    if kernel is not None:
                         name = kernel if isinstance(kernel, str) else kernel.name
                         H_test = lambda X: self.kernel.observation_model(
                             X, component=name
@@ -563,7 +583,9 @@ class GaussianProcess(eqx.Module):
     ) -> JAXArray:
         raise NotImplementedError
         ## TODO: implement sampling for state space model
-        ##        or alternatively call the tinygp version? copied below:
+        ## fast method to try: https://www.stats.ox.ac.uk/~doucet/doucet_simulationconditionalgaussian.pdf
+        ##
+        ## or alternatively call the tinygp version? copied below:
         # if shape is None:
         #     shape = (self.num_data,)
         # else:
@@ -600,18 +622,7 @@ class GaussianProcess(eqx.Module):
 
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 
-    # @partial(jax.jit, static_argnums=(3,))
-    # def _condition(
-    #     self,
-    #     y: JAXArray,
-    #     X_test: JAXArray | None,
-    #     include_mean: bool,
-    #     kernel: kernels.Kernel | None = None,
-    # ) -> tuple[JAXArray, JAXArray, JAXArray]:
-    #     alpha = self._get_alpha(y)
-    #     log_prob = self._compute_log_prob(alpha)
-    #     return alpha, log_prob, mean_value
-
+    # @jax.jit # TODO: can it be jitted
     def component_means(self, return_var: bool = False) -> Any:
         """Get the means of each component kernel in a multi-component model
 
@@ -650,6 +661,7 @@ class GaussianProcess(eqx.Module):
         else:
             return means_list
 
+    # @jax.jit # TODO: can it be jitted
     def predict_component_means(
         self, X_test, return_var: bool = False, **kwargs
     ) -> Any:
@@ -704,7 +716,7 @@ class GaussianProcess(eqx.Module):
         else:
             return means_list
 
-    # @jax.jit
+    # @jax.jit # TODO: can it be jitted
     def _project_at_data(self, observation_model=None, states=None):
         """
         Project the states with measurements (e.g. exposure-ends)
