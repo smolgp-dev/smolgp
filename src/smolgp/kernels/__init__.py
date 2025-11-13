@@ -26,6 +26,7 @@ __all__ = [
     "Matern32",
     "Matern52",
     "Cosine",
+    "ExpSineSquared",
     "IntegratedSHO",
     "IntegratedExp",
     "IntegratedMatern32",
@@ -50,6 +51,7 @@ from smolgp.kernels.base import (
     Matern32,
     Matern52,
     Cosine,
+    ExpSineSquared,
 )
 
 # Integrated kernels
