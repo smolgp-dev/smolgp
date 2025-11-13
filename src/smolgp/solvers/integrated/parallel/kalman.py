@@ -55,17 +55,24 @@ def IntegratedKalmanFilter(
         R,
         X,
         y,
+        t_states,
+        obsid,
+        instid,
+        stateid,
         m0,
         P0,
     )
-    A, b, C, eta, J = kalman_filter(asso_params)
+    A, b, C, eta, J = integrated_kalman_filter(asso_params)
     m_pred, P_pred, v, S = postprocess(
         Phi_aug,
-        H_aug,
         Q_aug,
+        H_aug,
         R,
         X,
         y,
+        t_states,
+        obsid,
+        stateid,
         b,
         C,
         m0,
@@ -117,13 +124,10 @@ def make_associative_params(
 
         m = transition @ m0
         P = transition @ P0 @ transition.T  # Q(0,0) = 0
-        # P = Phi0 @ P0 @ Phi0.T  # Q(0,0) = 0
-        # P = (RESET(instid[0]) @ Phi0) @ P0 @ Phi0.T @ RESET(instid[0]).T  # Q(0,0) = 0
 
         jax.debug.print("m {m}", m=m)
         jax.debug.print("P {p}", p=P)
 
-        # A = jnp.zeros_like(Phi0)
         A = Reset
         b = jnp.squeeze(m)
         C = P
@@ -141,11 +145,6 @@ def make_associative_params(
             obsid,
         ) = ops
 
-        jax.debug.print("start obsid {obsid}", obsid=obsid)
-
-        # Phi_dt = Phi_aug(0, t_delta)
-        # Q_dt = Q_aug(0, t_delta)
-
         A = Reset @ Phi_dt
         b = jnp.zeros(Phi_dt.shape[-1])
         C = Reset @ Q_dt @ Reset.T
@@ -161,8 +160,6 @@ def make_associative_params(
             obsid,
         ) = ops
 
-        # Phi_dt = Phi_aug(0, t_delta)
-        # Q_dt = Q_aug(0, t_delta)
         I_nx = jnp.eye(Phi_dt.shape[-1])
 
         Hk = H_array[obsid]
@@ -215,7 +212,6 @@ def make_associative_params(
         Resets,
         obsid[1:],
     )
-    jax.debug.print("stateid: {s}", s=stateid[1:])
     A, b, C, eta, J = jax.vmap(
         lambda sid, op: jax.lax.cond(
             sid == 0,
@@ -231,108 +227,6 @@ def make_associative_params(
     J_all = jnp.concatenate([J0[jnp.newaxis, ...], J], axis=0)
 
     return (A_all, b_all, C_all, eta_all, J_all)
-
-    # def make_generic_params(
-    #     Phi_aug,
-    #     Q_aug,
-    #     RESET,
-    #     t_delta,
-    #     obsid,
-    #     instid,
-    #     stateid,
-    # ):
-    #     Phi_dt = Phi_aug(0, t_delta)
-    #     Q_dt = Q_aug(0, t_delta)
-    #     I_nx = jnp.eye(Phi_dt.shape[-1])
-
-    #     if stateid == 0:  # to start state
-    #         A = RESET(instid) @ Phi_dt
-    #         b = jnp.zeros(Phi_dt.shape[-1])
-    #         C = Q_dt
-    #         eta = jnp.zeros(obs_shape)
-    #         J = jnp.zeros(obs_shape)
-    #         return (A, b, C, eta, J)
-
-    #     elif stateid == 1:  # to end state
-    #         Hk = H_aug[obsid]
-    #         yk = y[obsid]
-    #         rk = R[obsid]
-
-    #         Sk = Hk @ Q_dt @ Hk.T + rk
-    #         Kk = jnp.linalg.solve(Sk.T, (Q_dt @ Hk.T).T).T
-    #         factor = I_nx - Kk @ Hk
-    #         A = factor @ Phi_dt
-    #         b = jnp.squeeze(Kk @ jnp.atleast_1d(yk))
-    #         C = factor @ Q_dt
-
-    #         _a = Phi_dt.T @ Hk.T
-    #         _b = jnp.linalg.solve(Sk, jnp.atleast_1d(yk))
-    #         eta = _a @ _b
-    #         _c = jnp.linalg.solve(Sk, Hk @ Phi_dt)
-    #         J = _a @ _c
-    #         return (A, b, C, eta, J)
-
-    # def start_state_params(
-    #     Phi_aug,
-    #     Q_aug,
-    #     RESET,
-    #     t_delta,
-    #     obs_shape,
-    # ):
-    #     A = RESET @ Phi_aug(0, t_delta)
-    #     b = jnp.zeros(obs_shape)
-    #     C = Q_aug(0, t_delta)
-    #     eta = jnp.zeros(
-    #         shape=(
-    #             Phi_aug.shape[0],
-    #             obs_shape,
-    #         )
-    #     )
-    #     J = jnp.zeros_like(Phi_aug)
-
-    #     return (A, b, C, eta, J)
-
-    # def make_generic_params(
-    #     Phi,
-    #     H,
-    #     Q,
-    #     t_delta,
-    #     y,
-    #     r,
-    # ):
-    #     Phi_dt = Phi(0, t_delta)
-    #     I = jnp.eye(Phi_dt.shape[-1])
-
-    #     Hk = H(t_delta)  # this is wrong
-    #     Q_dt = Q(0, t_delta)
-
-    #     S = Hk @ Q_dt @ Hk.T + r
-    #     S_inv = S**-1
-    #     K = Q_dt @ Hk.T @ S_inv
-
-    #     A = (I - K @ Hk) @ Phi_dt
-    #     b = jnp.squeeze(K @ jnp.atleast_1d(y))  # remove atleast_1d?
-    #     C = (I - K @ Hk) @ Q_dt
-
-    #     eta = jnp.squeeze(Phi_dt.T @ Hk.T @ (S_inv * jnp.atleast_1d(y)))
-    #     J = Phi_dt.T @ Hk.T @ S_inv @ Hk @ Phi_dt
-
-    #     return (A, b, C, eta, J)
-
-    # A0, b0, C0, eta0, J0 = make_first_params(Phi_aug, m0, P0, y.shape[1])
-    # t_delta = jnp.diff(X)
-    # A, b, C, eta, J = jax.vmap(
-    #     make_generic_params,
-    #     in_axes=(None, None, None, 0, 0, 0),
-    # )(Phi_aug, H_aug, Q_aug, t_delta, y[1:], R[1:])
-
-    # A_all = jnp.concatenate([A0[jnp.newaxis, ...], A], axis=0)
-    # b_all = jnp.concatenate([b0[jnp.newaxis, ...], b], axis=0)
-    # C_all = jnp.concatenate([C0[jnp.newaxis, ...], C], axis=0)
-    # eta_all = jnp.concatenate([eta0[jnp.newaxis, ...], eta], axis=0)
-    # J_all = jnp.concatenate([J0[jnp.newaxis, ...], J], axis=0)
-
-    # return (A_all, b_all, C_all, eta_all, J_all)
 
 
 def _combine_per_pair(left, right):
@@ -362,7 +256,7 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def kalman_filter(asso_params):
+def integrated_kalman_filter(asso_params):
     """
     Jax implementation of the parallel Kalman filter algorithm
 
@@ -382,35 +276,24 @@ def kalman_filter(asso_params):
 
 
 @jax.jit
-def postprocess(
-    Phi,
-    H,
-    Q,
-    R,
-    X,
-    y,
+def _calc_kf_predictions(
+    Phi_aug,
+    Q_aug,
+    H_aug,
+    t_states,
     b,
     C,
     m0,
     P0,
 ):
-    t_delta = jnp.diff(X)
-    dim = b.shape[-1]
-    I = jnp.eye(dim)
+    t_delta = jnp.diff(t_states)
+    Phi0 = Phi_aug(0, 0)
+    Phik = jax.vmap(Phi_aug, in_axes=(None, 0))(0, t_delta)
+    Phis = jnp.concatenate([Phi0[jnp.newaxis, ...], Phik], axis=0)
 
-    Phis = jax.vmap(Phi, in_axes=(None, 0))(0, t_delta)
-    Qs = jax.vmap(Q, in_axes=(None, 0))(0, t_delta)
-
-    Phi_all = jnp.concatenate(
-        [I[jnp.newaxis, ...], Phis],
-        axis=0,
-    )
-    Q_all = jnp.concatenate(
-        [jnp.zeros_like(I)[jnp.newaxis, ...], Qs],
-        axis=0,
-    )
-    H_all = jax.vmap(H, in_axes=(0,))(X)
-    R_all = R
+    Q0 = Q_aug(0, 0)
+    Qk = jax.vmap(Q_aug, in_axes=(None, 0))(0, t_delta)
+    Qs = jnp.concatenate([Q0[jnp.newaxis, ...], Qk], axis=0)
 
     m_prev = jnp.concatenate(
         [m0[jnp.newaxis, ...], b[:-1]],
@@ -421,27 +304,94 @@ def postprocess(
         axis=0,
     )
 
-    m_pred = jax.vmap(lambda _Phi, _m: _Phi @ _m)(
-        Phi_all,
-        m_prev,
-    )
+    m_pred = jax.vmap(lambda _Phi, _m: _Phi @ _m)(Phis, m_prev)
     P_pred = jax.vmap(lambda _Phi, _P_prev, _Q: _Phi @ _P_prev @ _Phi.T + _Q)(
-        Phi_all,
+        Phis,
         P_prev,
-        Q_all,
+        Qs,
     )
 
-    y_pred = jax.vmap(lambda _H, _m: _H @ _m, in_axes=(0, 0))(
-        H_all,
+    return (m_pred, P_pred)
+
+
+@jax.jit
+def _calc_vS(
+    H_aug,
+    R,
+    m_pred,
+    P_pred,
+    X,
+    y,
+    stateid,
+    obsid,
+):
+    ends_idx = jnp.nonzero(
+        stateid == 1,
+        size=y.shape[0],
+    )[0]  # end states where there is a measurement
+    obsidx_in_ends_order = jnp.take(obsid, ends_idx)
+
+    mm = jnp.take(m_pred, ends_idx, axis=0)
+    Pm = jnp.take(P_pred, ends_idx, axis=0)
+    Xm = jax.tree.map(lambda x: jnp.take(x, obsidx_in_ends_order), X)
+    Hm = jax.vmap(H_aug)(Xm)
+    ym = jnp.take(y, obsidx_in_ends_order)
+    Rm = jnp.take(R, obsidx_in_ends_order)
+
+    y_pred = jax.vmap(
+        lambda H, m: H @ m,
+        in_axes=(0, 0),
+    )(Hm, mm)
+
+    v = ym[..., jnp.newaxis] - y_pred
+    S = jax.vmap(
+        lambda H, P, R: H @ P @ H.T + R,
+        in_axes=(0, 0, 0),
+    )(
+        Hm,
+        Pm,
+        Rm,
+    )
+
+    return (v, S)
+
+
+@jax.jit
+def postprocess(
+    Phi_aug,
+    Q_aug,
+    H_aug,
+    R,
+    X,
+    y,
+    t_states,
+    obsid,
+    stateid,
+    b,
+    C,
+    m0,
+    P0,
+):
+    m_pred, P_pred = _calc_kf_predictions(
+        Phi_aug,
+        Q_aug,
+        H_aug,
+        t_states,
+        b,
+        C,
+        m0,
+        P0,
+    )
+
+    v, S = _calc_vS(
+        H_aug,
+        R,
         m_pred,
-    )
-
-    v = y[..., jnp.newaxis] - y_pred
-
-    S = jax.vmap(lambda _H, _P, _R: _H @ _P @ _H.T + _R)(
-        H_all,
         P_pred,
-        R_all,
+        X,
+        y,
+        stateid,
+        obsid,
     )
 
     return (m_pred, P_pred, v, S)

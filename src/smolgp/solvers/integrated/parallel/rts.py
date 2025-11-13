@@ -3,71 +3,130 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["RTSSmoother", "rts_smoother"]
+__all__ = ["IntegratedRTSSmoother", "integrated_rts_smoother"]
 
 
-def RTSSmoother(kernel, X, kalman_results):
+def IntegratedRTSSmoother(
+    kernel,
+    t_states,
+    stateid,
+    instid,
+    kalman_results,
+):
     """
     Wrapper for Parallel RTS smoother
 
     Parameters:
         kernel: StateSpaceModel kernel
         X: input coordinates
-        kalman_results: output from Kalman filter
-            these are the filtered state means (b) and covariances (C)
+        kalman_results: output from Kalman filter:
+            m_pred, P_pred, m_filter, P_filter
 
     Returns:
         E:
         g: smoothed means
         L: smoothed covariances
     """
-    mu, P = kalman_results
+    m_pred, P_pred, m_filter, P_filter = kalman_results
+    Phi_aug = kernel.transition_matrix
+    Q_aug = kernel.process_noise
+    RESET = kernel.reset_matrix
 
-    Phi = kernel.transition_matrix
-    Q = kernel.process_noise
-
-    asso_params = make_associative_params(Phi, Q, X, mu, P)
-    E, g, L = rts_smoother(asso_params)
+    asso_params = make_associative_params(
+        Phi_aug,
+        Q_aug,
+        RESET,
+        t_states,
+        stateid,
+        instid,
+        m_pred,
+        P_pred,
+        m_filter,
+        P_filter,
+    )
+    E, g, L = integrated_rts_smoother(asso_params)
     return (E, g, L)
 
 
 @jax.jit
-def make_associative_params(Phi, Q, X, mu, P):
+def make_associative_params(
+    Phi_aug,
+    Q_aug,
+    RESET,
+    t_states,
+    stateid,
+    instid,
+    m_pred,
+    P_pred,
+    m_filter,
+    P_filter,
+):
     """Generate the associative parameters needed for parallel RTS
 
     See eqns in Section 4B of Sarkka & Garcia-Fernandez (2020)
     """
 
-    def make_last_params(mu_last, P_last):
-        return (jnp.zeros_like(P_last), mu_last, P_last)
+    def make_last_params(mf_last, Pf_last):
+        return (jnp.zeros_like(Pf_last), mf_last, Pf_last)
 
-    def make_generic_params(Phi, Q, t_delta, mu, P):
-        Phi_dt = Phi(0, t_delta)
-        Q_dt = Q(0, t_delta)
+    def make_generic_params(
+        Phi_dt,
+        Q_dt,
+        Reset,
+        mp,
+        Pp,
+        mf,
+        Pf,
+        sid_current,
+    ):
+        def end_state():
+            Phik = Phi_dt
+            Qk = Q_dt
+            mk = mf
+            Pk = Pf
+            return Phik, Qk, mk, Pk
 
-        # Placeholder variables (not A, b from parallel KF)
-        A = Phi_dt @ P @ Phi_dt.T + Q_dt
-        b = P @ Phi_dt.T
+        def start_state():
+            Phik = Phi_dt @ Reset
+            Qk = Q_dt
+            mk = mp
+            Pk = Pp
+            return Phik, Qk, mk, Pk
+
+        Phik, Qk, mk, Pk = jax.lax.cond(
+            sid_current == 0,
+            start_state,
+            end_state,
+        )
+
+        A = Phik @ Pk @ Phik.T + Qk
+        b = Pk @ Phik.T
 
         E = jax.scipy.linalg.solve(A.T, b.T, assume_a="pos").T
-        g = mu - E @ (Phi_dt @ mu)
-        L = P - E @ Phi_dt @ P
+        g = mk - E @ (Phik @ mk)
+        L = Pk - E @ Phik @ Pk
 
         return (E, g, L)
 
-    t_delta = jnp.diff(X)
+    t_delta = jnp.diff(t_states)
+    Phis = jax.vmap(Phi_aug, in_axes=(None, 0))(0, t_delta)
+    Qs = jax.vmap(Q_aug, in_axes=(None, 0))(0, t_delta)
+    Resets = jax.vmap(RESET)(instid[:-1])
+
     E, g, L = jax.vmap(
         make_generic_params,
-        in_axes=(None, None, 0, 0, 0),
     )(
-        Phi,
-        Q,
-        t_delta,
-        mu[:-1],
-        P[:-1],
+        Phis,
+        Qs,
+        Resets,
+        m_pred[:-1],
+        P_pred[:-1],
+        m_filter[:-1],
+        P_filter[:-1],
+        stateid[:-1],
     )
 
-    EN, gN, LN = make_last_params(mu[-1], P[-1])
+    EN, gN, LN = make_last_params(m_filter[-1], P_filter[-1])
 
     E_all = jnp.concatenate([E, EN[jnp.newaxis, ...]], axis=0)
     g_all = jnp.concatenate([g, gN[jnp.newaxis, ...]], axis=0)
@@ -89,7 +148,7 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def rts_smoother(asso_params):
+def integrated_rts_smoother(asso_params):
     """
     Jax implementation of the parallel RTS smoother algorithm
 
