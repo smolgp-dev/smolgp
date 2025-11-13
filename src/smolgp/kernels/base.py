@@ -30,6 +30,7 @@ __all__ = [
     "Cosine",
 ]
 
+import warnings
 from abc import abstractmethod
 from typing import Any
 
@@ -244,6 +245,26 @@ class StateSpaceModel(Kernel):
         """For state space kernels, the variance is simple to compute"""
         h = self.observation_model(X)
         return h @ self.stationary_covariance() @ h.T
+
+    def psd(self, omega: JAXArray) -> JAXArray:
+        """
+        The power spectral density (PSD) of the kernel
+
+        See Eq. 8 in Solin & Sarkka 2014
+        https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
+        """
+        F = self.design_matrix()
+        L = self.noise_effect_matrix()
+        Qc = self.noise()
+        H = self.observation_matrix(0)  # PSD is stationary, so X doesn't matter
+        I = jnp.eye(self.dimension)
+
+        def compute_psd(w: JAXArray) -> JAXArray:
+            M = jnp.linalg.inv(F + 1j * w * I)
+            S = H @ M.conj() @ L @ Qc @ L.T @ M.T @ H.T
+            return S.squeeze().real / (2 * jnp.pi)
+
+        return jax.vmap(compute_psd)(omega)
 
 
 class Sum(StateSpaceModel):
@@ -1071,14 +1092,14 @@ class ExpSineSquared(Wrapper):
             if ell >= 1:
                 self.order = 4
             elif ell >= 0.5:
-                self.order = 8
+                self.order = 6
             elif ell >= 0.25:
-                self.order = 14
+                self.order = 8
             else:
-                self.order = 20
-                raise Warning(
+                self.order = 16
+                warnings.warn(
                     "ExpSineSquared kernel with scale < 0.25 (gamma > 16) may require a high order approximation; "
-                    "it may be worthwhile to change units to a more compatible scale (recommended)"
+                    "it may be worthwhile to change units to a more compatible scale (recommended) "
                     "or specify the 'order' parameter explicitly."
                 )
         else:
@@ -1148,12 +1169,13 @@ class ExpSineSquared(Wrapper):
             """The noise effect matrix, $L$"""
             return jnp.eye(self.dimension)
 
-        def Ij(self, j, x, terms=50):
-            """The modified Bessel function of the first kind, order j, at x."""
+        def Ij(self, j, x, terms=50) -> JAXArray:
+            """
+            The modified Bessel function of the first kind, order j, at x.
+            Approximated via a truncated Taylor series expansion.
+            """
             k = jnp.arange(terms)
             log_terms = (
-                -gammaln(k + 1)  # log(k!)
-                - gammaln(k + j + 1)
-                + (2 * k + j) * jnp.log(x / 2)
+                -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
             )
             return jnp.sum(jnp.exp(log_terms))
