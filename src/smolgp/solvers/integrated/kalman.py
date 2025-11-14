@@ -101,7 +101,7 @@ def integrated_kalman_filter(
             m_k = Reset @ m_pred
             P_k = Reset @ P_pred @ Reset.T
             Hk = H[n]  # TODO: change this and next two lines to use shapes?
-            v_k = jnp.zeros_like(Hk @ m_pred)
+            v_k = jnp.zeros_like(Hk @ m_pred)  # maybe e.g. jax broadcast_shapes?
             S_k = jnp.zeros_like(Hk @ P_pred @ Hk.T)
             return m_k, P_k, m_pred, P_pred, v_k, S_k
 

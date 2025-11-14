@@ -74,12 +74,9 @@ def integrated_rts_smoother(
             m_k_pre = m_predicted[k]  # pre-reset start state
             P_k_pre = P_predicted[k]  # pre-reset start covariance
 
-            ## Use the combined transition & reset matrix
             Reset = RESET(instid[obsid[k]])
             AR = A_k @ Reset
             G_k = jnp.linalg.solve(P_pred_next.T, (P_k_pre @ AR.T).T).T
-            # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
-            # G_k = P_k_pre @ AR.T @ P_pred_next_inv
             m_hat_k = m_k_pre + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k_pre + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
