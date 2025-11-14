@@ -10,7 +10,7 @@ TODO: add documentation from the paper as a refresher/explainer of the augmented
 
 """
 
-__all__ = ["IntegratedStateSpaceSolver", "IntegratedParallelStateSpaceSolver"]
+__all__ = ["IntegratedStateSpaceSolver", "ParallelIntegratedStateSpaceSolver"]
 
 from smolgp.solvers.integrated.solver import IntegratedStateSpaceSolver
-from smolgp.solvers.integrated.parallel.solver import IntegratedParallelStateSpaceSolver
+from smolgp.solvers.integrated.parallel.solver import ParallelIntegratedStateSpaceSolver

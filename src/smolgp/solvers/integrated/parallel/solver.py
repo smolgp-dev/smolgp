@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-__all__ = ["IntegratedParallelStateSpaceSolver"]
+__all__ = ["ParallelIntegratedStateSpaceSolver"]
 
 from typing import Any
 
@@ -16,7 +16,7 @@ from smolgp.solvers.integrated.parallel.kalman import IntegratedKalmanFilter
 from smolgp.solvers.integrated.parallel.rts import IntegratedRTSSmoother
 
 
-class IntegratedParallelStateSpaceSolver(eqx.Module):
+class ParallelIntegratedStateSpaceSolver(eqx.Module):
     """
     A solver that uses ``jax.lax.associative_scan`` to implement
     parallel Kalman filtering and RTS smoothing for integrated measurements
@@ -150,7 +150,7 @@ class IntegratedParallelStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         )
-        
+
         return self.state_coords, conditioned_states, v_S
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
@@ -175,7 +175,11 @@ class IntegratedParallelStateSpaceSolver(eqx.Module):
         #     H = H_latent
         # else:
         # Observation model to call at each of the X_test
-        H = self.kernel.observation_model if observation_model is None else observation_model
+        H = (
+            self.kernel.observation_model
+            if observation_model is None
+            else observation_model
+        )
 
         return self._predict(X_test, conditioned_results, H)
 
@@ -302,7 +306,9 @@ class IntegratedParallelStateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
+            return jax.lax.switch(
+                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
+            )
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
