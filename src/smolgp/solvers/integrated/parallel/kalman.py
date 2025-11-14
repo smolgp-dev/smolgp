@@ -118,15 +118,11 @@ def make_associative_params(
         Reset,
     ):
         Phi0 = Phi_aug(0, 0)
-        jax.debug.print("Phi0: {phi0}", phi0=Phi0)
 
         transition = Reset @ Phi0
 
         m = transition @ m0
         P = transition @ P0 @ transition.T  # Q(0,0) = 0
-
-        jax.debug.print("m {m}", m=m)
-        jax.debug.print("P {p}", p=P)
 
         A = Reset
         b = jnp.squeeze(m)
