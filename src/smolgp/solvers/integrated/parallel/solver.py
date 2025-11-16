@@ -164,17 +164,6 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
                                   should be a function just like
                                   self.kernel.observation_model
         """
-
-        # # TODO?: If the test points are for instantaneous measurements,
-        # # change the observation model to be for the latent state
-        # t_test, texp_test, instid_test = X_test
-        # if jnp.any(texp_test==0):
-        #     def H_latent(x):
-        #         t, delta, instid = x
-        #         return self.kernel.observation_model((t, 0.0, instid))
-        #     H = H_latent
-        # else:
-        # Observation model to call at each of the X_test
         H = (
             self.kernel.observation_model
             if observation_model is None
@@ -209,7 +198,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
         t_test = self.kernel.coord_to_sortable(X_test)
 
         # Array shapes
-        N = len(self.X)  # number of data points
+        # N = len(self.X)  # number of data points (unused)
         K = len(t_states)  # number of states
         M = len(t_test)  # number of test points
 
