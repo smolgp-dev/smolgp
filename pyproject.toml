@@ -30,6 +30,14 @@ dev = [
     "tinygp",
 ]
 
+[project.urls]
+Homepage = "https://github.com/smolgp-dev/smolgp"
+Issues = "https://github.com/smolgp-dev/smolgp/issues"
+
+[build-system]
+requires = ["setuptools >= 77.0.3"]
+build-backend = "setuptools.build_meta"
+
 [tool.uv.sources]
 tinygp = { git = "https://github.com/dfm/tinygp" }
 
