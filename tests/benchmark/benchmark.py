@@ -136,7 +136,6 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
 
     # Peak memory tracking via polling
     peak_rss = 0
-    baseline_rss = proc.memory_info().rss
 
     def track_memory():
         nonlocal peak_rss
