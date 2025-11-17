@@ -3,15 +3,18 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
-# import tracemalloc
-
 import tinygp
 import smolgp
 
-import matplotlib as mpl
+# import matplotlib as mpl
 import matplotlib.pyplot as plt
 
-mpl.rc("font", family="sans serif", size=16)
+import pickle
+import os
+import psutil
+import multiprocessing as mp
+
+mp.set_start_method("spawn", force=True)
 
 key = jax.random.PRNGKey(0)
 
@@ -21,6 +24,7 @@ __all__ = [
     "run_benchmark",
     "plot_benchmark",
     "generate_data",
+    "colors",
 ]
 
 ## Colors for benchmarking plots
@@ -107,14 +111,6 @@ def plot_benchmark(
     if savefig:
         plt.savefig(savefig, dpi=300, bbox_inches="tight")
     return ax
-
-
-import pickle
-import os
-import psutil
-import multiprocessing as mp
-
-mp.set_start_method("spawn", force=True)
 
 
 def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
