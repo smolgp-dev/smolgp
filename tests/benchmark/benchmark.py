@@ -34,6 +34,16 @@ colors = {"SSM" : "#1f77b4",
           "GP"  : "#2ca02c", 
           "pSSM": "#6A0E95"
           }
+markers = {"SSM" : "o",
+           "QSM" : "s", 
+           "GP"  : "D", 
+           "pSSM": "*"
+          }
+markersize = {"SSM" : 8,
+              "QSM" : 6, 
+              "GP"  : 6, 
+              "pSSM": 10,
+          }
 
 
 def generate_data(N, kernel, yerr=0.3):
@@ -56,13 +66,15 @@ def save_benchmark_data(filename, Ns, runtime, memory, outputs):
     with open(filename, "wb") as f:
         pickle.dump(data, f)
 
-def load_benchmark_data(filename):
+def load_benchmark_data(filename, unpack=False):
     import pickle
 
     with open(filename, "rb") as f:
         data = pickle.load(f)
-    return data["Ns"], data["runtime"], data["memory"], data["outputs"]
-
+    if unpack:
+        return data["Ns"], data["runtime"], data["memory"], data["outputs"]
+    else:
+        return data
 
 def scale_nans(runtime_array, Ns, power=1):
     # Find the last non-nan index
@@ -112,7 +124,8 @@ def plot_benchmark(
         if scale:
             scaled = scale_nans(runtime_array, Ns, power=powers[name])
             ax.errorbar(Ns, scaled[:, 0], scaled[:, 1], c=colors[name], ls=":")
-        ax.errorbar(Ns, mean_runtime, std_runtime, c=colors[name], fmt=".-", label=labels[name])
+        ax.errorbar(Ns, mean_runtime, std_runtime, c=colors[name], marker=markers[name],
+                     markersize=markersize[name], fmt='-', label=labels[name])
 
     ax.legend()
     ax.set(
@@ -129,9 +142,9 @@ def plot_benchmark(
     return ax
 
 
-def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
+def memthread_cpu(fn_bytes, kernel_bytes, args_bytes, return_pipe):
     """
-    Helper function to run a function in an isolated subprocess for memory profiling.
+    Helper thread for memory profiling.
     """
     # Unpickle function and arguments inside isolated subprocess
     fn = pickle.loads(fn_bytes)
@@ -198,9 +211,9 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
     return_pipe.close()
 
 
-def profile_jax_function(fn, kernel, *args, n_repeat=5):
+def profile_jax_function_cpu(fn, kernel, *args, n_repeat=5):
     """
-    JAX profiler for time benchmarking and memory tracking using isolated subprocesses.
+    JAX profiler for time benchmarking and memory tracking a function (on CPU) using isolated subprocesses.
     """
     fn_bytes = pickle.dumps(fn)
     kernel_bytes = pickle.dumps(kernel)
@@ -213,7 +226,7 @@ def profile_jax_function(fn, kernel, *args, n_repeat=5):
     for _ in range(n_repeat):
         parent_conn, child_conn = mp.Pipe()
         p = mp.Process(
-            target=_runner, args=(fn_bytes, kernel_bytes, args_bytes, child_conn)
+            target=memthread_cpu, args=(fn_bytes, kernel_bytes, args_bytes, child_conn)
         )
         p.start()
         result = parent_conn.recv()
@@ -229,8 +242,22 @@ def profile_jax_function(fn, kernel, *args, n_repeat=5):
         output,
     )
 
+def profile_jax_function_gpu(fn, kernel, *args, n_repeat=5):
+    """
+    JAX profiler for time benchmarking and memory tracking a function (on GPU) using isolated subprocesses.
+    """
+ 
+    # TODO:
 
-def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}):
+    # return (
+    #     (np.mean(runtimes), np.std(runtimes)),
+    #     (np.mean(peaks), np.std(peaks)),
+    #     output,
+    # )
+
+
+
+def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}, use_gpu_profiler=False):
     """
     Given some (jitted) functions, benchmark their runtimes over a range of input sizes.
 
@@ -266,9 +293,14 @@ def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}):
             cutoff = cutoffs.get(name, 3e4)
 
             if N <= cutoff:
-                t, mem, val = profile_jax_function(
-                    func, kernel, data[n], n_repeat=n_repeat
-                )
+                if use_gpu_profiler:
+                    t, mem, val = profile_jax_function_gpu(
+                        func, kernel, data[n], n_repeat=n_repeat
+                    )
+                else:
+                    t, mem, val = profile_jax_function_cpu(
+                        func, kernel, data[n], n_repeat=n_repeat
+                    )
                 basestr = f"    {name}: time = {t[0]:.4f} ± {t[1]:.4f} s"
                 memstr = f", mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}"
                 print(basestr + memstr)
@@ -281,9 +313,13 @@ def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}):
                 memory[name] = []
                 outputs[name] = []
 
+            # TODO: save per-iteration here
             runtime[name].append(t)
             memory[name].append(mem)
             outputs[name].append(val)
+
+            save_benchmark_data(f"results/individual/{func.__name__}_{N}.pkl", 
+                                [N], {name: [t]}, {name: [mem]}, {name: [val]})
 
     return Ns, runtime, memory, outputs
 
@@ -306,7 +342,8 @@ def run_benchmark(
     logN_min=1,
     logN_max=7,
     n_repeat=3,
-    cutoffs={}
+    cutoffs={},
+    use_gpu_profiler=False,
 ):
     """
     Generate data and benchmark the provided functions over a range of input sizes.
@@ -325,7 +362,7 @@ def run_benchmark(
 
     print("Running benchmark...")
     Ns, runtime, memory, outputs = benchmark(
-        funcs, kernels, data, n_repeat=n_repeat, cutoffs=cutoffs
+        funcs, kernels, data, n_repeat=n_repeat, cutoffs=cutoffs, use_gpu_profiler=use_gpu_profiler,
     )
     return Ns, runtime, memory, outputs
 

@@ -108,13 +108,14 @@ if __name__ == "__main__":
         # jax.config.update("jax_platform_name", "gpu")
         print("Running benchmark on GPU")
         machine = 'gpu'
-        cutoffs={"GP": 1e4, "SSM": 1e4, "QSM": 1e4, "pSSM": 1e7}
+        cutoffs={"GP": 1e3, "SSM": 1e3, "QSM": 1e3, "pSSM": 1e7}
     else:
         # jax.config.update("jax_platform_name", "cpu")
         print("Running benchmark on CPU")
         machine = 'cpu'
-        cutoffs={"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 1e7}
+        cutoffs={"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 1e1}
 
+    ################### Kernel parameters ######################
     yerr = 0.3
 
     S = 2.36
@@ -125,14 +126,14 @@ if __name__ == "__main__":
     ssm_kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
     gp_kernel = testgp.SHOKernel(w=w, Q=Q, S=S)
     true_kernel = qsm_kernel
-
+    ################# Which to benchmark ##################
     kernels = {
         "SSM": ssm_kernel,
         "QSM": qsm_kernel,
         "GP": gp_kernel,
         "pSSM": ssm_kernel,
     }
-
+    ############################################################
     if args.func == "llh":
         print("Benchmarking likelihood...")
         funcs = {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh}
@@ -146,6 +147,7 @@ if __name__ == "__main__":
             logN_min=1,
             logN_max=7,
             cutoffs=cutoffs,
+            use_gpu_profiler=args.gpu,
         )
     elif args.func == "cond":
         print("Benchmarking condition...")
@@ -160,6 +162,7 @@ if __name__ == "__main__":
             logN_min=1,
             logN_max=7,
             cutoffs=cutoffs,
+            use_gpu_profiler=args.gpu,
         )
     else:
         raise ValueError("Argument must be 'llh' or 'cond'")
