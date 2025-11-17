@@ -54,9 +54,9 @@ def ss_cond(data, kernel):
     t_train = data[0,:]
     y_train = data[1,:]
     yerr    = data[2,:]
-    gp_ss =smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
     llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.loc, condGP_ss.variance
+    return jnp.array([condGP_ss.loc, condGP_ss.variance])
 
 def qs_cond(data, kernel):
     t_train = data[0,:]
@@ -64,7 +64,7 @@ def qs_cond(data, kernel):
     yerr    = data[2,:]
     gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
     llh, condGP_qs = gp_qs.condition(y_train)
-    return condGP_qs.loc, condGP_qs.variance
+    return jnp.array([condGP_qs.loc, condGP_qs.variance])
 
 def gp_cond(data, kernel):
     t_train = data[0,:]
@@ -72,7 +72,7 @@ def gp_cond(data, kernel):
     yerr    = data[2,:]
     gp_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
     llh, condGP_gp = gp_gp.condition(y_train)
-    return condGP_gp.loc, condGP_gp.variance    
+    return jnp.array([condGP_gp.loc, condGP_gp.variance])
 
 def pss_cond(data, kernel):
     t_train = data[0,:]
@@ -81,7 +81,7 @@ def pss_cond(data, kernel):
     gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2,
                                     solver=smolgp.solvers.ParallelStateSpaceSolver)
     llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.loc, condGP_ss.variance    
+    return jnp.array([condGP_ss.loc, condGP_ss.variance])    
 
 
 
@@ -96,33 +96,31 @@ if __name__ == '__main__':
     Q=7.63
     sigma = jnp.sqrt(S*w*Q)
     qsm_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
-    ssm_kernel =smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
-    gp_kernel = gpkernels.OscillationKernel()
+    ssm_kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
+    # gp_kernel  = gpkernels.OscillationKernel()
+    gp_kernel  = gpkernels.SHOKernel(w=w, Q=Q, S=sigma)
     true_kernel = qsm_kernel
 
     kernels = {'SSM': ssm_kernel, 'QSM': qsm_kernel, 'GP': gp_kernel, 'pSSM': ssm_kernel}
 
     if which=='llh':
         print('Benchmarking likelihood...')
-        llh_filename = 'results/llh_benchmark.pkl'
+        out_filename = 'results/llh_benchmark.pkl'
         funcs = {'SSM': ss_llh, 'QSM': qs_llh, 'GP': gp_llh, 'pSSM': pss_llh}    
-        Ns, runtime_llh, memory_llh, outputs = run_benchmark(true_kernel, funcs, kernels, yerr=yerr,
-                                                            n_repeat=5, N_N=20, logN_min=1, logN_max=7,
-                                                            cutoffs={'GP':6e4, 'SSM':1e7, 'QSM':1e7, 'pSSM':1e7}
-                                                            )
-        save_benchmark_data(llh_filename, Ns, runtime_llh, memory_llh, outputs)
-        print('Wrote results to', llh_filename)
-
+        Ns, runtime, memory, outputs = run_benchmark(true_kernel, funcs, kernels, yerr=yerr,
+                                                     n_repeat=5, N_N=20, logN_min=1, logN_max=7,
+                                                     cutoffs={'GP':6e4, 'SSM':1e7, 'QSM':1e7, 'pSSM':1e7}
+                                                     )
     elif which=='cond':
         print('Benchmarking condition...')
-        cond_filename = 'results/cond_benchmark.pkl'
+        out_filename = 'results/cond_benchmark.pkl'
         funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond, 'pSSM': pss_cond}    
-        Ns, runtime_cond, memory_cond, outputs = run_benchmark(true_kernel, funcs, kernels, yerr=yerr,
-                                                               n_repeat=5, N_N=10, logN_min=1, logN_max=7,
-                                                               cutoffs={'GP':3e4, 'SSM':1e6, 'QSM':1e6, 'pSSM':1e6})
-        
-        save_benchmark_data(cond_filename, Ns, runtime_cond, memory_cond, outputs)
-        print('Wrote results to', cond_filename)
-
+        Ns, runtime, memory, outputs = run_benchmark(true_kernel, funcs, kernels, yerr=yerr,
+                                                     n_repeat=3, N_N=10, logN_min=1, logN_max=7,
+                                                     cutoffs={'GP':3e4, 'SSM':1e6, 'QSM':1e6, 'pSSM':1e6}
+                                                     )
     else:
         raise ValueError("Argument must be 'llh' or 'cond'")
+
+    print('Wrote results to', out_filename)
+    save_benchmark_data(out_filename, Ns, runtime, memory, outputs)
