@@ -1,5 +1,8 @@
 import logging
 
+# Suppress only JAX XLA bridge warnings
+logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
+
 import argparse
 import jax
 import jax.numpy as jnp
@@ -10,9 +13,6 @@ from benchmark import *
 
 import sys
 import kernels as testgp
-
-# Suppress only JAX XLA bridge warnings
-logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -103,13 +103,17 @@ if __name__ == "__main__":
     parser.add_argument("--gpu", action="store_true", help="Run on GPU (default: CPU).")
     args = parser.parse_args()
 
-    # Set device
+    # # Set device
     if args.gpu:
-        jax.config.update("jax_platform_name", "gpu")
+        # jax.config.update("jax_platform_name", "gpu")
         print("Running benchmark on GPU")
+        machine = 'gpu'
+        cutoffs={"GP": 1e4, "SSM": 1e4, "QSM": 1e4, "pSSM": 1e7}
     else:
-        jax.config.update("jax_platform_name", "cpu")
+        # jax.config.update("jax_platform_name", "cpu")
         print("Running benchmark on CPU")
+        machine = 'cpu'
+        cutoffs={"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 1e7}
 
     yerr = 0.3
 
@@ -131,23 +135,20 @@ if __name__ == "__main__":
 
     if args.func == "llh":
         print("Benchmarking likelihood...")
-        out_filename = "results/llh_benchmark.pkl"
         funcs = {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh}
         Ns, runtime, memory, outputs = run_benchmark(
             true_kernel,
             funcs,
             kernels,
             yerr=yerr,
-            n_repeat=3,
-            N_N=13,
+            n_repeat=5,
+            N_N=17,
             logN_min=1,
             logN_max=7,
-            cutoffs={"GP": 1e5, "SSM": 1e6, "QSM": 1e6, "pSSM": 1e6},  # testing
-            # cutoffs={"GP": 1e5, "SSM": 1e7, "QSM": 1e7, "pSSM": 1e7}, # for full run
+            cutoffs=cutoffs,
         )
     elif args.func == "cond":
         print("Benchmarking condition...")
-        out_filename = "results/cond_benchmark.pkl"
         funcs = {"SSM": ss_cond, "QSM": qs_cond, "GP": gp_cond, "pSSM": pss_cond}
         Ns, runtime, memory, outputs = run_benchmark(
             true_kernel,
@@ -155,13 +156,14 @@ if __name__ == "__main__":
             kernels,
             yerr=yerr,
             n_repeat=5,
-            N_N=10,
+            N_N=17,
             logN_min=1,
             logN_max=7,
-            cutoffs={"GP": 3e4, "SSM": 1e6, "QSM": 1e6, "pSSM": 1e6},
+            cutoffs=cutoffs,
         )
     else:
         raise ValueError("Argument must be 'llh' or 'cond'")
 
+    out_filename = f"results/{machine}_{args.func}_benchmark.pkl"
     print("Wrote results to", out_filename)
     save_benchmark_data(out_filename, Ns, runtime, memory, outputs)

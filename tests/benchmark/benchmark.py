@@ -1,11 +1,6 @@
 import time
 import numpy as np
 
-import jax
-import jax.numpy as jnp
-import tinygp
-import smolgp
-
 # import matplotlib as mpl
 import matplotlib.pyplot as plt
 
@@ -16,6 +11,11 @@ import multiprocessing as mp
 
 mp.set_start_method("spawn", force=True)
 
+import jax
+import jax.numpy as jnp
+import tinygp
+import smolgp
+
 key = jax.random.PRNGKey(0)
 
 __all__ = [
@@ -24,11 +24,16 @@ __all__ = [
     "run_benchmark",
     "plot_benchmark",
     "generate_data",
+    "symlogticks",
     "colors",
 ]
 
 ## Colors for benchmarking plots
-colors = {"SSM": "#1f77b4", "QSM": "#ff7f0e", "GP": "#2ca02c", "pSSM": "#6A0E95"}
+colors = {"SSM" : "#1f77b4",
+          "QSM" : "#ff7f0e", 
+          "GP"  : "#2ca02c", 
+          "pSSM": "#6A0E95"
+          }
 
 
 def generate_data(N, kernel, yerr=0.3):
@@ -39,25 +44,24 @@ def generate_data(N, kernel, yerr=0.3):
     return t_train, y_train
 
 
-def save_benchmark_data(filename, Ns, runtime_llh, memory_llh, outputs):
+def save_benchmark_data(filename, Ns, runtime, memory, outputs):
     import pickle
 
     data = {
         "Ns": Ns,
-        "runtime_llh": runtime_llh,
-        "memory_llh": memory_llh,
+        "runtime": runtime,
+        "memory": memory,
         "outputs": outputs,
     }
     with open(filename, "wb") as f:
         pickle.dump(data, f)
-
 
 def load_benchmark_data(filename):
     import pickle
 
     with open(filename, "rb") as f:
         data = pickle.load(f)
-    return data["Ns"], data["runtime_llh"], data["memory_llh"], data["outputs"]
+    return data["Ns"], data["runtime"], data["memory"], data["outputs"]
 
 
 def scale_nans(runtime_array, Ns, power=1):
@@ -75,6 +79,13 @@ def scale_nans(runtime_array, Ns, power=1):
 
     return runtime_array
 
+def symlogticks(vmin, vmax, linthresh=1e-16, spacing=1):
+    """Generate ticks for a symlog axis."""
+    thresh = int(jnp.log10(linthresh))
+    negticks = -10.**np.arange(thresh, vmin, spacing)[::-1]
+    posticks = 10.**jnp.arange(thresh, vmax, spacing)
+    return jnp.concatenate([negticks, posticks])
+
 
 def plot_benchmark(
     Ns,
@@ -83,10 +94,14 @@ def plot_benchmark(
     savefig=None,
     scale=True,
     powers={"SSM": 1, "QSM": 1, "GP": 3, "pSSM": 1},
+    labels=None,
 ):
     """
     runtimes should be a dict with values (mean, std) for each N
     """
+    if labels is None:
+        labels = {name: name for name in runtimes}
+
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True)
 
@@ -97,7 +112,7 @@ def plot_benchmark(
         if scale:
             scaled = scale_nans(runtime_array, Ns, power=powers[name])
             ax.errorbar(Ns, scaled[:, 0], scaled[:, 1], c=colors[name], ls=":")
-        ax.errorbar(Ns, mean_runtime, std_runtime, c=colors[name], fmt=".-", label=name)
+        ax.errorbar(Ns, mean_runtime, std_runtime, c=colors[name], fmt=".-", label=labels[name])
 
     ax.legend()
     ax.set(
@@ -108,6 +123,7 @@ def plot_benchmark(
     ax.grid(alpha=0.5, zorder=-10)
     ax.grid(alpha=0.5, zorder=-10, which="minor", axis="x")
     # ax.set_ylim(top=jnp.nanmax(runtime_ss[:,0])*1e3)
+    
     if savefig:
         plt.savefig(savefig, dpi=300, bbox_inches="tight")
     return ax
@@ -150,8 +166,7 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
                 peak_rss = max(peak_rss, m)
                 mem_t.append(time.perf_counter() - memt_start)
                 mem_val.append(m)
-                dt = float(1e-5 * jnp.sqrt(args[0].shape[0] / 10))  # scale with N
-                # dt = 1e-5
+                dt = 1e-5
                 time.sleep(dt)
             except psutil.NoSuchProcess:
                 break
@@ -273,6 +288,15 @@ def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}):
     return Ns, runtime, memory, outputs
 
 
+def get_data(true_kernel, yerr=0.3, N=10, save=True):
+
+    # Generate data of length N
+    t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
+    data = jnp.array([t_train, y_train, jnp.full_like(t_train, yerr)])
+    if save:
+        jnp.savez(f'data/{N}.npz', data) 
+    return data
+
 def run_benchmark(
     true_kernel,
     funcs,
@@ -282,7 +306,7 @@ def run_benchmark(
     logN_min=1,
     logN_max=7,
     n_repeat=3,
-    cutoffs={},
+    cutoffs={}
 ):
     """
     Generate data and benchmark the provided functions over a range of input sizes.
@@ -292,8 +316,12 @@ def run_benchmark(
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     data = []
     for N in Ns:
-        t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
-        data.append(jnp.array([t_train, y_train, jnp.full_like(t_train, yerr)]))
+        datafile = f'data/{N}.npz'
+        if os.path.exists(datafile):
+            d = jnp.load(datafile)['arr_0']
+        else:
+            d = get_data(true_kernel, yerr=yerr, N=N, save=True)
+        data.append(d)
 
     print("Running benchmark...")
     Ns, runtime, memory, outputs = benchmark(
