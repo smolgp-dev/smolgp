@@ -238,38 +238,56 @@ def benchmark_llh(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr
 
 #################### CONDITION BENCHMARK ####################
 def benchmark_condition(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3, **kwargs):
+    # def block(out):
+    #     llh, condGP = out
+    #     m=condGP.loc.block_until_ready() 
+    #     P=condGP.variance.block_until_ready()
+    #     # l=llh.block_until_ready()
+    #     return m, P
     def block(out):
-        llh, condGP = out
-        m=condGP.loc.block_until_ready() 
-        P=condGP.variance.block_until_ready()
-        # l=llh.block_until_ready()
+        m, P = out
+        m.block_until_ready() 
+        P.block_until_ready()
         return m, P
 
+    @jax.jit
     def ss_cond(data):
-        t_train, y_train, yerr = data
-        @jax.jit
-        def cond(t_train):
-            gp_ss =smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
-            return gp_ss.condition(y_train)
-        return cond(t_train)
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_ss =smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
+        llh, condGP_ss = gp_ss.condition(y_train)
+        return condGP_ss.loc, condGP_ss.variance
     
+    @jax.jit
     def qs_cond(data):
-        t_train, y_train, yerr = data
-        @jax.jit
-        def cond(t_train):
-            gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
-            return gp_qs.condition(y_train)
-        return cond(t_train)
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
+        llh, condGP_qs = gp_qs.condition(y_train)
+        return condGP_qs.loc, condGP_qs.variance
     
+    @jax.jit
     def gp_cond(data):
-        t_train, y_train, yerr = data
-        @jax.jit
-        def cond(t_train):
-            gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
-            return gp_gp.condition(y_train)
-        return cond(t_train)
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
+        llh, condGP_gp = gp_gp.condition(y_train)
+        return condGP_gp.loc, condGP_gp.variance    
     
-    funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond}
+    @jax.jit
+    def pss_cond(data):
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2,
+                                       solver=smolgp.solvers.ParallelStateSpaceSolver)
+        llh, condGP_ss = gp_ss.condition(y_train)
+        return condGP_ss.loc, condGP_ss.variance    
+    
+    funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond, 'pSSM': pss_cond}
         
     true_kernel = qsm_kernel if true_kernel is None else true_kernel
     return run_benchmark(true_kernel, funcs, yerr=yerr, block=block, **kwargs)

@@ -50,7 +50,7 @@ elif which=='cond':
                                                                 true_kernel=qsSHO, yerr=yerr,
                                                                 N_N=10, n_repeat=5, 
                                                                 logN_min=1, logN_max=7,
-                                                                cutoffs={'GP':3e4, 'SSM':1e7, 'QSM':1e7, 'pSSM':1e7})
+                                                                cutoffs={'GP':3e4, 'SSM':1e6, 'QSM':1e6, 'pSSM':1e6})
     
     save_benchmark_data(cond_filename, Ns, runtime_cond, memory_cond, outputs)
     print('Wrote results to', cond_filename)
