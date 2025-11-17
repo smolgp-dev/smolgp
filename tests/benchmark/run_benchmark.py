@@ -1,12 +1,8 @@
 import logging
 
-# Suppress only JAX XLA bridge warnings
-logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
-
+import argparse
 import jax
 import jax.numpy as jnp
-
-jax.config.update("jax_enable_x64", True)
 
 import tinygp
 import smolgp
@@ -15,7 +11,11 @@ from benchmark import *
 import sys
 import kernels as testgp
 
+# Suppress only JAX XLA bridge warnings
+logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
+
 key = jax.random.PRNGKey(0)
+jax.config.update("jax_enable_x64", True)
 
 
 #################### LIKELIHOOD FUNCTIONS FOR BENCHMARK ####################
@@ -96,8 +96,22 @@ def pss_cond(data, kernel):
 
 ######################################## MAIN ########################################
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Benchmark smolgp/tinygp")
+    parser.add_argument(
+        "func", type=str, help="Function to benchmark: 'llh' or 'cond'."
+    )
+    parser.add_argument("--gpu", action="store_true", help="Run on GPU (default: CPU).")
+    args = parser.parse_args()
+
+    # Set device
+    if args.gpu:
+        jax.config.update("jax_platform_name", "gpu")
+        print("Running benchmark on GPU")
+    else:
+        jax.config.update("jax_platform_name", "cpu")
+        print("Running benchmark on CPU")
+
     yerr = 0.3
-    which = sys.argv[1]
 
     S = 2.36
     w = 0.0195
@@ -115,7 +129,7 @@ if __name__ == "__main__":
         "pSSM": ssm_kernel,
     }
 
-    if which == "llh":
+    if args.func == "llh":
         print("Benchmarking likelihood...")
         out_filename = "results/llh_benchmark.pkl"
         funcs = {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh}
@@ -124,19 +138,14 @@ if __name__ == "__main__":
             funcs,
             kernels,
             yerr=yerr,
-            n_repeat=5,
+            n_repeat=3,
             N_N=13,
             logN_min=1,
             logN_max=7,
-            cutoffs={
-                "GP": 3e4,
-                "SSM": 1e6,
-                "QSM": 1e6,
-                "pSSM": 1e6,
-            },  # testing purposes
+            cutoffs={"GP": 1e5, "SSM": 1e6, "QSM": 1e6, "pSSM": 1e6},  # testing
             # cutoffs={"GP": 1e5, "SSM": 1e7, "QSM": 1e7, "pSSM": 1e7}, # for full run
         )
-    elif which == "cond":
+    elif args.func == "cond":
         print("Benchmarking condition...")
         out_filename = "results/cond_benchmark.pkl"
         funcs = {"SSM": ss_cond, "QSM": qs_cond, "GP": gp_cond, "pSSM": pss_cond}

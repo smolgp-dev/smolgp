@@ -27,7 +27,16 @@ dev = [
     "astropy>=6.1.7",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.6",
-    "tinygp",
+]
+cuda12 = ["jax[cuda12]"]
+cuda13 = ["jax[cuda13]"]
+
+[tool.uv]
+conflicts = [
+    [
+    {group = "cuda12"}, 
+    {group = "cuda13"}
+    ]
 ]
 
 [project.urls]

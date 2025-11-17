@@ -136,14 +136,23 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
 
     # Peak memory tracking via polling
     peak_rss = 0
+    mem_t = []
+    mem_val = []
+    memt_start = time.perf_counter()
 
     def track_memory():
         nonlocal peak_rss
+        nonlocal mem_t
+        nonlocal mem_val
         while True:
             try:
                 m = proc.memory_info().rss
                 peak_rss = max(peak_rss, m)
-                time.sleep(0.01)
+                mem_t.append(time.perf_counter() - memt_start)
+                mem_val.append(m)
+                dt = float(1e-5 * jnp.sqrt(args[0].shape[0] / 10))  # scale with N
+                # dt = 1e-5
+                time.sleep(dt)
             except psutil.NoSuchProcess:
                 break
 
@@ -152,6 +161,8 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
     t = threading.Thread(target=track_memory)
     t.daemon = True
     t.start()
+    time.sleep(0.1)  # give thread time to measure baseline memory
+    baseline_mem = np.mean(mem_val)
 
     # Time the function with JAX block_until_ready
     start = time.perf_counter()
@@ -160,12 +171,13 @@ def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
         out.block_until_ready()
     end = time.perf_counter()
 
+    time.sleep(0.1)  # give thread time to measure final memory
     # Return both result (pickled) and stats
     return_pipe.send(
         {
             "output": pickle.dumps(out),
             "runtime": end - start,
-            "peak_mem": peak_rss,
+            "peak_mem": peak_rss - baseline_mem,
         }
     )
     return_pipe.close()
