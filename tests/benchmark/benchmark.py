@@ -3,7 +3,7 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
-import tracemalloc
+# import tracemalloc
 
 import tinygp
 import smolgp
@@ -27,9 +27,6 @@ def generate_data(N, kernel, yerr=0.3):
     y_true  = true_gp.sample(key=jax.random.PRNGKey(32)) 
     y_train = y_true + yerr * jax.random.normal(key, shape=(N,))
     return t_train, y_train
-
-def default_block(y):
-    return jnp.array(y).block_until_ready() 
 
 def save_benchmark_data(filename, Ns, runtime_llh, memory_llh, outputs):
     import pickle
@@ -89,37 +86,97 @@ def plot_benchmark(Ns, runtimes, ax=None, savefig=None, scale=True, powers={'SSM
     return ax
 
 
-def benchmark_func(func, x, n_repeat=10, block_until_ready=True, block_output=default_block, trace_memory=False, **kwargs):
+import pickle
+import os
+import psutil
+import multiprocessing as mp
+mp.set_start_method("spawn", force=True)
+
+def _runner(fn_bytes, kernel_bytes, args_bytes, return_pipe):
     """
-    Benchmark the runtime of a function `func` with input `x`.
+    Helper function to run a function in an isolated subprocess for memory profiling.
     """
+    # Unpickle function and arguments inside isolated subprocess
+    fn = pickle.loads(fn_bytes)
+    kernel = pickle.loads(kernel_bytes)
+    args = pickle.loads(args_bytes)
+
+    proc = psutil.Process(os.getpid())
+
+    # Create the jitted function here
+    @jax.jit
+    def fn_jit(*args):
+        return fn(*args, kernel=kernel)
+
     # Warm up (JIT compilation)
-    if block_until_ready:
-        out = func(x, **kwargs)
-        block_output(out)
-    # Timing & memory tracing
+    out = fn_jit(*args)
+    if hasattr(out, "block_until_ready"):
+        out.block_until_ready()
+
+    # Peak memory tracking via polling
+    peak_rss = 0
+    baseline_rss = proc.memory_info().rss
+    def track_memory():
+        nonlocal peak_rss
+        while True:
+            try:
+                m = proc.memory_info().rss
+                peak_rss = max(peak_rss, m)
+                time.sleep(0.01)
+            except psutil.NoSuchProcess:
+                break
+
+    import threading
+    t = threading.Thread(target=track_memory)
+    t.daemon = True
+    t.start()
+
+    # Time the function with JAX block_until_ready
+    start = time.perf_counter()
+    out = fn_jit(*args)
+    if hasattr(out, "block_until_ready"):
+        out.block_until_ready()
+    end = time.perf_counter()
+
+    # Return both result (pickled) and stats
+    return_pipe.send({
+        "output": pickle.dumps(out),
+        "runtime": end - start,
+        "peak_mem": peak_rss,
+    })
+    return_pipe.close()
+
+
+def profile_jax_function(fn, kernel, *args, n_repeat=5):
+    """
+    JAX profiler for time benchmarking and memory tracking using isolated subprocesses.
+    """
+    fn_bytes = pickle.dumps(fn)
+    kernel_bytes = pickle.dumps(kernel)
+    args_bytes = pickle.dumps(args)
+
     runtimes = []
-    mem_usages = []
+    peaks = []
+    output = None
+
     for _ in range(n_repeat):
-        if trace_memory:
-            tracemalloc.start()
-        start = time.perf_counter()
-        y = func(x, **kwargs)
-        if block_until_ready:
-            block_output(y) # ensure computation finished
-        end = time.perf_counter()
-        runtimes.append(end - start)
-        if trace_memory:
-            current, peak = tracemalloc.get_traced_memory()
-            tracemalloc.stop()
-            mem_usages.append(peak)
+        parent_conn, child_conn = mp.Pipe()
+        p = mp.Process(
+            target=_runner,
+            args=(fn_bytes, kernel_bytes, args_bytes, child_conn)
+        )
+        p.start()
+        result = parent_conn.recv()
+        p.join()
 
-    if trace_memory:
-        return (np.mean(runtimes), np.std(runtimes)), (np.mean(mem_usages), np.std(mem_usages)), y
-    else:
-        return np.mean(runtimes), np.std(runtimes), y
+        runtimes.append(result["runtime"])
+        peaks.append(result["peak_mem"])
+        output = pickle.loads(result["output"])
 
-def benchmark(funcs, data, n_repeat=3, cutoffs={}, trace_memory=True, block=default_block):
+    return (np.mean(runtimes), np.std(runtimes)), (np.mean(peaks), np.std(peaks)), output
+
+
+def benchmark(funcs, kernels, data, n_repeat=3, cutoffs={}):
     """
     Given some (jitted) functions, benchmark their runtimes over a range of input sizes.
 
@@ -151,15 +208,16 @@ def benchmark(funcs, data, n_repeat=3, cutoffs={}, trace_memory=True, block=defa
         print(f'  ({n+1}/{len(data)}):  N = {N}')
         for name in funcs:
             func = funcs[name]
+            kernel = kernels[name]
             cutoff = cutoffs.get(name, 3e4)
 
             if N <= cutoff:
-                time, mem, val = benchmark_func(func, data[n], n_repeat=n_repeat, trace_memory=trace_memory, block_output=block)
-                basestr = f'    {name}: time = {time[0]:.4f} ± {time[1]:.4f} s'
-                memstr = f', mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}' if trace_memory else ''
+                t, mem, val = profile_jax_function(func, kernel, data[n], n_repeat=n_repeat)
+                basestr = f'    {name}: time = {t[0]:.4f} ± {t[1]:.4f} s'
+                memstr = f', mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}'
                 print(basestr + memstr)
             else:
-                time, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
+                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
                 print(f'    {name}: Skipped (N={N} > cutoff={cutoff})')
                 
             if name not in runtime:
@@ -167,16 +225,16 @@ def benchmark(funcs, data, n_repeat=3, cutoffs={}, trace_memory=True, block=defa
                 memory[name]  = []
                 outputs[name] = []
 
-            runtime[name].append(time)
+            runtime[name].append(t)
             memory[name].append(mem)
             outputs[name].append(val)
 
     return Ns, runtime, memory, outputs
 
 
-def run_benchmark(true_kernel, funcs, yerr=0.3,
-                  N_N=10, logN_min=1, logN_max=7, n_repeat=3, block=default_block,
-                  cutoffs={}, trace_memory=True):
+def run_benchmark(true_kernel, funcs, kernels, yerr=0.3,
+                  N_N=10, logN_min=1, logN_max=7, n_repeat=3,
+                  cutoffs={}):
     """
     Generate data and benchmark the provided functions over a range of input sizes.
     """
@@ -189,114 +247,16 @@ def run_benchmark(true_kernel, funcs, yerr=0.3,
         data.append(jnp.array([t_train, y_train, jnp.full_like(t_train, yerr)]))
 
     print('Running benchmark...')
-    Ns, runtime, memory, outputs = benchmark(funcs, data, n_repeat=n_repeat, cutoffs=cutoffs, trace_memory=trace_memory, block=block)
+    Ns, runtime, memory, outputs = benchmark(funcs, kernels, data, n_repeat=n_repeat, cutoffs=cutoffs)
     return Ns, runtime, memory, outputs
 
 
-#################### LIKELIHOOD CONDITION ####################
-def benchmark_llh(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3, **kwargs):
-        
-    block = default_block
-    
-    @jax.jit
-    def ss_llh(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
-        return gp_ss.log_probability(y_train)
-    
-    @jax.jit
-    def qs_llh(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
-        return gp_qs.log_probability(y_train)
-    
-    @jax.jit
-    def gp_llh(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
-        return gp_gp.log_probability(y_train)
 
-    @jax.jit
-    def pss_llh(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2,
-                                       solver=smolgp.solvers.ParallelStateSpaceSolver)
-        return gp_ss.log_probability(y_train)
-    
-    funcs = {'SSM': ss_llh, 'QSM': qs_llh, 'GP': gp_llh, 'pSSM': pss_llh}
-    
-    true_kernel = qsm_kernel if true_kernel is None else true_kernel
-    return run_benchmark(true_kernel, funcs, yerr=yerr, block=block, **kwargs)
-
-#################### CONDITION BENCHMARK ####################
-def benchmark_condition(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3, **kwargs):
-    # def block(out):
-    #     llh, condGP = out
-    #     m=condGP.loc.block_until_ready() 
-    #     P=condGP.variance.block_until_ready()
-    #     # l=llh.block_until_ready()
-    #     return m, P
-    def block(out):
-        m, P = out
-        m.block_until_ready() 
-        P.block_until_ready()
-        return m, P
-
-    @jax.jit
-    def ss_cond(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_ss =smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
-        llh, condGP_ss = gp_ss.condition(y_train)
-        return condGP_ss.loc, condGP_ss.variance
-    
-    @jax.jit
-    def qs_cond(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
-        llh, condGP_qs = gp_qs.condition(y_train)
-        return condGP_qs.loc, condGP_qs.variance
-    
-    @jax.jit
-    def gp_cond(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
-        llh, condGP_gp = gp_gp.condition(y_train)
-        return condGP_gp.loc, condGP_gp.variance    
-    
-    @jax.jit
-    def pss_cond(data):
-        t_train = data[0,:]
-        y_train = data[1,:]
-        yerr    = data[2,:]
-        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2,
-                                       solver=smolgp.solvers.ParallelStateSpaceSolver)
-        llh, condGP_ss = gp_ss.condition(y_train)
-        return condGP_ss.loc, condGP_ss.variance    
-    
-    funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond, 'pSSM': pss_cond}
-        
-    true_kernel = qsm_kernel if true_kernel is None else true_kernel
-    return run_benchmark(true_kernel, funcs, yerr=yerr, block=block, **kwargs)
-
-
+#### MOVE ALL THIS INTO RUN_BENCHMARK.PY 
 #################### PREDICT CONDITION ####################
 def benchmark_prediction(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3,
                   N_M=10, logM_min=1, logM_max=7, n_repeat=3,
-                  cutoffs={}, N=1000, trace_memory=True):
+                  cutoffs={}, N=1000):
     
     runtime = {}
     memory  = {}
@@ -340,8 +300,8 @@ def benchmark_prediction(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=Non
         
         funcs = {'SSM': ss_pred, 'QSM': qs_pred, 'GP': gp_pred}
         
-        _, time, mem, val = benchmark(funcs, [t_test], n_repeat=n_repeat, 
-                                    cutoffs=cutoffs, trace_memory=trace_memory, block=block)
+        _, t, mem, val = benchmark(funcs, [t_test], n_repeat=n_repeat, 
+                                    cutoffs=cutoffs)
         
         for name in funcs:
             if name not in runtime:
@@ -349,7 +309,7 @@ def benchmark_prediction(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=Non
                 memory[name]  = []
                 outputs[name] = []
 
-            runtime[name].append(time)
+            runtime[name].append(t)
             memory[name].append(mem)
             outputs[name].append(val)
             
