@@ -3,6 +3,7 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
+import tracemalloc
 
 import tinygp
 import smolgp
@@ -14,9 +15,11 @@ mpl.rc('font', family='sans serif', size=16)
 key = jax.random.PRNGKey(0)
 
 ## Colors for benchmarking plots
-cSSM = '#1f77b4'
-cQSM = '#ff7f0e'
-cGP  = '#2ca02c'
+colors = {'SSM':'#1f77b4',
+          'QSM':'#ff7f0e', 
+          'GP' :'#2ca02c',
+          'pSSM':"#6A0E95"
+        }
 
 def generate_data(N, kernel, yerr=0.3):
     t_train = jnp.linspace(0, 86400, N)
@@ -28,20 +31,22 @@ def generate_data(N, kernel, yerr=0.3):
 def default_block(y):
     return jnp.array(y).block_until_ready() 
 
-def benchmark(func, x, n_repeat=10, block_until_ready=True, block_output=default_block, **kwargs):
-    # Warm up (JIT compilation)
-    if block_until_ready:
-        out = func(x, **kwargs)
-        block_output(out)
-    runtimes = []
-    for _ in range(n_repeat):
-        start = time.perf_counter()
-        y = func(x, **kwargs)
-        if block_until_ready:
-            block_output(y) # ensure computation finished
-        end = time.perf_counter()
-        runtimes.append(end - start)
-    return np.mean(runtimes), np.std(runtimes), y
+def save_benchmark_data(filename, Ns, runtime_llh, memory_llh, outputs):
+    import pickle
+    data = {
+        'Ns': Ns,
+        'runtime_llh': runtime_llh,
+        'memory_llh': memory_llh,
+        'outputs': outputs,
+    }
+    with open(filename, 'wb') as f:
+        pickle.dump(data, f)
+
+def load_benchmark_data(filename):
+    import pickle
+    with open(filename, 'rb') as f:
+        data = pickle.load(f)
+    return data['Ns'], data['runtime_llh'], data['memory_llh'], data['outputs']
 
 def scale_nans(runtime_array, Ns, power=1):
     # Find the last non-nan index
@@ -56,22 +61,21 @@ def scale_nans(runtime_array, Ns, power=1):
 
     return runtime_array
 
-def plot_benchmark(Ns, runtime_ss, runtime_qs, runtime_gp, ax=None,
-                   labels=['SSM', 'QSM', 'GP'], savefig=None, powers=[1,1,3]):
-
+def plot_benchmark(Ns, runtimes, ax=None, savefig=None, scale=True, powers={'SSM':1, 'QSM':1, 'GP':3, 'pSSM':1}):
+    """
+    runtimes should be a dict with values (mean, std) for each N
+    """
     if ax is None:
         fig, ax = plt.subplots(1,1, figsize=(6,6), sharex=True)
 
-    scaled_ss = scale_nans(runtime_ss, Ns, power=powers[0])
-    scaled_qs = scale_nans(runtime_qs, Ns, power=powers[1])
-    scaled_gp = scale_nans(runtime_gp, Ns, power=powers[2])
-    ax.errorbar(Ns, scaled_ss[:,0], scaled_ss[:,1], c=cSSM, ls='--')
-    ax.errorbar(Ns, scaled_qs[:,0], scaled_qs[:,1], c=cQSM, ls='--')
-    ax.errorbar(Ns, scaled_gp[:,0], scaled_gp[:,1], c=cGP,  ls='--')
-
-    ax.errorbar(Ns, runtime_ss[:,0], runtime_ss[:,1], c=cSSM, fmt='.-', label=labels[0])
-    ax.errorbar(Ns, runtime_qs[:,0], runtime_qs[:,1], c=cQSM, fmt='.-', label=labels[1])
-    ax.errorbar(Ns, runtime_gp[:,0], runtime_gp[:,1], c=cGP,  fmt='.-', label=labels[2])
+    for name in runtimes:
+        runtime_array = jnp.array(runtimes[name])
+        mean_runtime = runtime_array[:,0]
+        std_runtime  = runtime_array[:,1]
+        if scale:
+            scaled = scale_nans(runtime_array, Ns, power=powers[name])
+            ax.errorbar(Ns, scaled[:,0], scaled[:,1], c=colors[name], ls=':')
+        ax.errorbar(Ns, mean_runtime, std_runtime, c=colors[name], fmt='.-', label=name)
 
     ax.legend();
     ax.set(xscale='log', yscale='log', xlabel='Number of data points', ylabel='Runtime [s]');
@@ -85,73 +89,155 @@ def plot_benchmark(Ns, runtime_ss, runtime_qs, runtime_gp, ax=None,
     return ax
 
 
-def benchmark_llh(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
-                  N_N=10, logN_min=1, logN_max=7, n_repeat=3,
-                  ss_cutoff=1e6, gp_cutoff=1e4, qs_cutoff=1e6):
-    
-    kernel = qsSHO if true_kernel is None else true_kernel
-    Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
-    runtime_ss = []
-    runtime_qs = []
-    runtime_gp = []
-    outputs = []
-    for N in Ns:
-        # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
-        t_train, y_train = generate_data(N, kernel)
+def benchmark_func(func, x, n_repeat=10, block_until_ready=True, block_output=default_block, trace_memory=False, **kwargs):
+    """
+    Benchmark the runtime of a function `func` with input `x`.
+    """
+    # Warm up (JIT compilation)
+    if block_until_ready:
+        out = func(x, **kwargs)
+        block_output(out)
+    # Timing & memory tracing
+    runtimes = []
+    mem_usages = []
+    for _ in range(n_repeat):
+        if trace_memory:
+            tracemalloc.start()
+        start = time.perf_counter()
+        y = func(x, **kwargs)
+        if block_until_ready:
+            block_output(y) # ensure computation finished
+        end = time.perf_counter()
+        runtimes.append(end - start)
+        if trace_memory:
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            mem_usages.append(peak)
 
-        @jax.jit
-        def ss_llh(y_train):
-            gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
-            return gp_ss.log_probability(y_train)
-        
-        @jax.jit
-        def qs_llh(y_train):
-            gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
-            return gp_qs.log_probability(y_train)
-        
-        @jax.jit
-        def gp_llh(y_train):
-            gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
-            return gp_gp.log_probability(y_train)
-        
-        ## Quasiseparable GP
-        if N <= qs_cutoff:
-            mean_qs, std_qs, val_qs = benchmark(qs_llh, y_train, n_repeat=n_repeat)
-        else:
-            mean_qs, std_qs, val_qs = np.nan, np.nan, np.nan
-        
-        ## State space GP
-        if N <= ss_cutoff:
-            mean_ss, std_ss, val_ss = benchmark(ss_llh, y_train, n_repeat=n_repeat)
-        else:
-            mean_ss, std_ss, val_ss = np.nan, np.nan, np.nan
-        
-        ## Full (dense) GP, if provided
-        if gpSHO is not None:
-            if N <= gp_cutoff:
-                mean_gp, std_gp, val_gp = benchmark(gp_llh, y_train, n_repeat=n_repeat)
+    if trace_memory:
+        return (np.mean(runtimes), np.std(runtimes)), (np.mean(mem_usages), np.std(mem_usages)), y
+    else:
+        return np.mean(runtimes), np.std(runtimes), y
+
+def benchmark(funcs, data, n_repeat=3, cutoffs={}, trace_memory=True, block=default_block):
+    """
+    Given some (jitted) functions, benchmark their runtimes over a range of input sizes.
+
+    Parameters
+    ----------
+    funcs : list of callables
+        List of functions to benchmark. Each function should take a single input array.
+    data : list of tuples
+        List of data tuples (t_train, y_train, yerr) for each input size
+
+    Returns
+    -------
+    Ns : list of input sizes
+    runtime : dict
+        Dictionary mapping function names to lists of runtimes (means and stds) for each input size.
+    memory : dict
+        Dictionary mapping function names to lists of memory usages (means and stds) for each input size.
+    outputs : dict
+        Dictionary mapping function names to lists of outputs for each input size.
+    """
+
+    runtime = {}
+    memory  = {}
+    outputs = {}
+    Ns = []
+    for n in range(len(data)):
+        N = data[n][0].shape[0]
+        Ns.append(N)
+        print(f'  ({n+1}/{len(data)}):  N = {N}')
+        for name in funcs:
+            func = funcs[name]
+            cutoff = cutoffs.get(name, 3e4)
+
+            if N <= cutoff:
+                time, mem, val = benchmark_func(func, data[n], n_repeat=n_repeat, trace_memory=trace_memory, block_output=block)
+                basestr = f'    {name}: time = {time[0]:.4f} ± {time[1]:.4f} s'
+                memstr = f', mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}' if trace_memory else ''
+                print(basestr + memstr)
             else:
-                mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
-        else:
-            mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
+                time, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
+                print(f'    {name}: Skipped (N={N} > cutoff={cutoff})')
+                
+            if name not in runtime:
+                runtime[name] = []
+                memory[name]  = []
+                outputs[name] = []
 
-        runtime_ss.append([mean_ss, std_ss])
-        runtime_qs.append([mean_qs, std_qs])
-        runtime_gp.append([mean_gp, std_gp])
-        outputs.append([val_ss, val_qs, val_gp])
+            runtime[name].append(time)
+            memory[name].append(mem)
+            outputs[name].append(val)
 
-    outputs    = jnp.array(outputs)
-    runtime_ss = jnp.array(runtime_ss)
-    runtime_qs = jnp.array(runtime_qs)
-    runtime_gp = jnp.array(runtime_gp)
-    return (Ns, outputs), (runtime_ss, runtime_qs, runtime_gp)
-
+    return Ns, runtime, memory, outputs
 
 
-def benchmark_condition(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
-                  N_N=10, logN_min=1, logN_max=7, n_repeat=3,
-                  ss_cutoff=1e6, gp_cutoff=1e4, qs_cutoff=1e6):
+def run_benchmark(true_kernel, funcs, yerr=0.3,
+                  N_N=10, logN_min=1, logN_max=7, n_repeat=3, block=default_block,
+                  cutoffs={}, trace_memory=True):
+    """
+    Generate data and benchmark the provided functions over a range of input sizes.
+    """
+    print('Generating data for benchmarking...')
+    ## Generate all data ahead of time
+    Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
+    data = []
+    for N in Ns:
+        t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
+        data.append(jnp.array([t_train, y_train, jnp.full_like(t_train, yerr)]))
+
+    print('Running benchmark...')
+    Ns, runtime, memory, outputs = benchmark(funcs, data, n_repeat=n_repeat, cutoffs=cutoffs, trace_memory=trace_memory, block=block)
+    return Ns, runtime, memory, outputs
+
+
+#################### LIKELIHOOD CONDITION ####################
+def benchmark_llh(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3, **kwargs):
+        
+    block = default_block
     
+    @jax.jit
+    def ss_llh(data):
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
+        return gp_ss.log_probability(y_train)
+    
+    @jax.jit
+    def qs_llh(data):
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
+        return gp_qs.log_probability(y_train)
+    
+    @jax.jit
+    def gp_llh(data):
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
+        return gp_gp.log_probability(y_train)
+
+    @jax.jit
+    def pss_llh(data):
+        t_train = data[0,:]
+        y_train = data[1,:]
+        yerr    = data[2,:]
+        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2,
+                                       solver=smolgp.solvers.ParallelStateSpaceSolver)
+        return gp_ss.log_probability(y_train)
+    
+    funcs = {'SSM': ss_llh, 'QSM': qs_llh, 'GP': gp_llh, 'pSSM': pss_llh}
+    
+    true_kernel = qsm_kernel if true_kernel is None else true_kernel
+    return run_benchmark(true_kernel, funcs, yerr=yerr, block=block, **kwargs)
+
+#################### CONDITION BENCHMARK ####################
+def benchmark_condition(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3, **kwargs):
     def block(out):
         llh, condGP = out
         m=condGP.loc.block_until_ready() 
@@ -159,82 +245,54 @@ def benchmark_condition(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         # l=llh.block_until_ready()
         return m, P
 
-    kernel = qsSHO if true_kernel is None else true_kernel
-    Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
-    runtime_ss = []
-    runtime_qs = []
-    runtime_gp = []
-    outputs = []
-    for N in Ns:
-        # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
-        t_train, y_train = generate_data(N, kernel)
-
+    def ss_cond(data):
+        t_train, y_train, yerr = data
         @jax.jit
-        def ss_cond(y_train):
-            gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
+        def cond(t_train):
+            gp_ss =smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
             return gp_ss.condition(y_train)
-        
-        @jax.jit
-        def qs_cond(y_train):
-            gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
-            return gp_qs.condition(y_train)
-        
-        @jax.jit
-        def gp_cond(y_train):
-            gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
-            return gp_gp.condition(y_train)
-        
-        ## Quasiseparable GP
-        if N <= qs_cutoff:
-            mean_qs, std_qs, val_qs = benchmark(qs_cond, y_train, block_output=block, n_repeat=n_repeat)
-        else:
-            mean_qs, std_qs, val_qs = np.nan, np.nan, np.nan
-        
-        ## State space GP
-        if N <= ss_cutoff:
-            mean_ss, std_ss, val_ss = benchmark(ss_cond, y_train, block_output=block, n_repeat=n_repeat)
-        else:
-            mean_ss, std_ss, val_ss = np.nan, np.nan, np.nan
-        
-        ## Full (dense) GP, if provided
-        if gpSHO is not None:
-            if N <= gp_cutoff:
-                mean_gp, std_gp, val_gp = benchmark(gp_cond, y_train, block_output=block, n_repeat=n_repeat)
-            else:
-                mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
-        else:
-            mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
-
-        runtime_ss.append([mean_ss, std_ss])
-        runtime_qs.append([mean_qs, std_qs])
-        runtime_gp.append([mean_gp, std_gp])
-        outputs.append([val_ss, val_qs, val_gp])
-
-    # outputs    = jnp.array(outputs)
-    runtime_ss = jnp.array(runtime_ss)
-    runtime_qs = jnp.array(runtime_qs)
-    runtime_gp = jnp.array(runtime_gp)
-    return (Ns, outputs), (runtime_ss, runtime_qs, runtime_gp)
-
-
-
-def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
-                  N_M=10, logM_min=1, logM_max=7, n_repeat=3,
-                  ss_cutoff=1e6, gp_cutoff=1e4, qs_cutoff=1e6,
-                  N=1000):
+        return cond(t_train)
     
+    def qs_cond(data):
+        t_train, y_train, yerr = data
+        @jax.jit
+        def cond(t_train):
+            gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
+            return gp_qs.condition(y_train)
+        return cond(t_train)
+    
+    def gp_cond(data):
+        t_train, y_train, yerr = data
+        @jax.jit
+        def cond(t_train):
+            gp_gp = tinygp.GaussianProcess(gp_kernel, t_train, diag=yerr**2)
+            return gp_gp.condition(y_train)
+        return cond(t_train)
+    
+    funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond}
+        
+    true_kernel = qsm_kernel if true_kernel is None else true_kernel
+    return run_benchmark(true_kernel, funcs, yerr=yerr, block=block, **kwargs)
+
+
+#################### PREDICT CONDITION ####################
+def benchmark_prediction(ssm_kernel, qsm_kernel, gp_kernel=None, true_kernel=None, yerr=0.3,
+                  N_M=10, logM_min=1, logM_max=7, n_repeat=3,
+                  cutoffs={}, N=1000, trace_memory=True):
+    
+    runtime = {}
+    memory  = {}
+    outputs = {}
+
     def block(out):
         mu, var = out
         m=mu.block_until_ready() 
         P=var.block_until_ready()
         return m, P
 
-    kernel = qsSHO if true_kernel is None else true_kernel
+    kernel = qsm_kernel if true_kernel is None else true_kernel
     Ms = jnp.logspace(logM_min, logM_max, N_M).astype(int)
-    runtime_ss = []
-    runtime_qs = []
-    runtime_gp = []
-    outputs = []
+    
     for M in Ms:
         # t_train, y_train = generate_data(N, yerr, baseline_minutes=900)
         t_train, y_train = generate_data(N, kernel)
@@ -243,9 +301,9 @@ def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         t_test = jnp.linspace(t_train.min()-dt, t_train.max()+dt, M)
 
         ## Prepare GP objects
-        gp_qs = tinygp.GaussianProcess(qsSHO, t_train, diag=yerr**2)
-        gp_gp = tinygp.GaussianProcess(gpSHO, t_train, diag=yerr**2)
-        gp_ss =smolgp.GaussianProcess(ssSHO, t_train, diag=yerr**2)
+        gp_qs = tinygp.GaussianProcess(qsm_kernel, t_train, diag=yerr**2)
+        gp_gp = tinygp.GaussianProcess(gp_kernel,  t_train, diag=yerr**2)
+        gp_ss = smolgp.GaussianProcess(ssm_kernel, t_train, diag=yerr**2)
         _, condGPss = gp_ss.condition(y_train)
         
         ## Only time the actual prediction part
@@ -262,34 +320,30 @@ def benchmark_prediction(ssSHO, qsSHO, gpSHO=None, true_kernel=None, yerr=0.3,
         def gp_pred(t_test):
             return gp_gp.predict(y_train, t_test, return_var=True)
         
-        ## Quasiseparable GP
-        if M <= qs_cutoff:
-            mean_qs, std_qs, val_qs = benchmark(qs_pred, t_test, block_output=block, n_repeat=n_repeat)
-        else:
-            mean_qs, std_qs, val_qs = np.nan, np.nan, np.nan
+        funcs = {'SSM': ss_pred, 'QSM': qs_pred, 'GP': gp_pred}
         
-        ## State space GP
-        if M <= ss_cutoff:
-            mean_ss, std_ss, val_ss = benchmark(ss_pred, t_test, block_output=block, n_repeat=n_repeat)
-        else:
-            mean_ss, std_ss, val_ss = np.nan, np.nan, np.nan
+        _, time, mem, val = benchmark(funcs, [t_test], n_repeat=n_repeat, 
+                                    cutoffs=cutoffs, trace_memory=trace_memory, block=block)
         
-        ## Full (dense) GP, if provided
-        if gpSHO is not None:
-            if M <= gp_cutoff:
-                mean_gp, std_gp, val_gp = benchmark(gp_pred, t_test, block_output=block, n_repeat=n_repeat)
-            else:
-                mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
-        else:
-            mean_gp, std_gp, val_gp = np.nan, np.nan, np.nan
+        for name in funcs:
+            if name not in runtime:
+                runtime[name] = []
+                memory[name]  = []
+                outputs[name] = []
 
-        runtime_ss.append([mean_ss, std_ss])
-        runtime_qs.append([mean_qs, std_qs])
-        runtime_gp.append([mean_gp, std_gp])
-        outputs.append([val_ss, val_qs, val_gp])
+            runtime[name].append(time)
+            memory[name].append(mem)
+            outputs[name].append(val)
+            
+    return Ms, runtime, memory, outputs
 
-    # outputs    = jnp.array(outputs)
-    runtime_ss = jnp.array(runtime_ss)
-    runtime_qs = jnp.array(runtime_qs)
-    runtime_gp = jnp.array(runtime_gp)
-    return (Ms, outputs), (runtime_ss, runtime_qs, runtime_gp)
+def format_bytes(n):
+    if n == 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(n)
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{size:.1f} {units[idx]}"
