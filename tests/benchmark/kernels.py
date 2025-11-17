@@ -1,7 +1,19 @@
 import jax
 import jax.numpy as jnp
-
+import equinox as eqx
 import tinygp
+
+from tinygp.kernels.base import Sum, Product
+from tinygp.kernels.quasisep import Sum as qsSum, Product as qsProduct
+
+def extract_leaf_kernels(kernel):
+    """Recursively extract all leaf kernels from a sum or product of kernels"""
+    if isinstance(kernel, (Sum, Product, qsSum, qsProduct)):
+        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
+            kernel.kernel2
+        )
+    else:
+        return [kernel]
 
 def unpack_coordinates(X1, X2):
     """
@@ -37,6 +49,52 @@ def unpack_coordinates(X1, X2):
         raise ValueError("X1 and X2 must be tuples of length 1, 2 or 3.")
     return (t1, instid1, delta1), (t2, instid2, delta2)
 
+################## Full/dense Matern-5/2 #################
+class Matern52Kernel(tinygp.kernels.Kernel):
+    amp: jax.Array | float
+    lam: jax.Array | float
+    instid: jax.Array = eqx.field(static=True)
+
+    def __init__(self, amp=None, lam=None, instid=0):
+        """
+        Matern-5/2 kernel for smooth instrumental drift.
+
+        Parameters
+        ----------
+        amp : float
+            Amplitude (m/s)
+        lam : float
+            Timescale (days)
+        instid : float
+            Instrument ID this kernel describes
+        """
+        self.instid = instid
+
+        self.amp = 1.0 if amp is None else amp
+        self.lam = 3 / 24 if lam is None else lam
+
+    def evaluate(self, X1, X2):
+        """
+        Calculate the kernel for given pair of times X1 and X2.
+
+        X1 and X2 should be a unxt.Quantity with units
+            can also be a tuple consisting of (t1, instid)
+        """
+        (t1, instid1, delta1), (t2, instid2, delta2) = unpack_coordinates(X1, X2)
+
+        # time between pairs of observations in units the kernel is defined in
+        # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
+        Delta = jnp.abs(t1 - t2)
+
+        # Matern 5/2 kernel
+        R = jnp.sqrt(5) / self.lam
+        k = jnp.exp(-R * Delta) * (1 + R * Delta + R**2 * Delta**2 / 3)
+
+        # Decorrelate different instruments
+        dij_inst = ((instid1 == self.instid) & (instid2 == self.instid)).astype(int)
+
+        return self.amp**2 * k * dij_inst
+    
 
 ################# Full (dense) SHO kernel  #################
 class SHOKernel(tinygp.kernels.Kernel):

@@ -11,7 +11,7 @@ import smolgp
 from benchmark import *
 
 import sys
-from kernels import SHOKernel, IntegratedSHOKernel
+import benchmark.kernels as testgp
 
 key = jax.random.PRNGKey(0)
 
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     sigma = jnp.sqrt(S*w*Q)
     qsm_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
     ssm_kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
-    gp_kernel  = SHOKernel(w=w, Q=Q, S=S)
+    gp_kernel  = testgp.SHOKernel(w=w, Q=Q, S=S)
     true_kernel = qsm_kernel
 
     kernels = {'SSM': ssm_kernel, 'QSM': qsm_kernel, 'GP': gp_kernel, 'pSSM': ssm_kernel}
