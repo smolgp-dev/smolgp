@@ -1034,6 +1034,26 @@ class Cosine(StateSpaceModel):
     #           default the parent class will generate w/ Pinf - A Pinf A^T
 
 
+# class ExpSquared(StateSpaceModel):
+#     r"""
+#     A state space implementation of the exponential squared
+#     (also called the radial basis function, or RBF) kernel
+
+#     .. math::
+
+#         k(\mathbf{x}_i,\,\mathbf{x}_j) = \exp(-r^2 / 2)
+
+#     where, by default,
+
+#     .. math::
+
+#         r^2 = ||(\mathbf{x}_i - \mathbf{x}_j) / \ell||_2^2
+
+#     Args:
+#         scale: The parameter :math:`\ell`.
+#     """
+
+
 class ExpSineSquared(Wrapper):
     r"""The exponential sine squared or "periodic" kernel
 
