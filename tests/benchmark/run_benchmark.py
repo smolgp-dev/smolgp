@@ -11,9 +11,7 @@ import smolgp
 from benchmark import *
 
 import sys
-sys.path.insert(0, '/mnt/home/rrubenzahl/solar/onefit/onefit/')
-import gpkernels
-from gpkernels import *
+from kernels import SHOKernel, IntegratedSHOKernel
 
 key = jax.random.PRNGKey(0)
 
@@ -97,8 +95,7 @@ if __name__ == '__main__':
     sigma = jnp.sqrt(S*w*Q)
     qsm_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
     ssm_kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
-    # gp_kernel  = gpkernels.OscillationKernel()
-    gp_kernel  = gpkernels.SHOKernel(w=w, Q=Q, S=sigma)
+    gp_kernel  = SHOKernel(w=w, Q=Q, S=S)
     true_kernel = qsm_kernel
 
     kernels = {'SSM': ssm_kernel, 'QSM': qsm_kernel, 'GP': gp_kernel, 'pSSM': ssm_kernel}
@@ -116,7 +113,7 @@ if __name__ == '__main__':
         out_filename = 'results/cond_benchmark.pkl'
         funcs = {'SSM': ss_cond, 'QSM': qs_cond, 'GP': gp_cond, 'pSSM': pss_cond}    
         Ns, runtime, memory, outputs = run_benchmark(true_kernel, funcs, kernels, yerr=yerr,
-                                                     n_repeat=3, N_N=10, logN_min=1, logN_max=7,
+                                                     n_repeat=5, N_N=10, logN_min=1, logN_max=7,
                                                      cutoffs={'GP':3e4, 'SSM':1e6, 'QSM':1e6, 'pSSM':1e6}
                                                      )
     else:
