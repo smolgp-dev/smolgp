@@ -3,10 +3,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["KalmanFilter", "kalman_filter"]
+__all__ = ["ParallelKalmanFilter", "parallel_kalman_filter"]
 
 
-def KalmanFilter(
+def ParallelKalmanFilter(
     kernel,
     X,
     y,
@@ -37,7 +37,7 @@ def KalmanFilter(
     P0 = kernel.stationary_covariance()
 
     asso_params = make_associative_params(Phi, H, Q, R, X, y, m0, P0)
-    A, b, C, eta, J = kalman_filter(asso_params)
+    A, b, C, eta, J = parallel_kalman_filter(asso_params)
     m_pred, P_pred, v, S = postprocess(
         Phi,
         H,
@@ -50,11 +50,12 @@ def KalmanFilter(
         m0,
         P0,
     )
-    return (
-        (A, b, C, eta, J),
-        (m_pred, P_pred, v, S),
-    )
-
+    # return (A, b, C, eta, J), (m_pred, P_pred, v, S)
+    m_filt, P_filt = b, C
+    if return_v_S:
+        return m_filt, P_filt, m_pred, P_pred, v, S
+    else:
+        return m_filt, P_filt, m_pred, P_pred
 
 @jax.jit
 def make_associative_params(
@@ -87,7 +88,7 @@ def make_associative_params(
         m = Phi0 @ m0
         P = Phi0 @ P0 @ Phi0.T  # Q(0,0) = 0
         S = H0 @ P @ H0.T + r0
-        S_inv = S**-1  # We might have to change this later
+        S_inv = S**-1  # TODO: We might have to change this later
         K = P @ H0.T @ S_inv
 
         A = jnp.zeros_like(Phi0)
@@ -116,7 +117,7 @@ def make_associative_params(
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
-        S_inv = S**-1
+        S_inv = S**-1 # TODO: We might have to change this later
         K = Q_dt @ Hk.T @ S_inv
 
         A = (I - K @ Hk) @ Phi_dt
@@ -143,7 +144,7 @@ def make_associative_params(
 
     return (A_all, b_all, C_all, eta_all, J_all)
 
-
+@jax.jit
 def _combine_per_pair(left, right):
     """See Eqn. 13 & 14 of Sarkka & Garcia-Fernandez (2020) for
     a the algorithm and notation.
@@ -171,7 +172,7 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def kalman_filter(asso_params):
+def parallel_kalman_filter(asso_params):
     """
     Jax implementation of the parallel Kalman filter algorithm
 

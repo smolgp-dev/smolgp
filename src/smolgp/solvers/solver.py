@@ -134,6 +134,11 @@ class StateSpaceSolver(eqx.Module):
         if not isinstance(Pinf, JAXArray):  # if multicomponent model
             # need dense version for jnp.linalg.solve in retrodict
             Pinf = Pinf.to_dense()
+        
+        # Prior mean for retrodiction
+        # mean = jnp.zeros(self.kernel.d)  # TODO: mean function of base kernel
+        # m0 = jnp.block([mean] + self.kernel.num_insts * [jnp.zeros(self.kernel.d)])
+        m0 = jnp.zeros(self.kernel.dimension)
 
         # Nearest (future) datapoint
         ## TODO: we assume X_states is sorted here; should we enforce that?
@@ -149,7 +154,6 @@ class StateSpaceSolver(eqx.Module):
         A = self.kernel.transition_matrix
         Q = self.kernel.process_noise
 
-        @jax.jit
         def kalman(k_prev, ktest):
             """
             Kalman prediction from most recent
@@ -165,7 +169,6 @@ class StateSpaceSolver(eqx.Module):
             # No Kalman update since we have no data at t_star, so we're done
             return m_star_pred, P_star_pred
 
-        @jax.jit
         def smooth(k_next, ktest, m_star_pred, P_star_pred):
             """
             RTS smooth the prediction (ktest) using
@@ -198,13 +201,11 @@ class StateSpaceSolver(eqx.Module):
 
             return m_star_hat, P_star_hat
 
-        @jax.jit
         def retrodict(ktest):
             """Reverse-extrapolate from first datapoint t_star"""
-            m_star, P_star = smooth(0, ktest, 0, Pinf)
+            m_star, P_star = smooth(0, ktest, m0, Pinf)
             return m_star, P_star
 
-        @jax.jit
         def interpolate(ktest):
             """Interpolate between nearest data points"""
 
@@ -220,13 +221,11 @@ class StateSpaceSolver(eqx.Module):
 
             return m_star_hat, P_star_hat
 
-        @jax.jit
         def extrapolate(ktest):
             """Kalman predict from from last datapoint t_star"""
             m_star, P_star = kalman(-1, ktest)
             return m_star, P_star
 
-        @jax.jit
         def predict_point(ktest):
             """
             Switch between retrodiction, interpolation, and extrapolation

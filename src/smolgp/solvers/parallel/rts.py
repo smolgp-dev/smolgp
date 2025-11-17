@@ -3,10 +3,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["RTSSmoother", "rts_smoother"]
+__all__ = ["ParallelRTSSmoother", "parallel_rts_smoother"]
 
 
-def RTSSmoother(kernel, X, kalman_results):
+def ParallelRTSSmoother(kernel, X, kalman_results):
     """
     Wrapper for Parallel RTS smoother
 
@@ -27,7 +27,7 @@ def RTSSmoother(kernel, X, kalman_results):
     Q = kernel.process_noise
 
     asso_params = make_associative_params(Phi, Q, X, mu, P)
-    E, g, L = rts_smoother(asso_params)
+    E, g, L = parallel_rts_smoother(asso_params)
     return (E, g, L)
 
 
@@ -89,7 +89,7 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def rts_smoother(asso_params):
+def parallel_rts_smoother(asso_params):
     """
     Jax implementation of the parallel RTS smoother algorithm
 

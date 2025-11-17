@@ -257,8 +257,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
             # 2. RTS smooth from next nearest data point (in future)
             m_star_hat, P_star_hat = smooth(k_next, ktest, m_star_pred, P_star_pred)
-
-            # return project(ktest, m_star_hat, P_star_hat)
             return m_star_hat, P_star_hat
 
         def extrapolate(ktest):
@@ -266,7 +264,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
             m_star, P_star = kalman(-1, ktest)
             return m_star, P_star
 
-        @jax.jit
         def predict_point(ktest):
             """
             Switch between retrodiction, interpolation, and extrapolation
