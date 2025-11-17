@@ -13,8 +13,8 @@ from tinygp.noise import Noise
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
 
-from smolgp.solvers.parallel.kalman import KalmanFilter
-from smolgp.solvers.parallel.rts import RTSSmoother
+from smolgp.solvers.parallel.kalman import ParallelKalmanFilter
+from smolgp.solvers.parallel.rts import ParallelRTSSmoother
 
 
 class ParallelStateSpaceSolver(eqx.Module):
@@ -51,12 +51,11 @@ class ParallelStateSpaceSolver(eqx.Module):
 
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        X_states = self.X  # states are at the data points here
-        return X_states, KalmanFilter(self.kernel, X_states, y, self.noise)
+        return ParallelKalmanFilter(self.kernel, self.X, y, self.noise, return_v_S=return_v_S)
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        return RTSSmoother(self.kernel, self.X, kalman_results)
+        return ParallelRTSSmoother(self.kernel, self.X, kalman_results)
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
@@ -65,21 +64,17 @@ class ParallelStateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        X_states, kalman_results = self.Kalman(y, return_v_S=return_v_S)
-        (A, b, C, eta, J), (m_predicted, P_predicted, v, S) = kalman_results
-        m_filtered, P_filtered = b, C
+        kalman_results = self.Kalman(y, return_v_S=True)
+        if return_v_S:
+            m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
+            v_S = (v, S)
+        else:
+            m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
+            v_S = None
 
         # RTS smoothing
-        rts_results = self.RTS((b, C))
+        rts_results = self.RTS((m_filtered, P_filtered))
         _, m_smoothed, P_smoothed = rts_results
-
-        # # Pack-up results and return
-        # conditioned_states = (
-        #     (m_predicted, P_predicted),
-        #     (m_filtered, P_filtered),
-        #     (m_smoothed, P_smoothed),
-        # )
-        # return X_states, conditioned_states, (v, S)
 
         # Pack-up results and return
         t_states = self.kernel.coord_to_sortable(self.X)
@@ -88,13 +83,12 @@ class ParallelStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         )
-        return t_states, conditioned_states, (v, S)
+        return t_states, conditioned_states, v_S
 
     def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
         """
         Wrapper fot jitted StateSpaceSolver._predict.
 
-        TODO: add option to parallelize over X_test
         Args:
             X_test              : The test coordinates.
             conditioned_results : The output of self.condition()
@@ -124,22 +118,34 @@ class ParallelStateSpaceSolver(eqx.Module):
         """
 
         # Unpack conditioned results
-        X_states, conditioned_states, _ = conditioned_results
+        state_coords, conditioned_states, _ = conditioned_results
         (
             (m_predicted, P_predicted),
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         ) = conditioned_states
+        t_states, instid, obsid, stateid = state_coords
+
+        # Unpack test coordinates
+        t_test = self.kernel.coord_to_sortable(X_test)
 
         N = len(self.X)  # number of data points
-        K = len(X_states)  # number of states
-        M = len(X_test)  # number of test points
+        K = len(t_states)  # number of states
+        M = len(t_test)  # number of test points
 
+        # Prior covariance for retrodiction
         Pinf = self.kernel.stationary_covariance()
+        if not isinstance(Pinf, JAXArray):  # if multicomponent model
+            Pinf = Pinf.to_dense()  # needs to be array form here
+
+        # Prior mean for retrodiction
+        # mean = jnp.zeros(self.kernel.d)  # TODO: mean function of base kernel
+        # m0 = jnp.block([mean] + self.kernel.num_insts * [jnp.zeros(self.kernel.d)])
+        m0 = jnp.zeros(self.kernel.dimension)
 
         # Nearest (future) datapoint
         ## TODO: we assume X_states is sorted here; should we enforce that?
-        k_nexts = jnp.searchsorted(X_states, X_test, side="right")
+        k_nexts = jnp.searchsorted(t_states, t_test, side="right")
 
         # Which method to use for each test point:
         past = k_nexts <= 0  # Retrodiction
@@ -204,17 +210,10 @@ class ParallelStateSpaceSolver(eqx.Module):
 
             return m_star_hat, P_star_hat
 
-        def project(ktest, m_star, P_star):
-            """Project the state vector to the observation space"""
-            Htest = H(X_test[ktest])
-            pred_mean = (Htest @ m_star.T).squeeze()
-            pred_var = (Htest @ P_star @ Htest.T).squeeze()
-            return pred_mean, pred_var
-
         def retrodict(ktest):
             """Reverse-extrapolate from first datapoint t_star"""
-            m_star, P_star = smooth(0, ktest, 0, Pinf)
-            return project(ktest, m_star, P_star)
+            m_star, P_star = smooth(0, ktest, m0, Pinf)
+            return m_star, P_star
 
         def interpolate(ktest):
             """Interpolate between nearest data points"""
@@ -229,18 +228,24 @@ class ParallelStateSpaceSolver(eqx.Module):
             # 2. RTS smooth from next nearest data point (in future)
             m_star_hat, P_star_hat = smooth(k_next, ktest, m_star_pred, P_star_pred)
 
-            return project(ktest, m_star_hat, P_star_hat)
+            return m_star_hat, P_star_hat
 
         def extrapolate(ktest):
             """Kalman predict from from last datapoint t_star"""
             m_star, P_star = predict(-1, ktest)
-            return project(ktest, m_star, P_star)
+            return m_star, P_star
+
+        def predict_point(ktest):
+            """
+            Switch between retrodiction, interpolation, and extrapolation
+            for a single test point ktest
+            """
+            return jax.lax.switch(
+                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
+            )
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
-        branches = (retrodict, interpolate, extrapolate)
-        (pred_mean, pred_var) = jax.vmap(
-            lambda ktest: jax.lax.switch(cases[ktest], branches, (ktest))
-        )(ktests)
+        (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
 
         return pred_mean, pred_var
