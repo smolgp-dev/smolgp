@@ -495,9 +495,7 @@ class GaussianProcess(eqx.Module):
             assert y is not None, (
                 "The GP has not been conditioned yet, and no data array `y` was given."
             )
-            llh, condGP = self.condition(
-                y, X_test
-            )  # condition on data, also internally predicts at X_test
+            llh, condGP = self.condition(y)
             return condGP.predict(
                 X_test,
                 return_full_state=return_full_state,
