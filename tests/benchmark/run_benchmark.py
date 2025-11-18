@@ -26,7 +26,6 @@ def ss_llh(data, kernel):
     gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
     return gp_ss.log_probability(y_train)
 
-
 def qs_llh(data, kernel):
     t_train = data[0, :]
     y_train = data[1, :]
@@ -34,14 +33,12 @@ def qs_llh(data, kernel):
     gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
     return gp_qs.log_probability(y_train)
 
-
 def gp_llh(data, kernel):
     t_train = data[0, :]
     y_train = data[1, :]
     yerr = data[2, :]
     gp_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
     return gp_gp.log_probability(y_train)
-
 
 def pss_llh(data, kernel):
     t_train = data[0, :]
@@ -52,10 +49,7 @@ def pss_llh(data, kernel):
     )
     return gp_ss.log_probability(y_train)
 
-
 #################### CONDITION FUNCTIONS FOR BENCHMARK ####################
-
-
 def ss_cond(data, kernel):
     t_train = data[0, :]
     y_train = data[1, :]
@@ -63,7 +57,6 @@ def ss_cond(data, kernel):
     gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
-
 
 def qs_cond(data, kernel):
     t_train = data[0, :]
@@ -73,7 +66,6 @@ def qs_cond(data, kernel):
     llh, condGP_qs = gp_qs.condition(y_train)
     return jnp.array([condGP_qs.loc, condGP_qs.variance])
 
-
 def gp_cond(data, kernel):
     t_train = data[0, :]
     y_train = data[1, :]
@@ -81,7 +73,6 @@ def gp_cond(data, kernel):
     gp_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
     llh, condGP_gp = gp_gp.condition(y_train)
     return jnp.array([condGP_gp.loc, condGP_gp.variance])
-
 
 def pss_cond(data, kernel):
     t_train = data[0, :]
@@ -93,6 +84,19 @@ def pss_cond(data, kernel):
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
 
+#################### PREDICTION FUNCTIONS FOR BENCHMARK ####################
+## Only time the actual prediction part
+def ss_pred(t_test, gp_ss, y_train):
+    mu, var = gp_ss.predict(t_test, y_train, return_var=True)
+    return jnp.array([mu, var])
+
+def qs_pred(t_test, gp_qs, y_train):
+    mu, var = gp_qs.predict(y_train, t_test, return_var=True)
+    return jnp.array([mu, var])
+
+def gp_pred(t_test, gp_gp, y_train):
+    mu, var = gp_gp.predict(y_train, t_test, return_var=True)
+    return jnp.array([mu, var])
 
 ######################################## MAIN ########################################
 if __name__ == "__main__":
@@ -162,6 +166,28 @@ if __name__ == "__main__":
             logN_min=1,
             logN_max=7,
             cutoffs=cutoffs,
+            use_gpu_profiler=args.gpu,
+        )
+
+    elif args.func == "pred":
+        print("Benchmarking prediction...")
+        funcs = {"SSM": ss_pred, "QSM": qs_pred, "GP": gp_pred}
+
+        # these are now cutoffs in M
+        cutoffs={"GP": 1e6, "SSM": 1e6, "QSM": 1e6}
+
+        # M is set to be 100x N inside run_pred_benchmark
+        Ns, runtime, memory, outputs = run_pred_benchmark(
+            true_kernel,
+            funcs,
+            kernels,
+            yerr=yerr,
+            n_repeat=5,
+            N_N=17,
+            logN_min=1,
+            logN_max=7,
+            maxN=1e5, # in N
+            cutoffs=cutoffs, # in M
             use_gpu_profiler=args.gpu,
         )
     else:
