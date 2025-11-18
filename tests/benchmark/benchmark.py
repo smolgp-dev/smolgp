@@ -1,3 +1,4 @@
+from abc import abstractmethod
 import time
 import numpy as np
 
@@ -56,17 +57,21 @@ def load_benchmark_data(filename, unpack=False):
     else:
         return data
 
-class CPUMemorySampler:
-    def __init__(self, interval=0.005):  # 5 ms
+class MemorySampler:
+    def __init__(self, interval=0.005):
         self.interval = interval
         self.running = False
         self.peak = 0
         self.baseline = 0
         self.proc = psutil.Process(os.getpid())
 
+    @abstractmethod
+    def fetch_memory(self):
+        raise NotImplementedError
+    
     def _sample(self):
         while self.running:
-            mem = self.proc.memory_info().rss
+            mem = self.fetch_memory()
             self.peak = max(self.peak, mem)
             time.sleep(self.interval)
 
@@ -76,40 +81,26 @@ class CPUMemorySampler:
         t.daemon = True
         t.start()
 
-    def record_baseline(self):
-        self.baseline = self.peak
+    def record_baseline(self, interval=0.1):
+        mem = []
+        for _ in range(int(interval / self.interval)):
+            mem.append(self.fetch_memory())
+            time.sleep(self.interval)
+        self.baseline = np.mean(mem)
 
     def stop(self):
         self.running = False
 
+class CPUMemorySampler(MemorySampler):
+    def fetch_memory(self):
+        return self.proc.memory_info().rss
 
-class GPUMemorySampler:
-    def __init__(self, interval=0.005):  # 5 ms
-        self.interval = interval
-        self.running = False
-        self.peak = 0
-        self.baseline = 0
-
-    def _sample(self):
-        while self.running:
-            mem = int(subprocess.check_output(
+class GPUMemorySampler(MemorySampler):
+    def fetch_memory(self):
+        return int(subprocess.check_output(
                 "nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits",
                 shell=True
             ).decode().strip())
-            self.peak = max(self.peak, mem)
-            time.sleep(self.interval)
-
-    def start(self):
-        self.running = True
-        t = threading.Thread(target=self._sample)
-        t.daemon = True
-        t.start()
-
-    def record_baseline(self):
-        self.baseline = self.peak
-
-    def stop(self):
-        self.running = False
 
 
 def memthread(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
@@ -139,9 +130,9 @@ def memthread(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
     else:
         raise ValueError(f"Unknown machine type: {machine}")
 
+    # Benchmarking/tracing
     sampler.start()
-    time.sleep(0.1)  # give thread time to measure baseline memory
-    sampler.record_baseline()
+    sampler.record_baseline(0.1)
     # Time the function with JAX block_until_ready
     start = time.perf_counter()
     out = fn_jit(dat)
