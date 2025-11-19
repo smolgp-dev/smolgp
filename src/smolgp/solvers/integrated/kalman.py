@@ -52,7 +52,7 @@ def IntegratedKalmanFilter(
         m_filtered, P_filtered, m_predicted, P_predicted, v, S = output
         return m_filtered, P_filtered, m_predicted, P_predicted
 
-
+@jax.jit
 def integrated_kalman_filter(
     A_aug, Q_aug, H_aug, R, RESET, X, y, t_states, obsid, instid, stateid, m0, P0
 ):
@@ -122,6 +122,8 @@ def integrated_kalman_filter(
     m_filtered, P_filtered, m_predicted, P_predicted, v, S = outputs
 
     # only return v,S at exposure ends (where there is data)
-    ends = jnp.argwhere(stateid == 1)
+    ends_idx = jnp.nonzero(stateid == 1, size=y.shape[0])[0]
+    v_sel = jnp.take(v, ends_idx, axis=0)
+    S_sel = jnp.take(S, ends_idx, axis=0)
 
-    return m_filtered, P_filtered, m_predicted, P_predicted, v[ends], S[ends]
+    return m_filtered, P_filtered, m_predicted, P_predicted, v_sel, S_sel
