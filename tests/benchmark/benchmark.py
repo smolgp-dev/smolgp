@@ -14,22 +14,51 @@ import jax
 import jax.numpy as jnp
 import tinygp
 import smolgp
+from funcs import unpack_data, unpack_idata
 
 key = jax.random.PRNGKey(0)
 
 __all__ = [
     "save_benchmark_data",
     "load_benchmark_data",
+    "get_data",
     "run_benchmark",
     "run_pred_benchmark",
     "generate_data",
+    "generate_integrated_data",
 ]
 
-def generate_data(N, kernel, yerr=0.3):
-    t_train = jnp.linspace(0, 86400, N)
+def generate_data(N, kernel, yerr=0.3, tmin=0, tmax=86400):
+    t_train = jnp.linspace(tmin, tmax, N)
     true_gp = tinygp.GaussianProcess(kernel, t_train)
-    y_true = true_gp.sample(key=jax.random.PRNGKey(32))
+    y_true = true_gp.sample(key=key)
     y_train = y_true + yerr * jax.random.normal(key, shape=(N,))
+    return t_train, y_train
+
+def generate_integrated_data(N, kernel, texp=180, yerr=0.3, readout=40):
+    # Generate true GP over baseline
+    cadence = texp + readout
+    tmin = 0
+    tmax = N*cadence
+    buffer = 0.1*(tmax-tmin)
+    t = jnp.arange(tmin-buffer, tmax+buffer, 1)
+    true_gp = tinygp.GaussianProcess(kernel, t)
+    y = true_gp.sample(key=key) 
+
+    # Generate synthetic observations
+    @jax.jit
+    def make_exposure(tmid, texp):
+        t_in_exp = jnp.linspace(tmid-texp/2, tmid+texp/2, 50)
+         # quickly slice region of interest
+        idx = jnp.searchsorted(t, t_in_exp, side="right")
+        idx = jnp.clip(idx, 0, t.size-2)
+        # just interpolate that region
+        y_in_exp = jnp.interp(t_in_exp, t[idx], y[idx])
+        return jnp.mean(y_in_exp)
+    texp_train = jnp.full(N, texp) # constant exposure time
+    t_train = jnp.arange(tmin, tmax, cadence)
+    y_true = jax.vmap(make_exposure)(t_train, texp_train)
+    y_train = y_true + yerr * jax.random.normal(key, shape=(len(t_train),))
     return t_train, y_train
 
 def save_benchmark_data(filename, Ns, runtime, memory, outputs):
@@ -296,13 +325,24 @@ def benchmark(funcs, data, objs, *args, n_repeat=3, cutoffs={}, use_gpu_profiler
     return Ns, runtime, memory, outputs
 
 
-def get_data(true_kernel, yerr=0.3, N=10, save=True):
+def get_data(true_kernel, N, yerr=0.3, exposure_quantities=None, save=True):
 
     # Generate data of length N
-    t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
-    data = jnp.array([t_train, y_train, jnp.full_like(t_train, yerr)])
+    if exposure_quantities:
+        texp, readout = exposure_quantities
+        t_train, y_train = generate_integrated_data(N, true_kernel, texp=texp, readout=readout, yerr=yerr)
+        texp_train = jnp.full_like(t_train, texp)
+        yerr_train = jnp.full_like(t_train, yerr)
+        instid = jnp.full_like(t_train, 0)
+        data = jnp.array([t_train, y_train, yerr_train, texp_train, instid])
+        savename = f'data/{N}_int.npz'
+    else:
+        t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
+        yerr_train = jnp.full_like(t_train, yerr)
+        data = jnp.array([t_train, y_train, yerr_train])
+        savename = f'data/{N}.npz'
     if save:
-        jnp.savez(f'data/{N}.npz', data) 
+        jnp.savez(savename, data) 
     return data
 
 def run_benchmark(
@@ -316,20 +356,26 @@ def run_benchmark(
     n_repeat=3,
     cutoffs={},
     use_gpu_profiler=False,
+    exposure_quantities=None,
 ):
     """
     Generate data and benchmark the provided functions over a range of input sizes.
     """
     print("Generating data for benchmarking...")
     ## Generate all data ahead of time
+    isint = '_int' if exposure_quantities is not None else ''
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     data = []
     for N in Ns:
-        datafile = f'data/{N}.npz'
+        datafile = f'data/{N}{isint}.npz'
         if os.path.exists(datafile):
             d = jnp.load(datafile)['arr_0']
+            print('  Loaded data from', datafile)
         else:
-            d = get_data(true_kernel, yerr=yerr, N=N, save=True)
+            print('  Generating data for N =', N)
+            d = get_data(true_kernel, N, yerr=yerr,
+                         exposure_quantities=exposure_quantities, save=True)
+            print('  Generated and saved data to', datafile)
         data.append(d)
 
     print("Running benchmark...")
@@ -350,6 +396,7 @@ def run_pred_benchmark(
             n_repeat=3,
             cutoffs={},
             use_gpu_profiler=False,
+            exposure_quantities=None,
             ):
 
     runtime = {}
@@ -359,16 +406,16 @@ def run_pred_benchmark(
     # Data (N) and test (M) 
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     Ms = 100*Ns
-
+    isint = '_int' if exposure_quantities is not None else ''
     for i, (N, M) in enumerate(zip(Ns, Ms), 1):
         
         print(f"  ({i}/{N_N}):  N = {N}, M = {M}")
         ## Data to condition on/predict from
-        datafile = f'data/{N}.npz'
+        datafile = f'data/{N}{isint}.npz'
         if os.path.exists(datafile):
             data = jnp.load(datafile)['arr_0']
         else:
-            data = get_data(true_kernel, yerr=yerr, N=N, save=True)
+            data = get_data(true_kernel, N, yerr=yerr, exposure_quantities=exposure_quantities, save=True)
         t_train = data[0, :]
         y_train = data[1, :]
         yerr_train = data[2, :]

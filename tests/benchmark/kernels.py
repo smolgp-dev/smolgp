@@ -43,11 +43,11 @@ def unpack_coordinates(X1, X2):
         delta1 = delta2 = jnp.zeros_like(t1)
     elif len(X1) == 3:
         # When using and exposure times
-        t1, instid1, delta1 = X1
-        t2, instid2, delta2 = X2
+        t1, delta1, instid1 = X1
+        t2, delta2, instid2 = X2
     else:
         raise ValueError("X1 and X2 must be tuples of length 1, 2 or 3.")
-    return (t1, instid1, delta1), (t2, instid2, delta2)
+    return (t1, delta1, instid1), (t2, delta2, instid2)
 
 ################## Full/dense Matern-5/2 #################
 class Matern52Kernel(tinygp.kernels.Kernel):
@@ -80,7 +80,7 @@ class Matern52Kernel(tinygp.kernels.Kernel):
         X1 and X2 should be a unxt.Quantity with units
             can also be a tuple consisting of (t1, instid)
         """
-        (t1, instid1, delta1), (t2, instid2, delta2) = unpack_coordinates(X1, X2)
+        (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 
         # time between pairs of observations in units the kernel is defined in
         # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
@@ -171,7 +171,7 @@ class SHOKernel(tinygp.kernels.Kernel):
             can also be a tuple consisting of (t1, instid)
         """
 
-        (t1, instid1, delta1), (t2, instid2, delta2) = unpack_coordinates(X1, X2)
+        (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 
         # time between pairs of observations in units the kernel is defined in
         # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
@@ -471,7 +471,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         t1 and t2 can be a unxt.Quantity with units
         """
         assert len(X1) > 1, "X1 and X2 must include timestamps and exposure times"
-        (t1, instid1, delta1), (t2, instid2, delta2) = unpack_coordinates(X1, X2)
+        (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 
         # Time difference and exposure times in units the kernel is defined in
         # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
