@@ -3,10 +3,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["IntegratedRTSSmoother", "integrated_rts_smoother"]
+__all__ = ["ParallelIntegratedRTSSmoother", "parallel_integrated_rts_smoother"]
 
 
-def IntegratedRTSSmoother(
+def ParallelIntegratedRTSSmoother(
     kernel,
     t_states,
     stateid,
@@ -44,7 +44,7 @@ def IntegratedRTSSmoother(
         m_filter,
         P_filter,
     )
-    E, g, L = integrated_rts_smoother(asso_params)
+    E, g, L = parallel_integrated_rts_smoother(asso_params)
     return (E, g, L)
 
 
@@ -148,15 +148,18 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def integrated_rts_smoother(asso_params):
+def parallel_integrated_rts_smoother(asso_params):
     """
     Jax implementation of the parallel RTS smoother algorithm
+    for integrated measurements.
 
     See Section 4B of Sarkka & Garcia-Fernandez (2020) for
-    a detailed description of the algorithm and notation.
+    a detailed description of the algorithm and notation, 
+    and Section 3.2.4 of Rubenzahl & Hattori et al. (2025)
+    for the integrated case.
 
-    Total runtime (span) complexity is ~O(logN) where N is the number
-    of time steps.
+    Total runtime (span) complexity is O(N/T + logT) where N is the 
+    number of time steps and T is the number of parallel threads.
     """
     return jax.lax.associative_scan(
         jax.vmap(_combine_per_pair),

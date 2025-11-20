@@ -3,10 +3,10 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["IntegratedKalmanFilter", "integrated_kalman_filter"]
+__all__ = ["ParallelIntegratedKalmanFilter", "parallel_integrated_kalman_filter"]
 
 
-def IntegratedKalmanFilter(
+def ParallelIntegratedKalmanFilter(
     kernel,
     X,
     y,
@@ -18,7 +18,7 @@ def IntegratedKalmanFilter(
     return_v_S=False,
 ):
     """
-    Wrapper for integrated_kalman_filter function
+    Wrapper for parallel_integrated_kalman_filter function
 
     Parameters:
         kernel  : IntegratedStateSpaceModel kernel
@@ -62,7 +62,7 @@ def IntegratedKalmanFilter(
         m0,
         P0,
     )
-    A, b, C, eta, J = integrated_kalman_filter(asso_params)
+    A, b, C, eta, J = parallel_integrated_kalman_filter(asso_params)
     m_pred, P_pred, v, S = postprocess(
         Phi_aug,
         Q_aug,
@@ -78,10 +78,15 @@ def IntegratedKalmanFilter(
         m0,
         P0,
     )
-    return (
-        (A, b, C, eta, J),
-        (m_pred, P_pred, v, S),
-    )
+    # return (
+    #     (A, b, C, eta, J),
+    #     (m_pred, P_pred, v, S),
+    # )
+    m_filt, P_filt = (b, C)
+    if return_v_S:
+        return m_filt, P_filt, m_pred, P_pred, v, S
+    else:
+        return m_filt, P_filt, m_pred, P_pred
 
 
 @jax.jit
@@ -252,15 +257,18 @@ def _combine_per_pair(left, right):
 
 
 @jax.jit
-def integrated_kalman_filter(asso_params):
+def parallel_integrated_kalman_filter(asso_params):
     """
     Jax implementation of the parallel Kalman filter algorithm
+    for integrated measurements.
 
     See Section 4A of Sarkka & Garcia-Fernandez (2020) for
-    a detailed description of the algorithm and notation.
+    a detailed description of the algorithm and notation,
+    and section 3.2.4 of Rubenzahl & Hattori et al. (2025)
+    for the integrated measurement case.
 
-    Total runtime (span) complexity is ~O(logN) where N is the number
-    of time steps.
+    Total runtime (span) complexity is O(N/T + logT) where N is the
+    number of time steps and T is the number of parallel threads.
     """
 
     A, b, C, eta, J = jax.lax.associative_scan(
