@@ -402,7 +402,7 @@ def run_pred_benchmark(
             logN_min=1,
             logN_max=5,
             n_repeat=3,
-            cutoffs={},
+            cutoffs={}, # in M
             use_gpu_profiler=False,
             exposure_quantities=None,
             ):
@@ -416,6 +416,14 @@ def run_pred_benchmark(
     Ms = 100*Ns
     isint = '_int' if exposure_quantities else ''
     for i, (N, M) in enumerate(zip(Ns, Ms), 1):
+        
+        skip = True
+        for key in cutoffs:
+            if M <= cutoffs[key]:
+                skip = False
+        if skip:
+            print(f"  ({i}/{N_N}):  N = {N}, M = {M} -- Skipped (M > all cutoffs)")
+            continue
         
         print(f"  ({i}/{N_N}):  N = {N}, M = {M}")
         ## Data to condition on/predict from

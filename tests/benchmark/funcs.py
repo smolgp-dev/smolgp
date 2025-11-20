@@ -99,7 +99,7 @@ def igp_llh(data, kernel):
 def ipss_llh(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
+        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
     )
     return gp_ss.log_probability(y_train)
 
@@ -119,7 +119,7 @@ def igp_cond(data, kernel):
 def ipss_cond(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
+        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
     )
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
