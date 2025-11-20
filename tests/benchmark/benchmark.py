@@ -202,31 +202,39 @@ def tracer(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
     if hasattr(out, "block_until_ready"):
         out.block_until_ready()
 
-    if machine == "gpu":
-        sampler = GPUMemorySampler(interval=1e-2)
-    elif machine == "cpu":
-        sampler = CPUMemorySampler(interval=1e-5)
-    else:
-        raise ValueError(f"Unknown machine type: {machine}")
-
     # Benchmarking/tracing
-    sampler.start()
-    sampler.record_baseline(0.1)
-    # Time the function with JAX block_until_ready
-    start = time.perf_counter()
-    out = fn_jit(dat)
-    if hasattr(out, "block_until_ready"):
-        out.block_until_ready()
-    end = time.perf_counter()
-    time.sleep(0.1)
-    sampler.stop()
+    peak_mem = 0
+    interval = 1e-2 if machine == "gpu" else 1e-5
+    while peak_mem == 0:
+        if machine == "gpu":
+            sampler = GPUMemorySampler(interval=interval)
+        elif machine == "cpu":
+            sampler = CPUMemorySampler(interval=interval)
+        else:
+            raise ValueError(f"Unknown machine type: {machine}")
+        
+        sampler.start()
+        sampler.record_baseline(0.1)
+        # Time the function with JAX block_until_ready
+        start = time.perf_counter()
+        out = fn_jit(dat)
+        if hasattr(out, "block_until_ready"):
+            out.block_until_ready()
+        end = time.perf_counter()
+        time.sleep(0.1)
+        sampler.stop()
+        peak_mem = sampler.peak - sampler.baseline
+        # Repeat if no memory usage detected 
+        # (function ran faster than sampler.interval)
+        # try a faster interval
+        interval /= 10
 
     # Return both result (pickled) and stats
     return_pipe.send(
         {
             "output": pickle.dumps(out),
             "runtime": end - start,
-            "peak_mem": sampler.peak - sampler.baseline,
+            "peak_mem": peak_mem,
         }
     )
     return_pipe.close()
@@ -363,7 +371,7 @@ def run_benchmark(
     """
     print("Generating data for benchmarking...")
     ## Generate all data ahead of time
-    isint = '_int' if exposure_quantities is not None else ''
+    isint = '_int' if exposure_quantities else ''
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     data = []
     for N in Ns:
@@ -406,7 +414,7 @@ def run_pred_benchmark(
     # Data (N) and test (M) 
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     Ms = 100*Ns
-    isint = '_int' if exposure_quantities is not None else ''
+    isint = '_int' if exposure_quantities else ''
     for i, (N, M) in enumerate(zip(Ns, Ms), 1):
         
         print(f"  ({i}/{N_N}):  N = {N}, M = {M}")
@@ -416,9 +424,12 @@ def run_pred_benchmark(
             data = jnp.load(datafile)['arr_0']
         else:
             data = get_data(true_kernel, N, yerr=yerr, exposure_quantities=exposure_quantities, save=True)
-        t_train = data[0, :]
-        y_train = data[1, :]
-        yerr_train = data[2, :]
+        if exposure_quantities:
+            X_train, y_train, yerr_train = unpack_idata(data)
+            t_train, texp_train, instid = X_train
+        else:
+            t_train, y_train, yerr_train = unpack_data(data)
+            X_train = t_train
 
         # Test grid to predict at
         print("Generating data for benchmarking...")
@@ -426,14 +437,17 @@ def run_pred_benchmark(
         t_test = jnp.linspace(t_train.min() - dt, t_train.max() + dt, M)
 
         ## Prepare GP objects
-        gp_qs = tinygp.GaussianProcess(kernels['QSM'], t_train, diag=yerr_train**2)
-        gp_gp = tinygp.GaussianProcess(kernels['GP'],  t_train, diag=yerr_train**2)
-        gp_ss = smolgp.GaussianProcess(kernels['SSM'], t_train, diag=yerr_train**2)
+        if 'QSM' in kernels:
+            gp_qs = tinygp.GaussianProcess(kernels['QSM'], X_train, diag=yerr_train**2)
+        gp_gp = tinygp.GaussianProcess(kernels['GP'],  X_train, diag=yerr_train**2)
+        gp_ss = smolgp.GaussianProcess(kernels['SSM'], X_train, diag=yerr_train**2)
         ## Pre-condition those that are compatible with it
         # _, condGPss = gp_ss.condition(y_train)
         ## Pack dict
         # gp = {'SSM': condGPss, 'QSM': gp_qs, 'GP': gp_gp}
-        gp = {'SSM': gp_ss, 'QSM': gp_qs, 'GP': gp_gp}
+        gp = {'SSM': gp_ss, 'GP': gp_gp}
+        if 'QSM' in kernels:
+            gp['QSM'] = gp_qs
 
         _, t, m, o = benchmark(
             funcs, [t_test], gp, y_train, 
