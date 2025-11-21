@@ -58,8 +58,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     @property
     def dimension(self) -> int:
         """The dimension of the augmented state space model"""
-
-        return self.d * (1 + self.num_insts)
+        return self.d + self.num_insts
 
     def coord_to_sortable(self, X: JAXArray) -> JAXArray:
         """
@@ -75,9 +74,10 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     def design_matrix(self) -> JAXArray:
         """The augmented design (also called the feedback) matrix for the process, $F$"""
         F = self.base_model.design_matrix()
-        F_aug = [[F] + [self.Z] * self.num_insts]
+        Z = jnp.array([[0.0], [0.0]])
+        F_aug = [[F] + [Z] * self.num_insts]
         for _ in range(self.num_insts):
-            F_aug.append([self.I] + [self.Z] * self.num_insts)
+            F_aug.append([jnp.zeros(self.dimension).at[0].set(1.0)])
         F_aug = jnp.block(F_aug)
         return F_aug
 
@@ -99,9 +99,9 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
         def H_integral(t: JAXArray, delta: JAXArray, instid: int) -> JAXArray:
             """Observation model for integral state"""
-            H_z = jnp.zeros(self.d).at[0].set(1) / delta
+            H_z = jnp.array([1.0 / delta])
             H_aug = jnp.zeros(self.dimension)
-            H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d * (1 + instid),))
+            H_aug = jax.lax.dynamic_update_slice(H_aug, H_z, (self.d + instid,))
             return H_aug
 
         def H_latent(t: JAXArray, instid: int) -> JAXArray:
@@ -134,38 +134,38 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     def noise_effect_matrix(self) -> JAXArray:
         """The augmented noise effect matrix, $L$"""
         L = self.base_model.noise_effect_matrix()
-        L_aug = jnp.vstack([L] + [jnp.zeros_like(L)] * self.num_insts)
+        L_aug = jnp.vstack([L] + [0.0] * self.num_insts)
         return L_aug
 
-    def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        The integrated transition matrix between two states at coordinates X1 and X2, $A_k$
+    # def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """
+    #     The integrated transition matrix between two states at coordinates X1 and X2, $A_k$
 
-        By default uses the Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
+    #     By default uses the Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
 
-        Overload this method if you wish to define the integrated transition matrix analytically.
-        """
-        F = self.base_model.design_matrix()
-        t1 = self.coord_to_sortable(X1)
-        t2 = self.coord_to_sortable(X2)
-        dt = t2 - t1
-        return Phibar_from_VanLoan(F, dt)
+    #     Overload this method if you wish to define the integrated transition matrix analytically.
+    #     """
+    #     F = self.base_model.design_matrix()
+    #     t1 = self.coord_to_sortable(X1)
+    #     t2 = self.coord_to_sortable(X2)
+    #     dt = t2 - t1
+    #     return Phibar_from_VanLoan(F, dt)
 
-    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        The augmented transition matrix between two states at coordinates X1 and X2, $A_k$
-        """
-        t1 = self.coord_to_sortable(X1)
-        t2 = self.coord_to_sortable(X2)
-        PHI = self.base_model.transition_matrix(t1, t2)
-        INTPHI = self.integrated_transition_matrix(t1, t2)
-        PHIAUG = jnp.eye(self.dimension)
-        PHIAUG = PHIAUG.at[: self.d, : self.d].set(PHI)
-        for i in range(self.num_insts):
-            PHIAUG = PHIAUG.at[(1 + i) * self.d : (2 + i) * self.d, : self.d].set(
-                INTPHI
-            )
-        return PHIAUG
+    # def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """
+    #     The augmented transition matrix between two states at coordinates X1 and X2, $A_k$
+    #     """
+    #     t1 = self.coord_to_sortable(X1)
+    #     t2 = self.coord_to_sortable(X2)
+    #     PHI = self.base_model.transition_matrix(t1, t2)
+    #     INTPHI = self.integrated_transition_matrix(t1, t2)
+    #     PHIAUG = jnp.eye(self.dimension)
+    #     PHIAUG = PHIAUG.at[: self.d, : self.d].set(PHI)
+    #     for i in range(self.num_insts):
+    #         PHIAUG = PHIAUG.at[(1 + i) * self.d : (2 + i) * self.d, : self.d].set(
+    #             INTPHI
+    #         )
+    #     return PHIAUG
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
@@ -185,22 +185,9 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         By default, resets only the integral states to zero.
         Overload this method if you wish to define a different reset behavior.
         """
-        diag = jnp.ones(self.d * (self.num_insts + 1))
-        diag = jax.lax.dynamic_update_slice(
-            diag, jnp.zeros(self.d), (self.d * (1 + instid),)
-        )
+        diag = jnp.ones(self.dimension)
+        diag = jax.lax.dynamic_update_slice(diag, jnp.array([0.0]), (self.d + instid,))
         return jnp.diag(diag)
-
-    # Helper matrices, identity and zero
-    @property
-    def I(self) -> JAXArray:
-        """Identity matrix of size dxd"""
-        return jnp.eye(self.d)
-
-    @property
-    def Z(self) -> JAXArray:
-        """Zero matrix of size dxd"""
-        return jnp.zeros((self.d, self.d))
 
 
 class IntegratedSHO(IntegratedStateSpaceModel):
@@ -300,6 +287,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         )
 
 
+## TODO: is there a way to automate this? aka make a generic IntegratedKernel class...
 ## Default constructions for all kernels in smolgp.kernels.base
 ## IntegratedStateSpaceModel parent class will handle the augmentation
 ## All component matrices will be auto-generated numerically (e.g. A via expm, Q via Van Loan)
