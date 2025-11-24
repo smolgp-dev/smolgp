@@ -232,57 +232,57 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
 
-    # def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The integrated transition matrix Phibar for the SHO process"""
+    def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The integrated transition matrix Phibar for the SHO process"""
 
-    #     # Shorthand notations
-    #     n = self.eta
-    #     w = self.omega
-    #     q = self.quality
-    #     a = -0.5 * w / q
-    #     b = n * w
-    #     a2plusb2 = jnp.square(a) + jnp.square(b)
-    #     A = 1 / (2 * n * q)
-    #     B = 1 / (n * w)  # = 1/b
-    #     C = -w / n
+        # Shorthand notations
+        n = self.eta
+        w = self.omega
+        q = self.quality
+        a = -0.5 * w / q
+        b = n * w
+        a2plusb2 = jnp.square(a) + jnp.square(b)
+        A = 1 / (2 * n * q)
+        B = 1 / (n * w)  # = 1/b
+        C = -w / n
 
-    #     def critical(t1: JAXArray, t2: JAXArray) -> JAXArray:
-    #         ## TODO: returning numerical result until we do this integral by hand
-    #         F = self.base_model.design_matrix()
-    #         return Phibar_from_VanLoan(F, t2 - t1)
+        def critical(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            ## TODO: returning numerical result until we do this integral by hand
+            F = self.base_model.design_matrix()
+            return Phibar_from_VanLoan(F, t2 - t1)
 
-    #     def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
-    #         def Int_ecos(t):
-    #             return jnp.exp(a * t) * (a * jnp.cos(b * t) + b * jnp.sin(b * t))
+        def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            def Int_ecos(t):
+                return jnp.exp(a * t) * (a * jnp.cos(b * t) + b * jnp.sin(b * t))
 
-    #         def Int_esin(t):
-    #             return jnp.exp(a * t) * (a * jnp.sin(b * t) - b * jnp.cos(b * t))
+            def Int_esin(t):
+                return jnp.exp(a * t) * (a * jnp.sin(b * t) - b * jnp.cos(b * t))
 
-    #         Ic = Int_ecos(t2) - Int_ecos(t1)
-    #         Is = Int_esin(t2) - Int_esin(t1)
-    #         Phibar11 = Ic + A * Is
-    #         Phibar12 = B * Is
-    #         Phibar21 = C * Is
-    #         Phibar22 = Ic - A * Is
+            Ic = Int_ecos(t2) - Int_ecos(t1)
+            Is = Int_esin(t2) - Int_esin(t1)
+            Phibar11 = Ic + A * Is
+            Phibar12 = B * Is
+            Phibar21 = C * Is
+            Phibar22 = Ic - A * Is
 
-    #         return jnp.array([[Phibar11, Phibar12], [Phibar21, Phibar22]]) / a2plusb2
+            return jnp.array([[Phibar11, Phibar12], [Phibar21, Phibar22]]) / a2plusb2
 
-    #     def overdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
-    #         ## TODO: returning numerical result until we do this integral by hand
-    #         F = self.base_model.design_matrix()
-    #         return Phibar_from_VanLoan(F, t2 - t1)
+        def overdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            ## TODO: returning numerical result until we do this integral by hand
+            F = self.base_model.design_matrix()
+            return Phibar_from_VanLoan(F, t2 - t1)
 
-    #     # Return the appropriate form based on quality factor
-    #     t1 = self.coord_to_sortable(X1)
-    #     t2 = self.coord_to_sortable(X2)
+        # Return the appropriate form based on quality factor
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
 
-    #     return jax.lax.cond(
-    #         jnp.allclose(q, 0.5),
-    #         critical,
-    #         lambda t1, t2: jax.lax.cond(q > 0.5, underdamped, overdamped, t1, t2),
-    #         t1,
-    #         t2,
-    #     )
+        return jax.lax.cond(
+            jnp.allclose(q, 0.5),
+            critical,
+            lambda t1, t2: jax.lax.cond(q > 0.5, underdamped, overdamped, t1, t2),
+            t1,
+            t2,
+        )
 
 
 ## TODO: is there a way to automate this? aka make a generic IntegratedKernel class...
