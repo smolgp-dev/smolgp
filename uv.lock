@@ -3323,6 +3323,7 @@ dependencies = [
     { name = "equinox" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+    { name = "sphinx-autoapi" },
     { name = "tinygp" },
 ]
 
@@ -3330,6 +3331,7 @@ dependencies = [
 docs = [
     { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+    { name = "sphinx-autoapi" },
     { name = "sphinx-book-theme" },
 ]
 
@@ -3360,6 +3362,8 @@ requires-dist = [
     { name = "equinox", specifier = ">=0.13.1" },
     { name = "jax", specifier = ">=0.6.2" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1.3" },
+    { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.6.1" },
+    { name = "sphinx-autoapi", extras = ["docs"], specifier = ">=3.6.1" },
     { name = "sphinx-book-theme", marker = "extra == 'docs'", specifier = ">=1.1.4" },
     { name = "tinygp", git = "https://github.com/dfm/tinygp" },
 ]
