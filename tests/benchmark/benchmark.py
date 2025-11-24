@@ -26,7 +26,19 @@ __all__ = [
     "run_pred_benchmark",
     "generate_data",
     "generate_integrated_data",
+    "get_gpu_processes",
 ]
+
+def format_bytes(n):
+    if n == 0:
+        return "0 B"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    size = float(n)
+    idx = 0
+    while size >= 1024 and idx < len(units) - 1:
+        size /= 1024
+        idx += 1
+    return f"{size:.1f} {units[idx]}"
 
 def generate_data(N, kernel, yerr=0.3, tmin=0, tmax=86400):
     t_train = jnp.linspace(tmin, tmax, N)
@@ -60,6 +72,26 @@ def generate_integrated_data(N, kernel, texp=180, yerr=0.3, readout=40):
     y_true = jax.vmap(make_exposure)(t_train, texp_train)
     y_train = y_true + yerr * jax.random.normal(key, shape=(len(t_train),))
     return t_train, y_train
+
+def get_data(true_kernel, N, yerr=0.3, exposure_quantities=None, save=True):
+
+    # Generate data of length N
+    if exposure_quantities:
+        texp, readout = exposure_quantities
+        t_train, y_train = generate_integrated_data(N, true_kernel, texp=texp, readout=readout, yerr=yerr)
+        texp_train = jnp.full_like(t_train, texp)
+        yerr_train = jnp.full_like(t_train, yerr)
+        instid = jnp.full_like(t_train, 0)
+        data = jnp.array([t_train, y_train, yerr_train, texp_train, instid])
+        savename = f'data/{N}_int.npz'
+    else:
+        t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
+        yerr_train = jnp.full_like(t_train, yerr)
+        data = jnp.array([t_train, y_train, yerr_train])
+        savename = f'data/{N}.npz'
+    if save:
+        jnp.savez(savename, data) 
+    return data
 
 def save_benchmark_data(filename, Ns, runtime, memory, outputs):
     import pickle
@@ -175,7 +207,9 @@ class GPUMemorySampler(MemorySampler):
         smi = get_gpu_processes()
         tot_mem = 0
         for pid in smi:
-            if 'smolgp' in smi[pid]['name']:
+            # if 'smolgp' in smi[pid]['name']:
+            #     tot_mem += smi[pid]['used_memory']
+            if smi[pid]['type'] == 'C':
                 tot_mem += smi[pid]['used_memory']
         return tot_mem
 
@@ -239,7 +273,7 @@ def tracer(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
     )
     return_pipe.close()
 
-def profile_jax_function(fn, data, obj, *args, n_repeat=5, machine="cpu", **kwargs):
+def profile_jax_function(fn, data, obj, *args, n_repeat=5, machine="cpu", drop_outliers=False, **kwargs):
     """
     JAX profiler for time benchmarking and memory tracing a function.
     """
@@ -264,6 +298,11 @@ def profile_jax_function(fn, data, obj, *args, n_repeat=5, machine="cpu", **kwar
         runtimes.append(result["runtime"])
         peaks.append(result["peak_mem"])
         output = pickle.loads(result["output"])
+    runtimes = np.array(runtimes)
+    peaks = np.array(peaks)
+    if drop_outliers:
+        runtimes = np.delete(runtimes, [runtimes.argmin(), runtimes.argmax()])
+        peaks = np.delete(peaks, [peaks.argmin(), peaks.argmax()])
 
     return (
         (np.mean(runtimes), np.std(runtimes)),
@@ -271,7 +310,7 @@ def profile_jax_function(fn, data, obj, *args, n_repeat=5, machine="cpu", **kwar
         output,
     )
 
-def benchmark(funcs, data, objs, *args, n_repeat=3, cutoffs={}, use_gpu_profiler=False):
+def benchmark(funcs, data, objs, *args, n_repeat=5, cutoffs={}, drop_outliers=False, use_gpu_profiler=False):
     """
     Given some (to-be-jitted) functions, benchmark their runtimes over a range of input sizes.
 
@@ -293,9 +332,9 @@ def benchmark(funcs, data, objs, *args, n_repeat=3, cutoffs={}, use_gpu_profiler
         Dictionary mapping function names to lists of outputs for each input size.
     """
 
-    runtime = {}
-    memory = {}
-    outputs = {}
+    runtime = {name: [] for name in funcs}
+    memory  = {name: [] for name in funcs}
+    outputs = {name: [] for name in funcs}
     Ns = []
     machine = "gpu" if use_gpu_profiler else "cpu"
     for n in range(len(data)):
@@ -309,7 +348,7 @@ def benchmark(funcs, data, objs, *args, n_repeat=3, cutoffs={}, use_gpu_profiler
 
             if N <= cutoff:
                 t, mem, val = profile_jax_function(
-                    func, data[n], obj, *args, n_repeat=n_repeat, machine=machine
+                    func, data[n], obj, *args, n_repeat=n_repeat, machine=machine, drop_outliers=drop_outliers
                 )
                 basestr = f"    {name}: time = {t[0]:.4f} ± {t[1]:.4f} s"
                 memstr = f", mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}"
@@ -318,40 +357,15 @@ def benchmark(funcs, data, objs, *args, n_repeat=3, cutoffs={}, use_gpu_profiler
                 t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
                 print(f"    {name}: Skipped (N={N} > cutoff={cutoff})")
 
-            if name not in runtime:
-                runtime[name] = []
-                memory[name] = []
-                outputs[name] = []
-
             runtime[name].append(t)
             memory[name].append(mem)
             outputs[name].append(val)
 
-            save_benchmark_data(f"results/individual/{func.__name__}_{N}.pkl", 
+            save_benchmark_data(f"results/individual/{func.__name__}_{N}_{machine}.pkl", 
                                 [N], {name: [t]}, {name: [mem]}, {name: [val]})
 
     return Ns, runtime, memory, outputs
 
-
-def get_data(true_kernel, N, yerr=0.3, exposure_quantities=None, save=True):
-
-    # Generate data of length N
-    if exposure_quantities:
-        texp, readout = exposure_quantities
-        t_train, y_train = generate_integrated_data(N, true_kernel, texp=texp, readout=readout, yerr=yerr)
-        texp_train = jnp.full_like(t_train, texp)
-        yerr_train = jnp.full_like(t_train, yerr)
-        instid = jnp.full_like(t_train, 0)
-        data = jnp.array([t_train, y_train, yerr_train, texp_train, instid])
-        savename = f'data/{N}_int.npz'
-    else:
-        t_train, y_train = generate_data(N, true_kernel, yerr=yerr)
-        yerr_train = jnp.full_like(t_train, yerr)
-        data = jnp.array([t_train, y_train, yerr_train])
-        savename = f'data/{N}.npz'
-    if save:
-        jnp.savez(savename, data) 
-    return data
 
 def run_benchmark(
     true_kernel,
@@ -361,8 +375,9 @@ def run_benchmark(
     N_N=10,
     logN_min=1,
     logN_max=7,
-    n_repeat=3,
+    n_repeat=5,
     cutoffs={},
+    drop_outliers=False,
     use_gpu_profiler=False,
     exposure_quantities=None,
 ):
@@ -388,7 +403,8 @@ def run_benchmark(
 
     print("Running benchmark...")
     Ns, runtime, memory, outputs = benchmark(
-        funcs, data, kernels, n_repeat=n_repeat, cutoffs=cutoffs, use_gpu_profiler=use_gpu_profiler,
+        funcs, data, kernels, n_repeat=n_repeat, cutoffs=cutoffs, 
+        drop_outliers=drop_outliers, use_gpu_profiler=use_gpu_profiler,
     )
     return Ns, runtime, memory, outputs
 
@@ -401,28 +417,33 @@ def run_pred_benchmark(
             maxN=1e5,
             logN_min=1,
             logN_max=5,
-            n_repeat=3,
+            n_repeat=5,
             cutoffs={}, # in M
+            drop_outliers=False,
             use_gpu_profiler=False,
             exposure_quantities=None,
             ):
 
-    runtime = {}
-    memory = {}
-    outputs = {}
+    runtime = {name: [] for name in funcs}
+    memory  = {name: [] for name in funcs}
+    outputs = {name: [] for name in funcs}
 
     # Data (N) and test (M) 
     Ns = jnp.logspace(logN_min, logN_max, N_N).astype(int)
     Ms = 100*Ns
     isint = '_int' if exposure_quantities else ''
     for i, (N, M) in enumerate(zip(Ns, Ms), 1):
-        
+   
         skip = True
         for key in cutoffs:
             if M <= cutoffs[key]:
                 skip = False
         if skip:
             print(f"  ({i}/{N_N}):  N = {N}, M = {M} -- Skipped (M > all cutoffs)")
+            for name in funcs:
+                runtime[name].append((jnp.nan, jnp.nan))
+                memory[name].append((jnp.nan, jnp.nan))
+                outputs[name].append(jnp.nan)
             continue
         
         print(f"  ({i}/{N_N}):  N = {N}, M = {M}")
@@ -460,14 +481,9 @@ def run_pred_benchmark(
         _, t, m, o = benchmark(
             funcs, [t_test], gp, y_train, 
             n_repeat=n_repeat, cutoffs=cutoffs, 
-            use_gpu_profiler=use_gpu_profiler,
+            drop_outliers=drop_outliers, use_gpu_profiler=use_gpu_profiler,
         )
         for name in funcs:
-            if name not in runtime:
-                runtime[name] = []
-                memory[name]  = []
-                outputs[name] = []
-
             if N <= maxN:
                 runtime[name].append(t[name][0])
                 memory[name].append(m[name][0])
@@ -478,14 +494,3 @@ def run_pred_benchmark(
                 outputs[name].append(jnp.nan)
 
     return Ns, runtime, memory, outputs
-
-def format_bytes(n):
-    if n == 0:
-        return "0 B"
-    units = ["B", "KB", "MB", "GB", "TB", "PB"]
-    size = float(n)
-    idx = 0
-    while size >= 1024 and idx < len(units) - 1:
-        size /= 1024
-        idx += 1
-    return f"{size:.1f} {units[idx]}"

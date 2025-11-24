@@ -34,7 +34,10 @@ if __name__ == "__main__":
         # jax.config.update("jax_platform_name", "gpu")
         print("Running benchmark on GPU")
         machine = 'gpu'
-        cutoffs={"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e7}
+        if args.int:
+            cutoffs={"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e6}
+        else:
+            cutoffs={"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e7}
     else:
         # jax.config.update("jax_platform_name", "cpu")
         print("Running benchmark on CPU")
@@ -84,14 +87,14 @@ if __name__ == "__main__":
         if args.func == "llh":
             print("Benchmarking likelihood...")
             funcs = llh_funcs[int(args.int)]
-            n_repeat=5
+            n_repeat=7
             N_N=17
             logN_min=1
             logN_max=7
         elif args.func == "cond":
             print("Benchmarking condition...")
             funcs = cond_funcs[int(args.int)]
-            n_repeat=5
+            n_repeat=7
             N_N=17
             logN_min=1
             logN_max=7
@@ -100,13 +103,18 @@ if __name__ == "__main__":
             true_kernel, funcs, kernels, yerr=yerr,
             n_repeat=n_repeat, N_N=N_N, logN_min=logN_min, logN_max=logN_max,
             cutoffs=cutoffs,
+            drop_outliers=True,
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None
         )
     elif args.func == "pred":
         print("Benchmarking prediction...")
         funcs = pred_funcs[int(args.int)]
-        cutoffs={"GP": 1e6, "SSM": 1e6, "QSM": 1e6} # these are now cutoffs in M
+        if args.gpu:
+            # cutoffs={"GP": 3e5, "SSM": 3e5, "QSM": 3e5, "pSSM": 3e5} # these are now cutoffs in M
+            cutoffs={"GP": 0, "SSM": 1e6, "QSM": 0} # these are now cutoffs in M
+        else:
+            cutoffs={"GP": 1e6, "SSM": 1e6, "QSM": 1e6} # these are now cutoffs in M
 
         # M is set to be 100x N inside run_pred_benchmark
         Ns, runtime, memory, outputs = run_pred_benchmark(
@@ -114,7 +122,7 @@ if __name__ == "__main__":
             funcs,
             kernels,
             yerr=yerr,
-            n_repeat=5,
+            n_repeat=7,
             N_N=17,
             logN_min=1,
             logN_max=7,
