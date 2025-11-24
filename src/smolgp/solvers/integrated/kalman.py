@@ -3,8 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["IntegratedKalmanFilter", "integrated_kalman_filter"]
-
 
 def IntegratedKalmanFilter(
     kernel, X, y, t_states, obsid, instid, stateid, noise=None, return_v_S=False
@@ -52,6 +50,7 @@ def IntegratedKalmanFilter(
         m_filtered, P_filtered, m_predicted, P_predicted, v, S = output
         return m_filtered, P_filtered, m_predicted, P_predicted
 
+
 @jax.jit
 def integrated_kalman_filter(
     A_aug, Q_aug, H_aug, R, RESET, X, y, t_states, obsid, instid, stateid, m0, P0
@@ -71,9 +70,7 @@ def integrated_kalman_filter(
         m_prev, P_prev = carry
 
         # If k==0 we use the prior m0, Pinf and zero time-lag (dt=0)
-        Delta = jax.lax.cond(
-            k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k
-        )
+        Delta = jax.lax.cond(k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k)
         n = obsid[k]
 
         # Get transition matrix

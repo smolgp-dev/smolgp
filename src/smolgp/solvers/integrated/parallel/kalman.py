@@ -3,8 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["ParallelIntegratedKalmanFilter", "parallel_integrated_kalman_filter"]
-
 
 def ParallelIntegratedKalmanFilter(
     kernel,

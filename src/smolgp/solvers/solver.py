@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-__all__ = ["StateSpaceSolver"]
-
 from typing import Any
 
 import jax
@@ -94,11 +91,7 @@ class StateSpaceSolver(eqx.Module):
                                   self.kernel.observation_model
         """
         # Observation model to call at each of the X_test
-        H = (
-            self.kernel.observation_model
-            if observation_model is None
-            else observation_model
-        )
+        H = self.kernel.observation_model if observation_model is None else observation_model
         return self._predict(X_test, conditioned_results, H)
 
     @jax.jit
@@ -134,7 +127,7 @@ class StateSpaceSolver(eqx.Module):
         if not isinstance(Pinf, JAXArray):  # if multicomponent model
             # need dense version for jnp.linalg.solve in retrodict
             Pinf = Pinf.to_dense()
-        
+
         # Prior mean for retrodiction
         # mean = jnp.zeros(self.kernel.d)  # TODO: mean function of base kernel
         # m0 = jnp.block([mean] + self.kernel.num_insts * [jnp.zeros(self.kernel.d)])
@@ -191,9 +184,7 @@ class StateSpaceSolver(eqx.Module):
             # Compute smoothing gain
             # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
             # G_k = P_star_pred @ A_k.T @ P_pred_next_inv # smoothing gain
-            G_k = jnp.linalg.solve(
-                P_pred_next.T, (P_star_pred @ A_k.T).T
-            ).T  # more stable
+            G_k = jnp.linalg.solve(P_pred_next.T, (P_star_pred @ A_k.T).T).T  # more stable
 
             # Update state and covariance
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
@@ -231,9 +222,7 @@ class StateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(
-                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
-            )
+            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

@@ -4,8 +4,6 @@ import jax
 import jax.numpy as jnp
 from tinygp.helpers import JAXArray
 
-__all__ = ["KalmanFilter", "kalman_filter"]
-
 
 def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     """
@@ -30,7 +28,7 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
     if not isinstance(P0, JAXArray):
-        P0 = P0.to_dense() # needed for carry in jax.lax.scan
+        P0 = P0.to_dense()  # needed for carry in jax.lax.scan
 
     output = kalman_filter(A, Q, H, R, X, y, m0, P0)
     if return_v_S:

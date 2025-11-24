@@ -33,10 +33,11 @@ The details for the included solvers are given below, but this is a pretty
 low-level feature and the details are definitely subject to change!
 """
 
-__all__ = ["StateSpaceSolver", "ParallelStateSpaceSolver",
-           "IntegratedStateSpaceSolver", "ParallelIntegratedStateSpaceSolver"]
-
-from smolgp.solvers.solver import StateSpaceSolver
-from smolgp.solvers.parallel.solver import ParallelStateSpaceSolver
-from smolgp.solvers.integrated.solver import IntegratedStateSpaceSolver
-from smolgp.solvers.integrated.parallel.solver import ParallelIntegratedStateSpaceSolver
+from smolgp.solvers.solver import StateSpaceSolver as StateSpaceSolver
+from smolgp.solvers.parallel.solver import ParallelStateSpaceSolver as ParallelStateSpaceSolver
+from smolgp.solvers.integrated.solver import (
+    IntegratedStateSpaceSolver as IntegratedStateSpaceSolver,
+)
+from smolgp.solvers.integrated.parallel.solver import (
+    ParallelIntegratedStateSpaceSolver as ParallelIntegratedStateSpaceSolver,
+)

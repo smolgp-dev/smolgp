@@ -3,8 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["IntegratedRTSSmoother", "integrated_rts_smoother"]
-
 
 def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_results):
     """
@@ -29,9 +27,7 @@ def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_resul
     A_aug = kernel.transition_matrix
     RESET = kernel.reset_matrix
 
-    return integrated_rts_smoother(
-        A_aug, RESET, t_states, obsid, instid, stateid, *kalman_results
-    )
+    return integrated_rts_smoother(A_aug, RESET, t_states, obsid, instid, stateid, *kalman_results)
 
 
 @jax.jit

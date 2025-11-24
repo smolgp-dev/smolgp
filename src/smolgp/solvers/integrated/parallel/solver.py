@@ -1,9 +1,5 @@
 from __future__ import annotations
-
-__all__ = ["ParallelIntegratedStateSpaceSolver"]
-
 from typing import Any
-
 import jax
 import jax.numpy as jnp
 import equinox as eqx
@@ -144,7 +140,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
             m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
             v_S = None
         # b, C = m_filtered, P_filtered
-        
+
         # RTS smoothing
         # rts_results = self.RTS(
         #     (m_predicted, P_predicted, b, C),
@@ -171,11 +167,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
                                   should be a function just like
                                   self.kernel.observation_model
         """
-        H = (
-            self.kernel.observation_model
-            if observation_model is None
-            else observation_model
-        )
+        H = self.kernel.observation_model if observation_model is None else observation_model
 
         return self._predict(X_test, conditioned_results, H)
 
@@ -302,9 +294,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(
-                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
-            )
+            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

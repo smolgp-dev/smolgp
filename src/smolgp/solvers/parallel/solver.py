@@ -1,7 +1,4 @@
 from __future__ import annotations
-
-__all__ = ["ParallelStateSpaceSolver"]
-
 from typing import Any
 
 import jax
@@ -97,11 +94,7 @@ class ParallelStateSpaceSolver(eqx.Module):
                                   self.kernel.observation_model
         """
         # Observation model to call at each of the X_test
-        H = (
-            self.kernel.observation_model
-            if observation_model is None
-            else observation_model
-        )
+        H = self.kernel.observation_model if observation_model is None else observation_model
         return self._predict(X_test, conditioned_results, H)
 
     @jax.jit
@@ -180,16 +173,10 @@ class ParallelStateSpaceSolver(eqx.Module):
             m_star_pred and P_star_pred are the output of predict(k, k_star)
             """
             # Next (future) data point predicted & smoothed state
-            m_pred_next = m_predicted[
-                k_next
-            ]  # prediction (no kalman update) at next data point
-            P_pred_next = P_predicted[
-                k_next
-            ]  # prediction (no kalman update) at next data point
+            m_pred_next = m_predicted[k_next]  # prediction (no kalman update) at next data point
+            P_pred_next = P_predicted[k_next]  # prediction (no kalman update) at next data point
             m_hat_next = m_smoothed[k_next]  # RTS smoothed state at next data point
-            P_hat_next = P_smoothed[
-                k_next
-            ]  # RTS smoothed covariance at next data point
+            P_hat_next = P_smoothed[k_next]  # RTS smoothed covariance at next data point
 
             # Time-lag between states
             dt = self.X[k_next] - X_test[ktest]
@@ -200,9 +187,7 @@ class ParallelStateSpaceSolver(eqx.Module):
             # Compute smoothing gain
             # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
             # G_k = P_star_pred @ A_k.T @ P_pred_next_inv # smoothing gain
-            G_k = jnp.linalg.solve(
-                P_pred_next.T, (P_star_pred @ A_k.T).T
-            ).T  # more stable
+            G_k = jnp.linalg.solve(P_pred_next.T, (P_star_pred @ A_k.T).T).T  # more stable
 
             # Update state and covariance
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
@@ -240,9 +225,7 @@ class ParallelStateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(
-                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
-            )
+            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

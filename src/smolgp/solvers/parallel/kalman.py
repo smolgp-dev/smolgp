@@ -3,8 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["ParallelKalmanFilter", "parallel_kalman_filter"]
-
 
 def ParallelKalmanFilter(
     kernel,
@@ -57,6 +55,7 @@ def ParallelKalmanFilter(
     else:
         return m_filt, P_filt, m_pred, P_pred
 
+
 @jax.jit
 def make_associative_params(
     Phi,
@@ -95,9 +94,7 @@ def make_associative_params(
         b = jnp.squeeze(m + K @ (y0 - H0 @ m))
         C = P - K @ S @ K.T
 
-        eta = jnp.squeeze(
-            Phi0.T @ H0.T @ (S_inv @ jnp.atleast_1d(y0))
-        )  # this might change
+        eta = jnp.squeeze(Phi0.T @ H0.T @ (S_inv @ jnp.atleast_1d(y0)))  # this might change
         J = Phi0.T @ H0.T @ S_inv @ H0 @ Phi0
 
         return (A, b, C, eta, J)
@@ -117,7 +114,7 @@ def make_associative_params(
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
-        S_inv = S**-1 # TODO: We might have to change this later
+        S_inv = S**-1  # TODO: We might have to change this later
         K = Q_dt @ Hk.T @ S_inv
 
         A = (I - K @ Hk) @ Phi_dt
@@ -143,6 +140,7 @@ def make_associative_params(
     J_all = jnp.concatenate([J0[jnp.newaxis, ...], J], axis=0)
 
     return (A_all, b_all, C_all, eta_all, J_all)
+
 
 @jax.jit
 def _combine_per_pair(left, right):
@@ -204,7 +202,6 @@ def postprocess(
     m0,
     P0,
 ):
-
     t_delta = jnp.diff(X)
     dim = b.shape[-1]
     I = jnp.eye(dim)

@@ -3,8 +3,6 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-__all__ = ["ParallelRTSSmoother", "parallel_rts_smoother"]
-
 
 def ParallelRTSSmoother(kernel, X, kalman_results):
     """

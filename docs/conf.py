@@ -28,5 +28,5 @@ html_static_path = ["_static"]
 
 # AutoAPI
 extensions = ["autoapi.extension"]
-autoapi_dirs = ["../src"]
+autoapi_dirs = ["../src/smolgp"]
 autoapi_add_toctree_entry = True
