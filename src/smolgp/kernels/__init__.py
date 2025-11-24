@@ -13,52 +13,31 @@ For mixed kernels containing some integrated and some instantaneous components,
 the integrated solver will be used to handle the entire kernel.
 """
 
-__all__ = [
-    "StateSpaceModel",
-    "Sum",
-    "Product",
-    "extract_leaf_kernels",
-    "Wrapper",
-    "Scale",
-    "Constant",
-    "SHO",
-    "Exp",
-    "Matern32",
-    "Matern52",
-    "Cosine",
-    "ExpSineSquared",
-    "IntegratedSHO",
-    "IntegratedExp",
-    "IntegratedMatern32",
-    "IntegratedMatern52",
-    "IntegratedCosine",
-]
-
 # Model class and utilities
 from smolgp.kernels.base import (
-    StateSpaceModel,
-    Sum,
-    Product,
-    Wrapper,
-    Scale,
+    StateSpaceModel as StateSpaceModel,
+    Sum as Sum,
+    Product as Product,
+    Wrapper as Wrapper,
+    Scale as Scale,
 )
 
 # Specific kernels
 from smolgp.kernels.base import (
-    Constant,
-    SHO,
-    Exp,
-    Matern32,
-    Matern52,
-    Cosine,
-    ExpSineSquared,
+    Constant as Constant,
+    SHO as SHO,
+    Exp as Exp,
+    Matern32 as Matern32,
+    Matern52 as Matern52,
+    Cosine as Cosine,
+    ExpSineSquared as ExpSineSquared,
 )
 
 # Integrated kernels
 from smolgp.kernels.integrated import (
-    IntegratedSHO,
-    IntegratedExp,
-    IntegratedMatern32,
-    IntegratedMatern52,
-    IntegratedCosine,
+    IntegratedSHO as IntegratedSHO,
+    IntegratedExp as IntegratedExp,
+    IntegratedMatern32 as IntegratedMatern32,
+    IntegratedMatern52 as IntegratedMatern52,
+    IntegratedCosine as IntegratedCosine,
 )
