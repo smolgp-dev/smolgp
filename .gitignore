@@ -9,6 +9,7 @@ docs/api/summary
 __pycache__
 *.egg-info
 uv.lock
+docs/_build
 
 .python-version
 .DS_Store
