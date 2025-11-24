@@ -44,8 +44,8 @@ Homepage = "https://github.com/smolgp-dev/smolgp"
 Issues = "https://github.com/smolgp-dev/smolgp/issues"
 
 [build-system]
-requires = ["setuptools >= 77.0.3"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling >= 1.26"]
+build-backend = "hatchling.build"
 
 [tool.uv.sources]
 tinygp = { git = "https://github.com/dfm/tinygp" }
