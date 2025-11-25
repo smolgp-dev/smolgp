@@ -33,4 +33,4 @@ html_static_path = ["_static"]
 # AutoAPI
 extensions = ["autoapi.extension", "myst_parser"]
 autoapi_dirs = ["../src/smolgp"]
-autoapi_add_toctree_entry = True
+# autoapi_add_toctree_entry = True

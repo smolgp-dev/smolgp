@@ -7,4 +7,4 @@
 :maxdepth: 2
 :caption: Contents
 
-api
+autoapi/index
