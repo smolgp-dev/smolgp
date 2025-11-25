@@ -14,8 +14,6 @@ release = "0.0.1"
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
-extensions = []
-
 source_suffix = {
     ".md": "markdown",
     ".rst": "restructuredtext",
@@ -33,6 +31,6 @@ html_theme = "sphinx_book_theme"
 html_static_path = ["_static"]
 
 # AutoAPI
-extensions = ["autoapi.extension"]
+extensions = ["autoapi.extension", "myst_parser"]
 autoapi_dirs = ["../src/smolgp"]
 autoapi_add_toctree_entry = True
