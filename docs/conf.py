@@ -17,6 +17,7 @@ release = "0.0.1"
 extensions = []
 
 source_suffix = {
+    ".md": "markdown",
     ".rst": "restructuredtext",
     ".ipynb": "myst-nb",
 }
