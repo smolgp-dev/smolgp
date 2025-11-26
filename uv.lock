@@ -3374,7 +3374,6 @@ dependencies = [
     { name = "equinox" },
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
     { name = "jax", version = "0.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
-    { name = "sphinx-autoapi" },
     { name = "tinygp" },
 ]
 
@@ -3417,7 +3416,6 @@ requires-dist = [
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=4.0.1" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=8.1.3" },
     { name = "sphinx-autoapi", marker = "extra == 'docs'", specifier = ">=3.6.1" },
-    { name = "sphinx-autoapi", extras = ["docs"], specifier = ">=3.6.1" },
     { name = "sphinx-book-theme", marker = "extra == 'docs'", specifier = ">=1.1.4" },
     { name = "tinygp", git = "https://github.com/dfm/tinygp" },
 ]

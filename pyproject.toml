@@ -19,7 +19,6 @@ classifiers = [
 dependencies = [
     "equinox>=0.13.1",
     "jax>=0.6.2",
-    "sphinx-autoapi[docs]>=3.6.1",
     "tinygp>=0.3.0",
 ]
 
