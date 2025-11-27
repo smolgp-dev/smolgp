@@ -2,26 +2,13 @@ import jax
 import jax.numpy as jnp
 import tinygp
 import smolgp
-from scipy.interpolate import make_smoothing_spline
+from benchmark.benchmark import generate_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
 # The tinygp variances include a default noise of machine epsilon
 offset = jnp.sqrt(jnp.finfo(jnp.array([0.0])).eps)
-
-
-def get_true_gp(true_kernel, tmin=0, tmax=1000, dt=1):
-    """
-    Helper for getting ground truth GP
-    signal, for generating mock data
-    """
-    t = jnp.arange(tmin, tmax, dt)
-    true_gp = tinygp.GaussianProcess(true_kernel, t)
-    # gp.sample adds small random noise for numerical stability
-    y_sample = true_gp.sample(key=jax.random.PRNGKey(32))
-    f = make_smoothing_spline(t, y_sample, lam=dt / 6)
-    return t, f
 
 
 def allclose(name, residuals, tol, atol=1e-14):
@@ -31,8 +18,7 @@ def allclose(name, residuals, tol, atol=1e-14):
     """
     maxres = jnp.max(jnp.abs(residuals))
     assert maxres < tol, (
-        f"Kernel {ksmol.name} did not yield a {name}"
-        " to within desired tolerance."
+        f"{name} did not agree to within desired tolerance."
         f" Maximum absolute deviation is {maxres:.3e} "
     )
     if maxres < atol:
@@ -111,11 +97,10 @@ def test_kernel(kernel_smol, kernel_tiny):
     test_kernel_function(kernel_smol, kernel_tiny, tol=covtol, atol=covatol)
 
     ## Generate mock data
-    t_true, f = get_true_gp(kernel_tiny, tmin=0, tmax=1000, dt=1)
-    y_true = f(t_true)
-    t_train = jnp.sort(jax.random.uniform(key, (50,), minval=0, maxval=1000))
-    yerr_train = 0.3 * jnp.ones_like(t_train)
-    y_train = f(t_train) + yerr_train * jax.random.normal(key, t_train.shape)
+    N = 50
+    yerr = 0.3
+    t_train, y_train = generate_data(N, kernel_tiny, yerr, tmin=0, tmax=1000)
+    yerr_train = jnp.full_like(t_train, yerr)
 
     # Build GP objects
     gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=t_train, diag=yerr_train**2)

@@ -1,28 +1,15 @@
 import jax
 import jax.numpy as jnp
-from scipy.interpolate import make_smoothing_spline
 import tinygp
 import smolgp
 from smolgp.kernels.base import extract_leaf_kernels
 
+from benchmark.benchmark import generate_data
 import benchmark.kernels as testgp
 from test_kernels import allclose, offset
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
-
-
-def get_true_gp(true_kernel, tmin=0, tmax=1000, dt=1):
-    """
-    Helper for getting ground truth GP
-    signal, for generating mock data
-    """
-    t = jnp.arange(tmin, tmax, dt)
-    true_gp = tinygp.GaussianProcess(true_kernel, t)
-    # gp.sample adds small random noise for numerical stability
-    y_sample = true_gp.sample(key=jax.random.PRNGKey(32))
-    f = make_smoothing_spline(t, y_sample, lam=dt / 6)
-    return t, f
 
 
 if __name__ == "__main__":
@@ -61,11 +48,9 @@ if __name__ == "__main__":
 
         ## Generate mock data
         N = 50
-        t_true, f = get_true_gp(ktiny, tmin=0, tmax=1000, dt=1)
-        y_true = f(t_true)
-        t_train = jnp.sort(jax.random.uniform(key, (N,), minval=0, maxval=1000))
-        yerr_train = 0.3 * jnp.ones_like(t_train)
-        y_train = f(t_train) + yerr_train * jax.random.normal(key, t_train.shape)
+        yerr = 0.3
+        t_train, y_train = generate_data(N, ktiny, yerr, tmin=0, tmax=1000)
+        yerr_train = jnp.full_like(t_train, yerr)
 
         print(f"Testing {name}...")
         # Build GP objects
