@@ -28,7 +28,7 @@ jobs:
   
       - name: Run tests
         run: |
-          uv run --group test --python ${{ matrix.python-version }} pytest -n auto tests
+          uv run --group test --python ${{ matrix.python-version }} -m pytest -n auto tests
         env:
           # JAX_ENABLE_X64: ${{ matrix.x64 }}
           JAX_ENABLE_X64: 1
