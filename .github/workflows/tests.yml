@@ -13,26 +13,33 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
+        # Python versions to test, and which to use x64 with
         python-version: ["3.10", "3.11"]
         x64: ["0"]
         include:
           - python-version: "3.13"
             x64: "1"
     steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+      # Setup uv: https://docs.astral.sh/uv/guides/integration/github/#using-uv-pip
+      - uses: actions/checkout@v5
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
-  
+
+      # Run tests
       - name: Run tests
         run: |
-          uv run --group test --python ${{ matrix.python-version }} -m pytest -n auto tests
+          uv run --group test --python ${{ matrix.python-version }} -m pytest --cov --cov-branch --cov-report=xml -n auto tests
         env:
           # JAX_ENABLE_X64: ${{ matrix.x64 }}
           JAX_ENABLE_X64: 1
 
+      # Create coverage report
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: smolgp-dev/smolgp
+            
   # comparison:
   #   runs-on: ubuntu-latest
   #   steps:
