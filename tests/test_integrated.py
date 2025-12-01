@@ -6,16 +6,17 @@ import smolgp
 import testgp
 from utils import generate_integrated_data
 from test_kernels import (
-    test_kernel_function,
-    test_likelihood,
-    test_condition,
-    test_predict,
+    kernel_function,
+    likelihood,
+    condition,
+    predict,
 )
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
-if __name__ == "__main__":
+
+def test_integrated():
     ## SHO Kernel
     S = 2.36
     w = 0.0195
@@ -34,7 +35,7 @@ if __name__ == "__main__":
     print("Testing IntegratedSHO kernel...")
 
     # Test k(Delta) agrees
-    test_kernel_function(kernel_smol, kernel_tiny, tol=1e-9, atol=1e-12)
+    kernel_function(kernel_smol, kernel_tiny, tol=1e-9, atol=1e-12)
 
     ## Generate mock data
     N = 50
@@ -53,14 +54,17 @@ if __name__ == "__main__":
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X_train, diag=yerr_train**2)
 
     # Check likelihood
-    test_likelihood(gp_smol, gp_tiny, y_train, tol=1e-10, atol=1e-13)
+    likelihood(gp_smol, gp_tiny, y_train, tol=1e-10, atol=1e-13)
 
     # Check conditioning
-    test_condition(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-12)
+    condition(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-12)
 
     # Check predictions
-    test_predict(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-12)
+    predict(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-12)
 
     # TODO: test predict with exposure times
 
-    print("All tests passed.")
+
+if __name__ == "__main__":
+    test_integrated()
+    print("All integrated kernel tests passed.")

@@ -12,7 +12,7 @@ key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
 
-if __name__ == "__main__":
+def test_multicomponent():
     # Kernel parameters
     ## SHO Kernel
     S = 2.36
@@ -38,9 +38,9 @@ if __name__ == "__main__":
     kernels = {"Sum": (ssm_sum, qsm_sum), "Product": (ssm_prod, qsm_prod)}
 
     from test_kernels import (
-        test_likelihood,
-        test_condition,
-        test_predict,
+        likelihood,
+        condition,
+        predict,
     )
 
     for name in kernels:
@@ -58,13 +58,13 @@ if __name__ == "__main__":
         gp_tiny = tinygp.GaussianProcess(kernel=ktiny, X=t_train, diag=yerr_train**2)
 
         # Check likelihood
-        test_likelihood(gp_smol, gp_tiny, y_train, tol=1e-10, atol=1e-11)
+        likelihood(gp_smol, gp_tiny, y_train, tol=1e-10, atol=1e-11)
 
         # Check conditioning
-        test_condition(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-11)
+        condition(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-11)
 
         # Check predictions
-        test_predict(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-11)
+        predict(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-11)
         print()
 
         ## Model decomposition tests for sums of GPs
@@ -119,5 +119,7 @@ if __name__ == "__main__":
     # print("    Checking names are unique & correct...")
     # # kernel = assign_unique_kernel_names(kernel) # TODO: add this check if it isn't covered naturally by other tests
 
-    print()
-    print("All tests passed.")
+
+if __name__ == "__main__":
+    test_multicomponent()
+    print("All multicomponent kernel tests passed.")

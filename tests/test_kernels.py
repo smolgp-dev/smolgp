@@ -26,7 +26,7 @@ def allclose(name, residuals, tol, atol=1e-14):
         print(f"    ...{name}: agrees (WARNING: only to < {maxres:.1e})")
 
 
-def test_kernel_function(ksmol, ktiny, tol=1e-14, atol=1e-14):
+def kernel_function(ksmol, ktiny, tol=1e-14, atol=1e-14):
     """
     Check the kernel function k(Delta) is the same
     """
@@ -38,7 +38,7 @@ def test_kernel_function(ksmol, ktiny, tol=1e-14, atol=1e-14):
     allclose("kernel function", res, tol=tol, atol=atol)
 
 
-def test_likelihood(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
+def likelihood(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     """
     Check the likelihoods are the same
     """
@@ -48,7 +48,7 @@ def test_likelihood(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     allclose("likelihood", res, tol=tol, atol=atol)
 
 
-def test_condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
+def condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     """
     Check the conditioned means/vars are the same
     """
@@ -60,7 +60,7 @@ def test_condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     allclose("conditioned variances", var_res, tol=tol, atol=atol)
 
 
-def test_predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
+def predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     """
     Check the predicted means/vars are the same
     """
@@ -82,7 +82,7 @@ def test_predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     allclose("predicted variances", var_res, tol=tol, atol=atol)
 
 
-def test_kernel(kernel_smol, kernel_tiny):
+def kernel(kernel_smol, kernel_tiny):
     """
     Check the smolgp kernel produces the same
     results as tinygp for all the above tests
@@ -99,7 +99,7 @@ def test_kernel(kernel_smol, kernel_tiny):
         predtol, predatol = 1e-9, 1e-13
 
     # Test k(Delta) agrees
-    test_kernel_function(kernel_smol, kernel_tiny, tol=covtol, atol=covatol)
+    kernel_function(kernel_smol, kernel_tiny, tol=covtol, atol=covatol)
 
     ## Generate mock data
     N = 50
@@ -112,16 +112,16 @@ def test_kernel(kernel_smol, kernel_tiny):
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=t_train, diag=yerr_train**2)
 
     # Check likelihood
-    test_likelihood(gp_smol, gp_tiny, y_train, tol=llhtol, atol=llhatol)
+    likelihood(gp_smol, gp_tiny, y_train, tol=llhtol, atol=llhatol)
 
     # Check conditioning
-    test_condition(gp_smol, gp_tiny, y_train, tol=condtol, atol=condatol)
+    condition(gp_smol, gp_tiny, y_train, tol=condtol, atol=condatol)
 
     # Check predictions
-    test_predict(gp_smol, gp_tiny, y_train, tol=predtol, atol=predatol)
+    predict(gp_smol, gp_tiny, y_train, tol=predtol, atol=predatol)
 
 
-if __name__ == "__main__":
+def test_kernels():
     kernels = {}
 
     # Kernel parameters to use for testing
@@ -170,7 +170,10 @@ if __name__ == "__main__":
     for name in kernels:
         ksmol, ktiny = kernels[name]
         print(f"Testing {name}...")
-        test_kernel(ksmol, ktiny)
+        kernel(ksmol, ktiny)
         print()
 
-    print("All tests passed.")
+
+if __name__ == "__main__":
+    test_kernels()
+    print("All kernel tests passed.")

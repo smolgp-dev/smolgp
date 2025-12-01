@@ -23,7 +23,7 @@ def allclose(name, residuals, tol, atol=1e-14):
         print(f"    ...{name}: agrees (WARNING: only to < {maxres:.1e})")
 
 
-def test_base(kernel, dts):
+def base(kernel, dts):
     """
     Confirm all analytic versions of matrices
     agree with their numerical versions--
@@ -76,7 +76,7 @@ def test_base(kernel, dts):
     print("All base matrix tests passed.")
 
 
-def test_integrated(kernel, dts):
+def integrated(kernel, dts):
     """
     Confirm all analytic versions of matrices and their
     augmented forms agree with their numerical versions--
@@ -114,7 +114,7 @@ def test_integrated(kernel, dts):
     print("All integrated/augmented matrix tests passed.")
 
 
-if __name__ == "__main__":
+def test_proofs():
     ## TODO: do we also want to test shapes here?
 
     ## This test is done with the SHO Kernel, since
@@ -131,7 +131,12 @@ if __name__ == "__main__":
     dts = jnp.append(jnp.array([0.0]), jnp.logspace(-6, 5, 1000))
 
     print("Testing base (instantaneous) kernel matrices...")
-    test_base(sho, dts)
+    base(sho, dts)
     print()
     print("Testing integrated kernel matrices...")
-    test_integrated(isho, dts)
+    integrated(isho, dts)
+
+
+if __name__ == "__main__":
+    test_proofs()
+    print("All proof tests passed.")
