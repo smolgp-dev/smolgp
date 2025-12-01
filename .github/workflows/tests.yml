@@ -1,0 +1,96 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "*"
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11"]
+        x64: ["0"]
+        include:
+          - python-version: "3.13"
+            x64: "1"
+    steps:
+      # - name: Checkout
+      #   uses: actions/checkout@v5
+      #   with:
+      #     fetch-depth: 0
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v7
+  
+      - name: Run tests
+        run: |
+          uv run --group test --python ${{ matrix.python-version }} pytest -n auto tests
+        env:
+          # JAX_ENABLE_X64: ${{ matrix.x64 }}
+          JAX_ENABLE_X64: 1
+
+  # comparison:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v5
+  #       with:
+  #         fetch-depth: 0
+  #     - name: Set up uv
+  #       uses: astral-sh/setup-uv@v7
+  #     - name: Run tests
+  #       run: |
+  #         uv run --extra test --extra comparison --python 3.12 pytest -n auto tests
+  #       env:
+  #         JAX_ENABLE_X64: "1"
+
+  # doctest:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v5
+  #       with:
+  #         fetch-depth: 0
+  #     - name: Set up uv
+  #       uses: astral-sh/setup-uv@v7
+  #     - name: Run tests
+  #       run: |
+  #         uv run --extra test --extra doctest --python 3.12 pytest --doctest-modules -v src/tinygp
+  #       env:
+  #         JAX_ENABLE_X64: "1"
+
+  # build:
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/checkout@v5
+  #       with:
+  #         fetch-depth: 0
+  #     - name: Set up uv
+  #       uses: astral-sh/setup-uv@v7
+  #     - name: Build the distribution
+  #       run: uv build
+  #     - name: Check the distribution
+  #       run: uv run --with twine python -m twine check --strict dist/*
+  #     - uses: actions/upload-artifact@v5
+  #       with:
+  #         path: dist/*
+
+  # publish:
+  #   environment:
+  #     name: pypi
+  #     url: https://pypi.org/p/tinygp
+  #   permissions:
+  #     id-token: write
+  #   needs: [tests, comparison, doctest, build]
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+  #   steps:
+  #     - uses: actions/download-artifact@v6
+  #       with:
+  #         name: artifact
+  #         path: dist
+  #     - uses: pypa/gh-action-pypi-publish@v1.13.0
