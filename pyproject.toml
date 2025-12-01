@@ -29,7 +29,7 @@ dev = [
     "jupyter>=1.1.1",
     "matplotlib>=3.10.6",
 ]
-test = ["pytest", "pytest-xdist"]
+test = ["pytest", "pytest-xdist", "pytest-cov"]
 docs = [
     "myst-parser>=4.0.1",
     "sphinx>=8.1.3",

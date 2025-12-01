@@ -3,9 +3,9 @@ import jax.numpy as jnp
 import tinygp
 import smolgp
 
-import testgp
-from utils import generate_integrated_data
-from test_kernels import (
+import tests.testgp as testgp
+from tests.utils import generate_integrated_data
+from tests.test_kernels import (
     kernel_function,
     likelihood,
     condition,

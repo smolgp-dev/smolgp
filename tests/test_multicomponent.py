@@ -4,9 +4,14 @@ import tinygp
 import smolgp
 from smolgp.kernels.base import extract_leaf_kernels
 
-from utils import generate_data
-import testgp
-from test_kernels import allclose, offset
+import tests.testgp as testgp
+from tests.utils import generate_data
+from tests.test_kernels import allclose, offset
+from tests.test_kernels import (
+    likelihood,
+    condition,
+    predict,
+)
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -36,12 +41,6 @@ def test_multicomponent():
     qsm_prod = qsm1 * qsm2
 
     kernels = {"Sum": (ssm_sum, qsm_sum), "Product": (ssm_prod, qsm_prod)}
-
-    from test_kernels import (
-        likelihood,
-        condition,
-        predict,
-    )
 
     for name in kernels:
         ksmol, ktiny = kernels[name]

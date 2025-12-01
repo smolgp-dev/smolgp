@@ -2,25 +2,10 @@ import jax
 import jax.numpy as jnp
 import smolgp
 from jax.scipy.linalg import expm
+from tests.utils import allclose
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
-
-
-def allclose(name, residuals, tol, atol=1e-14):
-    """
-    Check all residuals are < tol
-    if they are, but aren't < atol, print a warning
-    """
-    maxres = jnp.max(jnp.abs(residuals))
-    assert maxres < tol, (
-        f"{name} did not agree to within desired tolerance."
-        f" Maximum absolute deviation is {maxres:.3e} "
-    )
-    if maxres < atol:
-        print(f"    ...{name}: agrees exactly (<{maxres:.0e})")
-    else:
-        print(f"    ...{name}: agrees (WARNING: only to < {maxres:.1e})")
 
 
 def base(kernel, dts):

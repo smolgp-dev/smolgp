@@ -2,28 +2,12 @@ import jax
 import jax.numpy as jnp
 import tinygp
 import smolgp
-from utils import generate_data
+from tests.utils import allclose, generate_data
 
 jax.config.update("jax_enable_x64", True)
 
 # The tinygp variances include a default noise of machine epsilon
 offset = jnp.sqrt(jnp.finfo(jnp.array([0.0])).eps)
-
-
-def allclose(name, residuals, tol, atol=1e-14):
-    """
-    Check all residuals are < tol
-    if they are, but aren't < atol, print a warning
-    """
-    maxres = jnp.max(jnp.abs(residuals))
-    assert maxres < tol, (
-        f"{name} did not agree to within desired tolerance."
-        f" Maximum absolute deviation is {maxres:.3e} "
-    )
-    if maxres < atol:
-        print(f"    ...{name}: agrees exactly (<{maxres:.0e})")
-    else:
-        print(f"    ...{name}: agrees (WARNING: only to < {maxres:.1e})")
 
 
 def kernel_function(ksmol, ktiny, tol=1e-14, atol=1e-14):
