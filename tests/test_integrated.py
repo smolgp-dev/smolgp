@@ -3,8 +3,8 @@ import jax.numpy as jnp
 import tinygp
 import smolgp
 
-import benchmark.kernels as testgp
-from benchmark.benchmark import generate_integrated_data
+import testgp
+from utils import generate_integrated_data
 from test_kernels import (
     test_kernel_function,
     test_likelihood,
@@ -31,6 +31,8 @@ if __name__ == "__main__":
     )
     kernel_tiny = testgp.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
+    print("Testing IntegratedSHO kernel...")
+
     # Test k(Delta) agrees
     test_kernel_function(kernel_smol, kernel_tiny, tol=1e-9, atol=1e-12)
 
@@ -43,7 +45,7 @@ if __name__ == "__main__":
     )
     texp_train = jnp.full_like(t_train, texp)
     yerr_train = jnp.full_like(t_train, yerr)
-    instid = jnp.full_like(t_train, 0)
+    instid = jnp.full_like(t_train, 0).astype(int)  # has to be integer
     X_train = (t_train, texp_train, instid)
 
     # Build GP objects

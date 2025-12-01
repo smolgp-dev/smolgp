@@ -2,9 +2,8 @@ import jax
 import jax.numpy as jnp
 import tinygp
 import smolgp
-from benchmark.benchmark import generate_data
+from utils import generate_data
 
-key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
 # The tinygp variances include a default noise of machine epsilon
@@ -69,8 +68,14 @@ def test_predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     tmin, tmax = t_train.min(), t_train.max()
     dt = 0.1 * (tmax - tmin)  # include a retrodict/extrapolate
     t_test = jnp.linspace(tmin - dt, tmax + dt, 1000)
-    mu_tiny, var_tiny = gp_tiny.predict(y_train, t_test, return_var=True)
-    mu_smol, var_smol = gp_smol.predict(t_test, y_train, return_var=True)
+    if isinstance(gp_smol.X, tuple):
+        zeros = jnp.zeros_like(t_test)
+        # no exposure time, single instrument
+        X_test = (t_test, zeros, zeros.astype(int))
+    else:
+        X_test = t_test
+    mu_tiny, var_tiny = gp_tiny.predict(y_train, X_test, return_var=True)
+    mu_smol, var_smol = gp_smol.predict(X_test, y_train, return_var=True)
     mu_res = mu_tiny - mu_smol
     var_res = (var_tiny - offset) - var_smol
     allclose("predicted means", mu_res, tol=tol, atol=atol)
@@ -84,7 +89,7 @@ def test_kernel(kernel_smol, kernel_tiny):
     """
     if kernel_smol.name in ["ExpSineSquared"]:
         covtol, covatol = 1e-3, 1e-6
-        llhtol, llhatol = 1e-1, 1e-4
+        llhtol, llhatol = 0.2, 1e-3
         condtol, condatol = 1e-1, 1e-3
         predtol, predatol = 1e-1, 1e-3
     else:

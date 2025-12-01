@@ -4,8 +4,8 @@ import tinygp
 import smolgp
 from smolgp.kernels.base import extract_leaf_kernels
 
-from benchmark.benchmark import generate_data
-import benchmark.kernels as testgp
+from utils import generate_data
+import testgp
 from test_kernels import allclose, offset
 
 key = jax.random.PRNGKey(0)

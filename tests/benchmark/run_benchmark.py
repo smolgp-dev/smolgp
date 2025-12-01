@@ -1,23 +1,27 @@
 import logging
-
-# Suppress only JAX XLA bridge warnings
-logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
-
 import argparse
 import jax
 import jax.numpy as jnp
 
 import tinygp
 import smolgp
-from benchmark import *
+from benchmark import run_benchmark, run_pred_benchmark
+from benchmark import save_benchmark_data
 
-import sys
-import kernels as testgp
+from .. import testgp
+
+from funcs import ss_llh, qs_llh, gp_llh, pss_llh
+from funcs import ss_cond, qs_cond, gp_cond, pss_cond
+from funcs import ss_pred, qs_pred, gp_pred
+from funcs import iss_llh, igp_llh, ipss_llh
+from funcs import iss_cond, igp_cond, ipss_cond
+from funcs import iss_pred, igp_pred
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
-from funcs import *
+# Suppress only JAX XLA bridge warnings
+logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
 
 ######################################## MAIN ########################################
 if __name__ == "__main__":
@@ -26,31 +30,41 @@ if __name__ == "__main__":
         "func", type=str, help="Function to benchmark: 'llh' or 'cond'."
     )
     parser.add_argument("--gpu", action="store_true", help="Run on GPU (default: CPU).")
-    parser.add_argument("--int", action="store_true", help="Run with integrated data (default: instantaneous data).")
+    parser.add_argument(
+        "--int",
+        action="store_true",
+        help="Run with integrated data (default: instantaneous data).",
+    )
     args = parser.parse_args()
 
     # # Set device
     if args.gpu:
         # jax.config.update("jax_platform_name", "gpu")
         print("Running benchmark on GPU")
-        machine = 'gpu'
+        machine = "gpu"
         if args.int:
-            cutoffs={"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e6}
+            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e6}
         else:
-            cutoffs={"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e7}
+            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e7}
     else:
         # jax.config.update("jax_platform_name", "cpu")
         print("Running benchmark on CPU")
-        machine = 'cpu'
-        cutoffs={"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 0}
+        machine = "cpu"
+        cutoffs = {"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 0}
 
     ## Setup function dictionaries
-    llh_funcs = [{"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh},
-                 {"SSM": iss_llh, "GP": igp_llh, "pSSM": ipss_llh}]
-    cond_funcs = [{"SSM": ss_cond, "QSM": qs_cond, "GP": gp_cond, "pSSM": pss_cond},
-                  {"SSM": iss_cond, "GP": igp_cond, "pSSM": ipss_cond}]
-    pred_funcs = [{"SSM": ss_pred, "QSM": qs_pred, "GP": gp_pred},
-                  {"SSM": iss_pred, "GP": igp_pred}]
+    llh_funcs = [
+        {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh},
+        {"SSM": iss_llh, "GP": igp_llh, "pSSM": ipss_llh},
+    ]
+    cond_funcs = [
+        {"SSM": ss_cond, "QSM": qs_cond, "GP": gp_cond, "pSSM": pss_cond},
+        {"SSM": iss_cond, "GP": igp_cond, "pSSM": ipss_cond},
+    ]
+    pred_funcs = [
+        {"SSM": ss_pred, "QSM": qs_pred, "GP": gp_pred},
+        {"SSM": iss_pred, "GP": igp_pred},
+    ]
     ################### True GP parameters ######################
     S = 2.36
     w = 0.0195
@@ -59,7 +73,9 @@ if __name__ == "__main__":
     true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
     ################# Which kernels to benchmark ##################
     if args.int:
-        ssm_kernel = smolgp.kernels.integrated.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_inst=1)
+        ssm_kernel = smolgp.kernels.integrated.IntegratedSHO(
+            omega=w, quality=Q, sigma=sigma, num_inst=1
+        )
         gp_kernel = testgp.IntegratedSHOKernel(w=w, Q=Q, S=S)
         kernels = {
             "SSM": ssm_kernel,
@@ -78,8 +94,8 @@ if __name__ == "__main__":
         }
     ################ Data properties ####################
     yerr = 0.3
-    texp = 140. if args.int else 0.
-    readout = 40. if args.int else 0.
+    texp = 140.0 if args.int else 0.0
+    readout = 40.0 if args.int else 0.0
     if args.int:
         print("Using integrated data with texp =", texp, "and readout =", readout)
     ############################################################
@@ -87,34 +103,40 @@ if __name__ == "__main__":
         if args.func == "llh":
             print("Benchmarking likelihood...")
             funcs = llh_funcs[int(args.int)]
-            n_repeat=7
-            N_N=17
-            logN_min=1
-            logN_max=7
+            n_repeat = 7
+            N_N = 17
+            logN_min = 1
+            logN_max = 7
         elif args.func == "cond":
             print("Benchmarking condition...")
             funcs = cond_funcs[int(args.int)]
-            n_repeat=7
-            N_N=17
-            logN_min=1
-            logN_max=7
+            n_repeat = 7
+            N_N = 17
+            logN_min = 1
+            logN_max = 7
 
         Ns, runtime, memory, outputs = run_benchmark(
-            true_kernel, funcs, kernels, yerr=yerr,
-            n_repeat=n_repeat, N_N=N_N, logN_min=logN_min, logN_max=logN_max,
+            true_kernel,
+            funcs,
+            kernels,
+            yerr=yerr,
+            n_repeat=n_repeat,
+            N_N=N_N,
+            logN_min=logN_min,
+            logN_max=logN_max,
             cutoffs=cutoffs,
             drop_outliers=True,
             use_gpu_profiler=args.gpu,
-            exposure_quantities=(texp, readout) if args.int else None
+            exposure_quantities=(texp, readout) if args.int else None,
         )
     elif args.func == "pred":
         print("Benchmarking prediction...")
         funcs = pred_funcs[int(args.int)]
         if args.gpu:
             # cutoffs={"GP": 3e5, "SSM": 3e5, "QSM": 3e5, "pSSM": 3e5} # these are now cutoffs in M
-            cutoffs={"GP": 0, "SSM": 1e6, "QSM": 0} # these are now cutoffs in M
+            cutoffs = {"GP": 0, "SSM": 1e6, "QSM": 0}  # these are now cutoffs in M
         else:
-            cutoffs={"GP": 1e6, "SSM": 1e6, "QSM": 1e6} # these are now cutoffs in M
+            cutoffs = {"GP": 1e6, "SSM": 1e6, "QSM": 1e6}  # these are now cutoffs in M
 
         # M is set to be 100x N inside run_pred_benchmark
         Ns, runtime, memory, outputs = run_pred_benchmark(
@@ -126,10 +148,10 @@ if __name__ == "__main__":
             N_N=17,
             logN_min=1,
             logN_max=7,
-            maxN=1e5, # in N
-            cutoffs=cutoffs, # in M
+            maxN=1e5,  # in N
+            cutoffs=cutoffs,  # in M
             use_gpu_profiler=args.gpu,
-            exposure_quantities=(texp, readout) if args.int else None
+            exposure_quantities=(texp, readout) if args.int else None,
         )
     else:
         raise ValueError("Argument must be one of 'llh', 'cond', or 'pred'.")

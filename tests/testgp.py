@@ -6,6 +6,7 @@ import tinygp
 from tinygp.kernels.base import Sum, Product
 from tinygp.kernels.quasisep import Sum as qsSum, Product as qsProduct
 
+
 def extract_leaf_kernels(kernel):
     """Recursively extract all leaf kernels from a sum or product of kernels"""
     if isinstance(kernel, (Sum, Product, qsSum, qsProduct)):
@@ -14,6 +15,7 @@ def extract_leaf_kernels(kernel):
         )
     else:
         return [kernel]
+
 
 def unpack_coordinates(X1, X2):
     """
@@ -30,7 +32,7 @@ def unpack_coordinates(X1, X2):
         (t1, instid1, delta1), (t2, instid2, delta2)
         where instid and delta are arrays of zeros if not provided
     """
-    if not type(X1) is tuple:
+    if not isinstance(X1, tuple):
         # Single instrument, no exposure times
         t1 = X1
         t2 = X2
@@ -48,6 +50,7 @@ def unpack_coordinates(X1, X2):
     else:
         raise ValueError("X1 and X2 must be tuples of length 1, 2 or 3.")
     return (t1, delta1, instid1), (t2, delta2, instid2)
+
 
 ################## Full/dense Matern-5/2 #################
 class Matern52Kernel(tinygp.kernels.Kernel):
@@ -94,7 +97,7 @@ class Matern52Kernel(tinygp.kernels.Kernel):
         dij_inst = ((instid1 == self.instid) & (instid2 == self.instid)).astype(int)
 
         return self.amp**2 * k * dij_inst
-    
+
 
 ################# Full (dense) SHO kernel  #################
 class SHOKernel(tinygp.kernels.Kernel):
@@ -196,7 +199,6 @@ class SHOKernel(tinygp.kernels.Kernel):
         return s
 
 
-
 ################# Full/dense Integrated SHO kernel  #################
 class IntegratedSHOKernel(tinygp.kernels.Kernel):
     S: jax.Array | float
@@ -288,8 +290,8 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         Delta = | t1 - t2 |
         """
         # Extract t1, t2 from X1, X2
-        t1 = X1[0] if type(X1) == tuple else X1
-        t2 = X2[0] if type(X2) == tuple else X2
+        t1 = X1[0] if isinstance(X1, tuple) else X1
+        t2 = X2[0] if isinstance(X2, tuple) else X2
 
         # time between pairs of observations in units the kernel is defined in
         # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
@@ -414,7 +416,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         # these are the begin and end times for obs1
         # obs1 spans time p1 to p2
         # obs2 is a single point at p3
-        p1 = 0
+        # p1 = 0
         p2 = delta
         p3 = delta / 2 + Delta
 
@@ -470,7 +472,6 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
 
         t1 and t2 can be a unxt.Quantity with units
         """
-        assert len(X1) > 1, "X1 and X2 must include timestamps and exposure times"
         (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 
         # Time difference and exposure times in units the kernel is defined in
