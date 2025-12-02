@@ -220,7 +220,9 @@ class GaussianProcess(eqx.Module):
         self.var = variance_value
         self.states = states
         if self.mean.ndim != 1:
-            raise ValueError(f"Invalid mean shape: expected ndim = 1, got ndim={self.mean.ndim}")
+            raise ValueError(
+                f"Invalid mean shape: expected ndim = 1, got ndim={self.mean.ndim}"
+            )
 
         # Observation noise model
         if noise is None:
@@ -346,7 +348,8 @@ class GaussianProcess(eqx.Module):
         # convoluted since we need to support arbitrary pytrees.
         if X_test is not None:
             matches = jax.tree_util.tree_map(
-                lambda a, b: jnp.ndim(a) == jnp.ndim(b) and jnp.shape(a)[1:] == jnp.shape(b)[1:],
+                lambda a, b: jnp.ndim(a) == jnp.ndim(b)
+                and jnp.shape(a)[1:] == jnp.shape(b)[1:],
                 self.X,
                 X_test,
             )
@@ -406,7 +409,9 @@ class GaussianProcess(eqx.Module):
         else:
             # Otherwise use the observation model of the passed
             # kernel, where we zero out all the other components
-            observation_model = lambda X: self.kernel.observation_model(X, component=kernel.name)
+            observation_model = lambda X: self.kernel.observation_model(
+                X, component=kernel.name
+            )
 
         if X_test is not None:
             # If X_test was given, also predit at those points
@@ -509,7 +514,9 @@ class GaussianProcess(eqx.Module):
                     else:
                         # extract component kernel & project
                         name = kernel if isinstance(kernel, str) else kernel.name
-                        H_comp = lambda X: self.kernel.observation_model(X, component=name)
+                        H_comp = lambda X: self.kernel.observation_model(
+                            X, component=name
+                        )
                         mu, var = self._project_at_data(H_comp, self.states)
             else:
                 # Predicting at new test points
@@ -518,17 +525,21 @@ class GaussianProcess(eqx.Module):
                     if observation_model is None
                     else observation_model
                 )
-                mean, variance = self.solver.predict(X_test, self.states(), H_test)
+                mean, variance = self.solver.predict(X_test, self.states())
                 if return_full_state:
                     mu = mean
                     var = variance
                 else:
                     if kernel is not None:
                         name = kernel if isinstance(kernel, str) else kernel.name
-                        H_test = lambda X: self.kernel.observation_model(X, component=name)
+                        H_test = lambda X: self.kernel.observation_model(
+                            X, component=name
+                        )
                     H = jax.vmap(H_test)(X_test)
                     mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
-                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(H, variance).squeeze()
+                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(
+                        H, variance
+                    ).squeeze()
 
         if return_var:
             return mu, var
@@ -626,7 +637,9 @@ class GaussianProcess(eqx.Module):
             evaluated at the data points.
         """
         if self.states is None:
-            raise ValueError("The GP must be conditioned before getting component means.")
+            raise ValueError(
+                "The GP must be conditioned before getting component means."
+            )
 
         means_list = []
         vars_list = []
@@ -647,7 +660,9 @@ class GaussianProcess(eqx.Module):
             return means_list
 
     # @jax.jit # TODO: can it be jitted
-    def predict_component_means(self, X_test, return_var: bool = False, **kwargs) -> Any:
+    def predict_component_means(
+        self, X_test, return_var: bool = False, **kwargs
+    ) -> Any:
         """Get the means of each component kernel in a multi-component model
         at new test points
 
@@ -667,7 +682,9 @@ class GaussianProcess(eqx.Module):
             evaluated at the test points.
         """
         if self.states is None:
-            raise ValueError("The GP must be conditioned before getting component means.")
+            raise ValueError(
+                "The GP must be conditioned before getting component means."
+            )
 
         means_list = []
         vars_list = []
