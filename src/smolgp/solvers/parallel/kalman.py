@@ -4,19 +4,13 @@ import jax
 import jax.numpy as jnp
 
 
-def ParallelKalmanFilter(
-    kernel,
-    X,
-    y,
-    noise,
-    return_v_S=False,
-):
+def ParallelKalmanFilter(kernel, X, y, noise, return_v_S=False):
     """
     Wrapper for the parallel Kalman filter.
 
     Parameters:
         kernel: StateSpaceModel kernel
-        X: input coordinates
+        X: data coordinates, e.g. time or (time, texp, instid)
         y: observations
         noise: Noise model
 
@@ -33,21 +27,11 @@ def ParallelKalmanFilter(
     R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
+    t = kernel.coord_to_sortable(X)
 
-    asso_params = make_associative_params(Phi, H, Q, R, X, y, m0, P0)
+    asso_params = make_associative_params(Phi, H, Q, R, t, y, m0, P0)
     A, b, C, eta, J = parallel_kalman_filter(asso_params)
-    m_pred, P_pred, v, S = postprocess(
-        Phi,
-        H,
-        Q,
-        R,
-        X,
-        y,
-        b,
-        C,
-        m0,
-        P0,
-    )
+    m_pred, P_pred, v, S = postprocess(Phi, H, Q, R, X, t, y, b, C, m0, P0)
     # return (A, b, C, eta, J), (m_pred, P_pred, v, S)
     m_filt, P_filt = b, C
     if return_v_S:
@@ -57,16 +41,7 @@ def ParallelKalmanFilter(
 
 
 @jax.jit
-def make_associative_params(
-    Phi,
-    H,
-    Q,
-    R,
-    X,
-    y,
-    m0,
-    P0,
-):
+def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
     """Generate the associative parameters needed for parallel Kalman
 
     See Eqns. 10, 11, 12 from Sarkka & Garcia-Fernandez (2020)
@@ -94,7 +69,8 @@ def make_associative_params(
         b = jnp.squeeze(m + K @ (y0 - H0 @ m))
         C = P - K @ S @ K.T
 
-        eta = jnp.squeeze(Phi0.T @ H0.T @ (S_inv @ jnp.atleast_1d(y0)))  # this might change
+        # TODO: might change to linalg.solve
+        eta = jnp.squeeze(Phi0.T @ H0.T @ (S_inv @ jnp.atleast_1d(y0)))
         J = Phi0.T @ H0.T @ S_inv @ H0 @ Phi0
 
         return (A, b, C, eta, J)
@@ -127,7 +103,7 @@ def make_associative_params(
         return (A, b, C, eta, J)
 
     A0, b0, C0, eta0, J0 = make_first_params(Phi, H, m0, P0, y[0], R[0])
-    t_delta = jnp.diff(X)
+    t_delta = jnp.diff(t)
     A, b, C, eta, J = jax.vmap(
         make_generic_params,
         in_axes=(None, None, None, 0, 0, 0),
@@ -190,19 +166,8 @@ def parallel_kalman_filter(asso_params):
 
 
 @jax.jit
-def postprocess(
-    Phi,
-    H,
-    Q,
-    R,
-    X,
-    y,
-    b,
-    C,
-    m0,
-    P0,
-):
-    t_delta = jnp.diff(X)
+def postprocess(Phi, H, Q, R, X, t, y, b, C, m0, P0):
+    t_delta = jnp.diff(t)
     dim = b.shape[-1]
     I = jnp.eye(dim)
 

@@ -10,7 +10,7 @@ def RTSSmoother(kernel, X, kalman_results):
 
     Parameters:
         kernel: StateSpaceModel kernel
-        X: input coordinates
+        X: data coordinates, e.g. time or (time, texp, instid)
         kalman_results: output from Kalman filter (m_filtered, P_filtered, m_predicted, P_predicted)
 
     Returns:
@@ -18,7 +18,8 @@ def RTSSmoother(kernel, X, kalman_results):
         P_smooth: smoothed covariances
     """
     A = kernel.transition_matrix
-    return rts_smoother(A, X, *kalman_results)
+    t = kernel.coord_to_sortable(X)
+    return rts_smoother(A, t, *kalman_results)
 
 
 @jax.jit

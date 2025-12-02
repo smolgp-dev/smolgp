@@ -97,7 +97,9 @@ class IntegratedStateSpaceSolver(eqx.Module):
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
         t_states, instid, obsid, stateid = self.state_coords
-        return IntegratedRTSSmoother(self.kernel, t_states, obsid, instid, stateid, kalman_results)
+        return IntegratedRTSSmoother(
+            self.kernel, t_states, obsid, instid, stateid, kalman_results
+        )
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
@@ -125,26 +127,18 @@ class IntegratedStateSpaceSolver(eqx.Module):
         )
         return self.state_coords, conditioned_states, v_S
 
-    def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
+    @jax.jit
+    def predict(self, X_test, conditioned_results) -> JAXArray:
         """
-        Wrapper fot jitted StateSpaceSolver._predict.
+        Algorithm for making predictions at arbitrary coordinates X_test
 
         Args:
             X_test              : The test coordinates.
             conditioned_results : The output of self.condition()
-            observation_model   : (optional) H for the test points
-                                  should be a function just like
-                                  self.kernel.observation_model
-        """
 
-        H = self.kernel.observation_model if observation_model is None else observation_model
-
-        return self._predict(X_test, conditioned_results, H)
-
-    @jax.jit
-    def _predict(self, X_test, conditioned_results, H) -> JAXArray:
-        """
-        Algorithm for making predictions at arbitrary coordinates X_test
+        Returns:
+            pred_mean : Predicted means of the states at X_test
+            pred_var  : Predicted variances of the states at X_test
 
         There are three cases:
             1. Retrodiction  : smoothing from the first data point
@@ -261,7 +255,9 @@ class IntegratedStateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
+            return jax.lax.switch(
+                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
+            )
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

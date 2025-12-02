@@ -23,14 +23,15 @@ def ParallelRTSSmoother(kernel, X, kalman_results):
 
     Phi = kernel.transition_matrix
     Q = kernel.process_noise
+    t = kernel.coord_to_sortable(X)
 
-    asso_params = make_associative_params(Phi, Q, X, mu, P)
+    asso_params = make_associative_params(Phi, Q, t, mu, P)
     E, g, L = parallel_rts_smoother(asso_params)
     return (E, g, L)
 
 
 @jax.jit
-def make_associative_params(Phi, Q, X, mu, P):
+def make_associative_params(Phi, Q, t, mu, P):
     """Generate the associative parameters needed for parallel RTS
 
     See eqns in Section 4B of Sarkka & Garcia-Fernandez (2020)
@@ -53,7 +54,7 @@ def make_associative_params(Phi, Q, X, mu, P):
 
         return (E, g, L)
 
-    t_delta = jnp.diff(X)
+    t_delta = jnp.diff(t)
     E, g, L = jax.vmap(
         make_generic_params,
         in_axes=(None, None, 0, 0, 0),

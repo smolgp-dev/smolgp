@@ -11,7 +11,7 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
 
     Parameters:
         kernel: StateSpaceModel kernel
-        X: data coordinates (e.g. time)
+        X: data coordinates, e.g. time or (time, texp, instid)
         y: observations at data coordinates
         noise: Noise model
 
@@ -30,7 +30,8 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     if not isinstance(P0, JAXArray):
         P0 = P0.to_dense()  # needed for carry in jax.lax.scan
 
-    output = kalman_filter(A, Q, H, R, X, y, m0, P0)
+    t = kernel.coord_to_sortable(X)
+    output = kalman_filter(A, Q, H, R, t, y, m0, P0)
     if return_v_S:
         return output
     else:
