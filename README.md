@@ -4,6 +4,9 @@
 <i>State Space Models for O(Linear/Log) Gaussian Processes</i>
 </p>
 
+[![Tests](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml/badge.svg)](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/github/smolgp-dev/smolgp/branch/main/graph/badge.svg?token=KQLRPBCV9X)](https://codecov.io/github/smolgp-dev/smolgp)
+
 [`smolgp`](https://github.com/smolgp-dev/smolgp) is a Python/JAX extension of the [`tinygp`](https://github.com/dfm/tinygp) package that implements
 1. A Kalman filter and RTS smoother as a `StateSpaceSolver` compatible with `tinygp`-like GP kernels.
 2. An `IntegratedStateSpaceSolver` that can handle integrated (and possibly overlapping) measurements from multiple instruments (see Rubenzahl and Hattori et al. in submitted)
