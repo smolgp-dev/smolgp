@@ -8,9 +8,16 @@
 # in the solver, user will have passed t, texp, instid, and y
 # from there, stateid will get auto-created according to t and texp
 
-
 """
-TODO: docstring for integrated kernel
+These kernels are compatible with :class:`smolgp.solvers.integrated.IntegratedStateSpaceSolver`,
+which uses Bayesian filtering and smoothing algorithms to perform scalable GP
+inference. (see :ref:`api-solvers-statespace` for more technical details).
+On GPU, a performance boost may be observed for large datasets by using the
+:class:`smolgp.solvers.parallel.ParallelStateSpaceSolver` class.
+
+Like the quasisep kernels, these methods are experimental, so you may find
+the documentation patchy in places. You are encouraged to `open issues or
+pull requests <https://github.com/rrubenza/smolgp/issues>`_ as you find gaps.
 """
 
 from __future__ import annotations
@@ -74,11 +81,10 @@ class IntegratedStateSpaceModel(StateSpaceModel):
     def design_matrix(self) -> JAXArray:
         """The augmented design (also called the feedback) matrix for the process, $F$"""
         F = self.base_model.design_matrix()
-        Z = jnp.array([[0.0], [0.0]])
-        F_aug = [[F] + [Z] * self.num_insts]
-        for _ in range(self.num_insts):
-            F_aug.append([jnp.zeros(self.dimension).at[0].set(1.0)])
-        F_aug = jnp.block(F_aug)
+        F_aug = jnp.zeros((self.dimension, self.dimension))
+        F_aug = F_aug.at[: self.d, : self.d].set(F)
+        for i in range(self.num_insts):
+            F_aug = F_aug.at[self.d + i, 0].set(1.0)
         return F_aug
 
     def stationary_covariance(self) -> JAXArray:
