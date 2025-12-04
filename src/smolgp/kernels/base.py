@@ -1,13 +1,9 @@
 """
-The kernels implemented in this subpackage are defined similarly to
-:class: `tinygp.kernels.quasisep.Quasisep` but are modified to:
-1. Include the `noise_effect_matrix` and `process_noise` matrix
-2. Treat the observation model as a column vector and the transition matrix
-   in its usual form (compared to transposed forms in tinygp.kernels.quasisep)
-3. Handle integrated versions of each kernel (in integrated.py)
-These kernels are compatible with :class:`smolgp.solvers.StateSpaceSolver`
-which use Bayesian filtering and smoothing algorithms to perform scalable GP
+These kernels are compatible with :class:`smolgp.solvers.StateSpaceSolver`,
+which uses Bayesian filtering and smoothing algorithms to perform scalable GP
 inference. (see :ref:`api-solvers-statespace` for more technical details).
+On GPU, a performance boost may be observed for large datasets by using the
+:class:`smolgp.solvers.parallel.ParallelStateSpaceSolver` class.
 
 Like the quasisep kernels, these methods are experimental, so you may find
 the documentation patchy in places. You are encouraged to `open issues or
@@ -692,18 +688,15 @@ class SHO(StateSpaceModel):
             w2 = jnp.square(w)
             a = w * dt / q  # argument in exponential
             x = n * w * dt  # argument in sin/cos
-            exp = jnp.exp(a)
             sin = jnp.sin(x)
             sin2 = jnp.sin(2 * x)
             sinsq = jnp.square(sin)
-            Q11 = exp - 1 - sin2 / f - sinsq / (2 * n2 * q2)
-            Q12 = Q21 = w * sinsq / (n2 * q)
-            Q22 = w2 * (exp - 1 + sin2 / f - sinsq / (2 * n2 * q2))
-            return (
-                jnp.square(self.sigma)
-                * jnp.exp(-a)
-                * jnp.array([[Q11, Q12], [Q21, Q22]])
-            )
+            exp = jnp.exp(-a)
+            expm1 = jnp.expm1(-a)  # exp(-a) - 1
+            Q11 = -expm1 - (sin2 / f + sinsq / (2 * n2 * q2)) * exp
+            Q12 = Q21 = exp * (w * sinsq / (n2 * q))
+            Q22 = w2 * (-expm1 + exp * (sin2 / f - sinsq / (2 * n2 * q2)))
+            return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
 
         def overdamped(dt: JAXArray) -> JAXArray:
             Pinf = self.stationary_covariance()
