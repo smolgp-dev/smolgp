@@ -96,6 +96,19 @@ def integrated(kernel, dts):
         tol=1e-5,
         atol=1e-12,
     )
+
+    # Augmented process noise
+    Qaug_implemented = lambda dt: kernel.process_noise(0, dt)
+    Qaug_from_VanLoan = lambda dt: super(type(kernel), kernel).process_noise(0, dt)
+    print("Comparing implemented Qaug vs. VanLoan...")
+    Qaug_analytic = jax.vmap(Qaug_implemented)(dts)
+    Qaug_vanloan = jax.vmap(Qaug_from_VanLoan)(dts)
+    allclose(
+        "Augmented process noise",
+        Qaug_analytic - Qaug_vanloan,
+        tol=1e-8,
+        atol=1e-12,
+    )
     print("All integrated/augmented matrix tests passed.")
 
 

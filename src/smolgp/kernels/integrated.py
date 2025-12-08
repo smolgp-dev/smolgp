@@ -171,6 +171,33 @@ class IntegratedStateSpaceModel(StateSpaceModel):
             PHIAUG = PHIAUG.at[self.d + i : self.d + i + 1, : self.d].set(INTPHI)
         return PHIAUG
 
+    def integrated_process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """
+        Computes the submatrices Qaug12, Qaug21, and Qaug22
+        needed to assemble the augmented process noise matrix.
+        """
+
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        F = self.base_model.design_matrix()
+        L = self.base_model.noise_effect_matrix()
+        Qc = self.base_model.noise()
+
+        vanloan = smolgp.helpers.VanLoan(F, L, Qc, dt)
+        F3 = vanloan["F3"]
+        H2 = vanloan["H2"]
+        K1 = vanloan["K1"]
+
+        M = F3.T @ H2
+        W = (F3.T @ K1) + (F3.T @ K1).T
+
+        Qaug12 = M[:, :1]
+        Qaug21 = Qaug12.T
+        Qaug22 = W[:1, :1]
+
+        return Qaug12, Qaug21, Qaug22
+
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
         The augmented process noise matrix $Q_k$
@@ -180,7 +207,18 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
         Overload this method if you wish to define the process noise analytically.
         """
-        return super().process_noise(X1, X2, use_van_loan=True)
+
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        Qaug12, Qaug21, Qaug22 = self.integrated_process_noise(X1, X2)
+        Qbase = self.base_model.process_noise(0, dt)
+        QAUG = jnp.tile(Qaug22, (self.dimension, self.dimension))
+        QAUG = QAUG.at[: self.d, : self.d].set(Qbase)
+        for i in range(self.num_insts):
+            QAUG = QAUG.at[: self.d, self.d + i : self.d + i + 1].set(Qaug12)
+            QAUG = QAUG.at[self.d + i : self.d + i + 1, : self.d].set(Qaug21)
+        return QAUG
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
         """
@@ -258,19 +296,34 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             return Phibar_from_VanLoan(F, t2 - t1)
 
         def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
-            def Int_ecos(t):
-                return jnp.exp(a * t) * (a * jnp.cos(b * t) + b * jnp.sin(b * t))
+            ## General integral from t1->t2:
+            # def Int_ecos(t):
+            #     return jnp.exp(a * t) * (a * jnp.cos(b * t) + b * jnp.sin(b * t))
+            # def Int_esin(t):
+            #     return jnp.exp(a * t) * (a * jnp.sin(b * t) - b * jnp.cos(b * t))
+            # Ic = Int_ecos(t2) - Int_ecos(t1)
+            # Is = Int_esin(t2) - Int_esin(t1)
+            # Phibar11 = Ic + A * Is
+            # Phibar12 = B * Is
+            # Phibar21 = C * Is
+            # Phibar22 = Ic - A * Is
 
-            def Int_esin(t):
-                return jnp.exp(a * t) * (a * jnp.sin(b * t) - b * jnp.cos(b * t))
-
-            Ic = Int_ecos(t2) - Int_ecos(t1)
-            Is = Int_esin(t2) - Int_esin(t1)
-            Phibar11 = Ic + A * Is
-            Phibar12 = B * Is
-            Phibar21 = C * Is
-            Phibar22 = Ic - A * Is
-
+            ## Paper version: hardcoded for t1=0, dt=t2-t1
+            dt = t2 - t1
+            arg = b * dt
+            exp = jnp.exp(a * dt)
+            sin = jnp.sin(arg)
+            cos = jnp.cos(arg)
+            asin = a * sin
+            bsin = b * sin
+            acos = a * cos
+            bcos = b * cos
+            Ic = acos + bsin
+            Is = asin - bcos
+            Phibar11 = exp * (Ic + A * Is) - (a - A * b)
+            Phibar12 = B * (Is * exp + b)
+            Phibar21 = C * (Is * exp + b)
+            Phibar22 = exp * (Ic - A * Is) - (a + A * b)
             return jnp.array([[Phibar11, Phibar12], [Phibar21, Phibar22]]) / a2plusb2
 
         def overdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
@@ -289,6 +342,38 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             t1,
             t2,
         )
+
+    # def integrated_process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+    #     """The integrated process noise submatrices for the SHO process"""
+    #     t1 = self.coord_to_sortable(X1)
+    #     t2 = self.coord_to_sortable(X2)
+    #     dt = t2 - t1
+    #     n = self.eta
+    #     w = self.omega
+    #     q = self.quality
+
+    #     def critical(dt: JAXArray) -> JAXArray:
+    #         # TODO: returning numerical result until we do this integral by hand
+    #         return super().process_noise(0, dt)
+
+    #     def underdamped(dt: JAXArray) -> JAXArray:
+    #         # First, get the component matrices
+    #         Q = self.base_model.process_noise(0, dt)
+    #         Phi = self.base_model.transition_matrix(0, dt)
+    #         Phibar = self.integrated_transition_matrix(0, dt)
+
+    #         # Assemble the augmented process noise
+
+    #     def overdamped(dt: JAXArray) -> JAXArray:
+    #         ## TODO: returning numerical result until we do this integral by hand
+    #         return super().process_noise(0, dt)
+
+    #     return jax.lax.cond(
+    #         jnp.allclose(q, 0.5),
+    #         critical,
+    #         lambda dt: jax.lax.cond(q > 0.5, underdamped, overdamped, dt),
+    #         dt,
+    #     )
 
 
 ## TODO: is there a way to automate this? aka make a generic IntegratedKernel class...
