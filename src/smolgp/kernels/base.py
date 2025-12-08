@@ -773,11 +773,13 @@ class Exp(StateSpaceModel):
         dt = t2 - t1
         return jnp.exp(-dt[None, None] / self.scale)
 
-    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the Exp process"""
-    #     dt = X2 - X1
-    #     TODO: can implement here the analytic version, but by
-    #         default the parent class will generate w/ Pinf - A Pinf A^T
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The process noise Q_k for the Exp process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        sigma2 = jnp.square(self.sigma)
+        return jnp.array([[sigma2 * (1 - jnp.exp(-2 * dt * self.lam))]])
 
 
 class Matern32(StateSpaceModel):
@@ -846,11 +848,22 @@ class Matern32(StateSpaceModel):
             [[1 + lam * dt, dt], [-jnp.square(lam) * dt, 1 - lam * dt]]
         )
 
-    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the Matern-3/2 process"""
-    #     dt = X2 - X1
-    #     TODO: can implement here the analytic version, but by
-    #         default the parent class will generate w/ Pinf - A Pinf A^T
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The process noise Q_k for the Matern-3/2 process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        lam = self.lam
+        arg = 2 * lam * dt
+        d2l3 = 2 * jnp.square(dt) * jnp.power(lam, 3)
+        exp = jnp.exp(-arg)
+        expm1 = jnp.expm1(-arg)
+        return jnp.square(self.sigma) * jnp.array(
+            [
+                [-expm1 - arg * (lam * dt + 1) * exp, d2l3 * exp],
+                [d2l3 * exp, jnp.square(lam) * (-expm1 - arg * (lam * dt - 1) * exp)],
+            ]
+        )
 
 
 class Matern52(StateSpaceModel):
@@ -940,11 +953,39 @@ class Matern52(StateSpaceModel):
             ]
         )
 
-    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the Matern-5/2 process"""
-    #     dt = X2 - X1
-    #     TODO: can implement here the analytic version, but by
-    #           default the parent class will generate w/ Pinf - A Pinf A^T
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The process noise Q_k for the Matern-5/2 process"""
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        dt = t2 - t1
+        lam = self.lam
+        dtl = dt * lam
+        l2 = jnp.square(lam)
+        dt2 = jnp.square(dt)
+        l4 = jnp.power(lam, 4)
+        dt4 = jnp.power(dt, 4)
+        l5 = jnp.power(lam, 5)
+        dt2l5 = dt2 * l5
+        arg = -2 * dtl
+        exp = jnp.exp(arg)
+        expm1 = jnp.expm1(arg)
+        Q11 = -3 * expm1 - 2 * dtl * exp * (3 + dtl * (3 + dtl * (2 + dtl)))
+        Q12 = 2 * exp * dt4 * l5
+        Q13 = -l2 * (-expm1 + 2 * dtl * exp * (-1 + dtl * (-1 + dtl * (-2 + dtl))))
+        Q21 = Q12
+        Q22 = l2 * (-expm1 - 2 * dtl * exp * (1 + dtl * jnp.square(1 - dtl)))
+        Q23 = 2 * exp * dt2l5 * jnp.square(-2 + dtl)
+        Q31 = Q13
+        Q32 = Q23
+        Q33 = l4 * (-3 * expm1 - 2 * dtl * exp * (-5 + dtl * (11 + dtl * (-6 + dtl))))
+
+        return (jnp.square(self.sigma) / 3) * jnp.array(
+            [
+                [Q11, Q12, Q13],
+                [Q21, Q22, Q23],
+                [Q31, Q32, Q33],
+            ]
+        )
 
 
 class Cosine(StateSpaceModel):
