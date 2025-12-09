@@ -33,6 +33,7 @@ __all__ = [
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+from functools import partial
 
 from tinygp.helpers import JAXArray
 
@@ -200,6 +201,10 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         Qaug22 = W[:1, :1]
         return Qaug12, Qaug21, Qaug22
 
+    # @partial(
+    #     jax.jit,
+    #     static_argnames=("force_numerical"),
+    # )
     def process_noise(
         self, X1: JAXArray, X2: JAXArray, force_numerical: bool = False
     ) -> JAXArray:
@@ -364,6 +369,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         a = -0.5 * w / q
         b = n * w
         sigma2 = jnp.square(self.sigma)
+        A = 1 / (2 * n * q)
 
         def critical(dt: JAXArray) -> JAXArray:
             # TODO: returning numerical result until we do this integral by hand
@@ -377,42 +383,25 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             n2 = jnp.square(n)
             w2 = jnp.square(w)
             q2 = jnp.square(q)
-            n3 = n * n2
-            w3 = w * w2
             q4 = jnp.square(q2)
-            q6 = q2 * q4
-            n4 = jnp.square(n2)
             exp = jnp.exp(x)
             exp2 = jnp.exp(2 * x)
-            expm1 = jnp.expm1(x)
             exp2m1 = jnp.expm1(2 * x)
             sin = jnp.sin(arg)
             cos = jnp.cos(arg)
             sinsq = jnp.square(jnp.sin(arg))
             sin2 = jnp.sin(2 * arg)
             cos2 = jnp.cos(2 * arg)
+            A2 = jnp.square(A)
+            iQ12_1 = jnp.square(exp * (cos + A * sin) - 1) / (q * w)
+            iQ12_2 = A * exp * (4 * sin - exp * sin2) - 2 * A2 * exp2 * sinsq + exp2m1
 
-            iQ12_1 = (
-                4
-                * q
-                * jnp.square(-2 * qn + exp * (2 * qn * cos + sin))
-                / (16 * n2 * w * q4)
-            )
-            iQ12_2 = (
-                -2
-                * (
-                    -4 * qn * exp * sin
-                    + exp2 * sinsq
-                    + qn * (-2 * qn * (exp2m1) + exp2 * sin2)
-                )
-                / (4 * n2 * q2)
-            )
-            part1 = -16 * q4 * exp2
-            part2 = 4 * q * n2 * (T + q * (-11 + 4 * q * n2 * (q + T)))
-            part3_1 = -8 * exp * (-4 * qn * cos + (4 * q2 - 2) * sin)
-            part3_2 = exp2 * (-3 * sin2 + 2 * qn * (-3 * cos2 + 2 * qn * sin2))
-            part3 = 2 * qn * (part3_1 + part3_2)
-            iQ22 = 4 * q2 * (part1 + part2 + exp2 * cos2 + part3) / (64 * q6 * n2 * w2)
+            part1 = 4 * q * A2 * T + 1 - 11 * A2
+            part2 = A2 * A2 * exp2 * (cos2 - 16 * q4)
+            part3_1 = -8 * exp * (-2 * cos + (4 * q2 - 2) * A * sin)
+            part3_2 = exp2 * ((1 - 3 * A2) * sin2 - 3 * A * cos2)
+            part3 = A * part3_1 + part3_2
+            iQ22 = (n2 / w2) * (part1 + part2 + A * part3)
 
             Qaug12 = sigma2 * jnp.array([[iQ12_1], [iQ12_2]])
             Qaug21 = Qaug12.T

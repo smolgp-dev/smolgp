@@ -61,7 +61,7 @@ def base(kernel, dts):
     print("All base matrix tests passed.")
 
 
-def integrated(kernel, dts):
+def integrated_transition(kernel, dts):
     """
     Confirm all analytic versions of matrices and their
     augmented forms agree with their numerical versions--
@@ -97,16 +97,18 @@ def integrated(kernel, dts):
         atol=1e-12,
     )
 
+
+def integrated_process_noise(kernel, dts, tol=1e-8):
     # Augmented process noise
     Qaug_implemented = lambda dt: kernel.process_noise(0, dt)
-    Qaug_from_VanLoan = lambda dt: super(type(kernel), kernel).process_noise(0, dt)
+    Qaug_from_VanLoan = lambda dt: kernel.process_noise(0, dt, force_numerical=True)
     print("Comparing implemented Qaug vs. VanLoan...")
     Qaug_analytic = jax.vmap(Qaug_implemented)(dts)
     Qaug_vanloan = jax.vmap(Qaug_from_VanLoan)(dts)
     allclose(
         "Augmented process noise",
         Qaug_analytic - Qaug_vanloan,
-        tol=1e-8,
+        tol=tol,
         atol=1e-12,
     )
     print("All integrated/augmented matrix tests passed.")
@@ -132,7 +134,13 @@ def test_proofs():
     base(sho, dts)
     print()
     print("Testing integrated kernel matrices...")
-    integrated(isho, dts)
+    integrated_transition(isho, dts)
+
+    ## Separately test small Delta and large Delta for process noise
+    dtsmall = dts[dts < 1e3]
+    dtlarge = dts[dts >= 1e3]
+    integrated_process_noise(isho, dtsmall)
+    integrated_process_noise(isho, dtlarge, tol=1e-3)
 
 
 if __name__ == "__main__":
