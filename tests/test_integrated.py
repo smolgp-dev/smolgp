@@ -26,9 +26,36 @@ def test_integrated():
     ## Instantaneous kernel for generating data
     true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
 
+    ## Generate mock data
+    Ninst = 2  # 3
+    Ns = [30, 50, 80]
+    yerr = [0.3, 0.6, 0.24]
+    texps = [140.0, 55, 12]
+    readouts = [40.0, 28.0, 40.0]
+    t_train = []
+    y_train = []
+    texp_train = []
+    yerr_train = []
+    instid = []
+    for n in range(Ninst):
+        t, y = generate_integrated_data(
+            Ns[n], true_kernel, texp=texps[n], readout=readouts[n], yerr=yerr[n]
+        )
+        t_train.append(t)
+        y_train.append(y)
+        texp_train.append(jnp.full_like(t, texps[n]))
+        yerr_train.append(jnp.full_like(t, yerr[n]))
+        instid.append(jnp.full_like(t, n).astype(int))  # has to be integer
+    t_train = jnp.concatenate(t_train)
+    y_train = jnp.concatenate(y_train)
+    texp_train = jnp.concatenate(texp_train)
+    yerr_train = jnp.concatenate(yerr_train)
+    instid = jnp.concatenate(instid)
+    X_train = (t_train, texp_train, instid)
+
     # Integrated kernels
     kernel_smol = smolgp.kernels.integrated.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=1
+        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
     )
     kernel_tiny = testgp.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
@@ -36,18 +63,6 @@ def test_integrated():
 
     # Test k(Delta) agrees
     kernel_function(kernel_smol, kernel_tiny, tol=1e-9, atol=1e-12)
-
-    ## Generate mock data
-    N = 50
-    yerr = 0.3
-    texp, readout = 140.0, 40.0
-    t_train, y_train = generate_integrated_data(
-        N, true_kernel, texp=texp, readout=readout, yerr=yerr
-    )
-    texp_train = jnp.full_like(t_train, texp)
-    yerr_train = jnp.full_like(t_train, yerr)
-    instid = jnp.full_like(t_train, 0).astype(int)  # has to be integer
-    X_train = (t_train, texp_train, instid)
 
     # Build GP objects
     gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X_train, diag=yerr_train**2)
