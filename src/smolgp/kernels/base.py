@@ -40,9 +40,7 @@ def extract_leaf_kernels(kernel, all=False):
     """
     leaf_level = (Sum, Product) if all else (Sum)
     if isinstance(kernel, leaf_level):
-        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
-            kernel.kernel2
-        )
+        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(kernel.kernel2)
     else:
         return [kernel]
 
@@ -276,7 +274,8 @@ class Sum(StateSpaceModel):
     def design_matrix(self) -> JAXArray:
         """F = BlockDiag(F1, F2)"""
         return Block(
-            self.kernel1.design_matrix(), self.kernel2.design_matrix()
+            self.kernel1.design_matrix(),
+            self.kernel2.design_matrix(),
         ).to_dense()
 
     def noise_effect_matrix(self) -> JAXArray:
@@ -606,9 +605,7 @@ class SHO(StateSpaceModel):
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
-        return jnp.array(
-            [[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]]
-        )
+        return jnp.array([[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]])
 
     def stationary_covariance(self) -> JAXArray:
         """The stationary covariance of the SHO process, Pinf"""
@@ -677,9 +674,14 @@ class SHO(StateSpaceModel):
         q = self.quality
 
         def critical(dt: JAXArray) -> JAXArray:
-            Pinf = self.stationary_covariance()
-            A = self.transition_matrix(0, dt)
-            return Pinf - A @ Pinf @ A.T
+            arg = 2 * w * dt
+            argexp = arg * jnp.exp(-arg)
+            expm1 = jnp.expm1(-arg)
+            wdt = w * dt
+            Q11 = -expm1 - argexp * (1 + wdt)
+            Q12 = Q21 = w * wdt * argexp
+            Q22 = jnp.square(w) * (-expm1 - argexp * (-1 + wdt))
+            return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
 
         def underdamped(dt: JAXArray) -> JAXArray:
             f = 2 * n * q
@@ -1215,7 +1217,5 @@ class ExpSineSquared(Wrapper):
             Approximated via a truncated Taylor series expansion.
             """
             k = jnp.arange(terms)
-            log_terms = (
-                -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
-            )
+            log_terms = -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
             return jnp.sum(jnp.exp(log_terms))
