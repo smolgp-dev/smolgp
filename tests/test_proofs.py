@@ -128,7 +128,7 @@ def test_proofs():
 
     ## Test a wide dynamic range of Deltas
     ## NOTE: expm breaks down around ~1e6
-    dts = jnp.append(jnp.array([0.0]), jnp.logspace(-6, 5, 1000))
+    dts = jnp.logspace(-6, 5, 1000)
 
     print("Testing base (instantaneous) kernel matrices...")
     base(sho, dts)
@@ -141,6 +141,14 @@ def test_proofs():
     dtlarge = dts[dts >= 1e3]
     integrated_process_noise(isho, dtsmall, tol=1e-6)
     integrated_process_noise(isho, dtlarge, tol=1e-3)
+
+    ## and verify dt=0 is correct
+    assert jnp.all(isho.process_noise(0.0, 0.0) == 0), (
+        "Process noise at dt=0 should be zero."
+    )
+    assert jnp.all(isho.transition_matrix(0.0, 0.0) == jnp.eye(isho.dimension)), (
+        "Transition matrix at dt=0 should be the identity."
+    )
 
 
 if __name__ == "__main__":

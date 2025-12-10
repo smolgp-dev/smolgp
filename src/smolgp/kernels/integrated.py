@@ -378,9 +378,6 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         def underdamped(dt: JAXArray) -> JAXArray:
             x = a * dt
             arg = b * dt
-            T = 2 * dt * w
-            qn = q * n
-            n2 = jnp.square(n)
             w2 = jnp.square(w)
             q2 = jnp.square(q)
             q4 = jnp.square(q2)
@@ -396,12 +393,13 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             iQ12_1 = jnp.square(exp * (cos + A * sin) - 1) / (q * w)
             iQ12_2 = A * exp * (4 * sin - exp * sin2) - 2 * A2 * exp2 * sinsq + exp2m1
 
-            part1 = 4 * q * A2 * T + 1 - 11 * A2
-            part2 = A2 * A2 * exp2 * (cos2 - 16 * q4)
-            part3_1 = -8 * exp * (-2 * cos + (4 * q2 - 2) * A * sin)
-            part3_2 = exp2 * ((1 - 3 * A2) * sin2 - 3 * A * cos2)
-            part3 = A * part3_1 + part3_2
-            iQ22 = (n2 / w2) * (part1 + part2 + A * part3)
+            part1 = 8 * q * w * dt + 4 * q2 - 12
+            part2 = A2 * exp2 * (cos2 - 16 * q4)
+            part3_1 = 16 * exp * (cos + (1 - 2 * q2) * A * sin)
+            part3_2 = exp2 * ((1 - 3 * A2) / A * sin2 - 3 * cos2)
+            part3 = part3_1 + part3_2
+            iQ22 = 1 / (4 * q2 * w2) * (part1 + part2 + part3)
+            iQ22 = jnp.maximum(iQ22, 0.0)  # prevent underflows at dt=0
 
             Qaug12 = sigma2 * jnp.array([[iQ12_1], [iQ12_2]])
             Qaug21 = Qaug12.T
