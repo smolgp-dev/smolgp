@@ -123,7 +123,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
 
         # RTS smoothing
         rts_results = self.RTS((m_predicted, P_predicted, m_filtered, P_filtered))
-        _, m_smoothed, P_smoothed = rts_results
+        m_smoothed, P_smoothed = rts_results
 
         conditioned_states = (
             (m_predicted, P_predicted),
@@ -133,9 +133,10 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
 
         return self.state_coords, conditioned_states, v_S
 
-    def predict(self, X_test, conditioned_results, observation_model=None) -> JAXArray:
+    @jax.jit
+    def predict(self, X_test, conditioned_results) -> JAXArray:
         """
-        Wrapper fot jitted StateSpaceSolver._predict.
+        Algorithm for making predictions at arbitrary coordinates X_test
 
         Args:
             X_test              : The test coordinates.
@@ -143,15 +144,6 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
             observation_model   : (optional) H for the test points
                                   should be a function just like
                                   self.kernel.observation_model
-        """
-        H = self.kernel.observation_model if observation_model is None else observation_model
-
-        return self._predict(X_test, conditioned_results, H)
-
-    @jax.jit
-    def _predict(self, X_test, conditioned_results, H) -> JAXArray:
-        """
-        Algorithm for making predictions at arbitrary coordinates X_test
 
         There are three cases:
             1. Retrodiction  : smoothing from the first data point
@@ -271,7 +263,9 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
+            return jax.lax.switch(
+                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
+            )
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

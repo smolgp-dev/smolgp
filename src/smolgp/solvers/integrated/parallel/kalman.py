@@ -76,10 +76,6 @@ def ParallelIntegratedKalmanFilter(
         m0,
         P0,
     )
-    # return (
-    #     (A, b, C, eta, J),
-    #     (m_pred, P_pred, v, S),
-    # )
     m_filt, P_filt = (b, C)
     if return_v_S:
         return m_filt, P_filt, m_pred, P_pred, v, S
@@ -103,10 +99,9 @@ def make_associative_params(
     m0,
     P0,
 ):
-    """Generate the associative parameters needed for parallel Kalman
-
+    """
+    Generate the associative parameters needed for parallel Kalman.
     See Eqns. 10, 11, 12 from Sarkka & Garcia-Fernandez (2020)
-
     """
 
     # precompute H at data coordinates
@@ -229,9 +224,9 @@ def make_associative_params(
 
 
 def _combine_per_pair(left, right):
-    """See Eqn. 13 & 14 of Sarkka & Garcia-Fernandez (2020) for
+    """
+    See Eqn. 13 & 14 of Sarkka & Garcia-Fernandez (2020) for
     a the algorithm and notation.
-
     """
     Ai, bi, Ci, etai, Ji = left
     Aj, bj, Cj, etaj, Jj = right

@@ -16,7 +16,9 @@ def ParallelIntegratedRTSSmoother(
 
     Parameters:
         kernel: StateSpaceModel kernel
-        X: input coordinates
+        t_states: time coordinates of the states
+        stateid: exposure start/end indicators
+        instid: instrument IDs
         kalman_results: output from Kalman filter:
             m_pred, P_pred, m_filter, P_filter
 
@@ -43,7 +45,9 @@ def ParallelIntegratedRTSSmoother(
         P_filter,
     )
     E, g, L = parallel_integrated_rts_smoother(asso_params)
-    return (E, g, L)
+    m_smoothed = g
+    P_smoothed = L
+    return m_smoothed, P_smoothed
 
 
 @jax.jit
