@@ -20,25 +20,30 @@ jax.config.update("jax_enable_x64", True)
 def test_multicomponent():
     # Kernel parameters
     ## SHO Kernel
-    S = 2.36
-    w = 0.0195
-    Q = 7.63
-    sigma = jnp.sqrt(S * w * Q)
+    w1 = 0.0195
+    Q1 = 7.63
+    s1 = 0.59
+    w2 = 0.0023
+    Q2 = 1 / jnp.sqrt(2)
+    s2 = 0.329
+
     ## Matern-5/2 Kernel
     scale = 600.0
     sigma = 5.3
 
     # State space version
-    ssm1 = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
-    ssm2 = smolgp.kernels.Matern52(scale=scale, sigma=sigma)
-    ssm_sum = ssm1 + ssm2
-    ssm_prod = ssm1 * ssm2
+    ssm1 = smolgp.kernels.SHO(omega=w1, quality=Q1, sigma=s1)
+    ssm2 = smolgp.kernels.SHO(omega=w2, quality=Q2, sigma=s2)
+    ssm3 = smolgp.kernels.Matern52(scale=scale, sigma=sigma)
+    ssm_sum = ssm1 + ssm2 + ssm3
+    ssm_prod = (ssm1 * ssm2) * ssm3
 
     # Quasisep version
-    qsm1 = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
-    qsm2 = tinygp.kernels.quasisep.Matern52(scale=scale, sigma=sigma)
-    qsm_sum = qsm1 + qsm2
-    qsm_prod = qsm1 * qsm2
+    qsm1 = tinygp.kernels.quasisep.SHO(omega=w1, quality=Q1, sigma=s1)
+    qsm2 = tinygp.kernels.quasisep.SHO(omega=w2, quality=Q2, sigma=s2)
+    qsm3 = tinygp.kernels.quasisep.Matern52(scale=scale, sigma=sigma)
+    qsm_sum = qsm1 + qsm2 + qsm3
+    qsm_prod = (qsm1 * qsm2) * qsm3
 
     kernels = {"Sum": (ssm_sum, qsm_sum), "Product": (ssm_prod, qsm_prod)}
 
@@ -109,7 +114,7 @@ def test_multicomponent():
             print()
 
     # Confirm we don't decomposed beyond Sums
-    print("Testing kernel decomposition is only for sums...")
+    print("Testing kernel decomposition only separatessums...")
     testkernel = ssm1 + (ssm2 * ssm1)
     components = extract_leaf_kernels(testkernel)
     assert components == [ssm1, (ssm2 * ssm1)], (
