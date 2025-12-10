@@ -139,7 +139,7 @@ def test_proofs():
     ## Separately test small Delta and large Delta for process noise
     dtsmall = dts[dts < 1e3]
     dtlarge = dts[dts >= 1e3]
-    integrated_process_noise(isho, dtsmall)
+    integrated_process_noise(isho, dtsmall, tol=1e-6)
     integrated_process_noise(isho, dtlarge, tol=1e-3)
 
 
