@@ -7,9 +7,10 @@ from tinygp.kernels.base import Sum, Product
 from tinygp.kernels.quasisep import Sum as qsSum, Product as qsProduct
 
 
-def extract_leaf_kernels(kernel):
+def extract_leaf_kernels(kernel, all=False):
     """Recursively extract all leaf kernels from a sum or product of kernels"""
-    if isinstance(kernel, (Sum, Product, qsSum, qsProduct)):
+    leaf_level = (Sum, qsSum, Product, qsProduct) if all else (Sum, qsSum)
+    if isinstance(kernel, leaf_level):
         return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
             kernel.kernel2
         )
