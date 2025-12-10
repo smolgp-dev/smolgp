@@ -114,38 +114,15 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
 
         # Kalman filtering
         kalman_results = self.Kalman(y, return_v_S=return_v_S)
-        # (A, b, C, eta, J), (m_pred, P_pred, v, S) = kalman_results
-        # if return_v_S:
-        #     (
-        #         m_filtered,
-        #         P_filtered,
-        #         m_predicted,
-        #         P_predicted,
-        #         v,
-        #         S,
-        #     ) = (b, C, m_pred, P_pred, v, S)
-        #     v_S = (v, S)
-        # else:
-        #     (
-        #         m_filtered,
-        #         P_filtered,
-        #         m_predicted,
-        #         P_predicted,
-        #     ) = (b, C, m_pred, P_pred)
-        #     v_S = None
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
         else:
             m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
             v_S = None
-        # b, C = m_filtered, P_filtered
 
         # RTS smoothing
-        # rts_results = self.RTS(
-        #     (m_predicted, P_predicted, b, C),
-        # )
-        rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
+        rts_results = self.RTS((m_predicted, P_predicted, m_filtered, P_filtered))
         _, m_smoothed, P_smoothed = rts_results
 
         conditioned_states = (
