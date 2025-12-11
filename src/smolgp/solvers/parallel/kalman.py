@@ -62,16 +62,15 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
         m = Phi0 @ m0
         P = Phi0 @ P0 @ Phi0.T  # Q(0,0) = 0
         S = H0 @ P @ H0.T + r0
-        S_inv = S**-1  # TODO: We might have to change this later
-        K = P @ H0.T @ S_inv
+        K = jnp.linalg.solve(S.T, (P @ H0.T).T).T
 
         A = jnp.zeros_like(Phi0)
         b = jnp.squeeze(m + K @ (y0 - H0 @ m))
         C = P - K @ S @ K.T
 
-        # TODO: might change to linalg.solve
-        eta = jnp.squeeze(Phi0.T @ H0.T @ (S_inv @ jnp.atleast_1d(y0)))
-        J = Phi0.T @ H0.T @ S_inv @ H0 @ Phi0
+        _M = Phi0.T @ H0.T
+        eta = jnp.squeeze(_M @ jnp.linalg.solve(S, jnp.atleast_1d(y0)))
+        J = _M @ jnp.linalg.solve(S, _M.T)
 
         return (A, b, C, eta, J)
 
@@ -90,15 +89,15 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
-        S_inv = S**-1  # TODO: We might have to change this later
-        K = Q_dt @ Hk.T @ S_inv
+        K = jnp.linalg.solve(S.T, (Q_dt @ Hk.T).T).T
 
         A = (I - K @ Hk) @ Phi_dt
         b = jnp.squeeze(K @ jnp.atleast_1d(y))  # remove atleast_1d?
         C = (I - K @ Hk) @ Q_dt
 
-        eta = jnp.squeeze(Phi_dt.T @ Hk.T @ (S_inv * jnp.atleast_1d(y)))
-        J = Phi_dt.T @ Hk.T @ S_inv @ Hk @ Phi_dt
+        _M = Phi_dt.T @ Hk.T
+        eta = jnp.squeeze(_M @ jnp.linalg.solve(S, jnp.atleast_1d(y)))
+        J = _M @ jnp.linalg.solve(S, _M.T)
 
         return (A, b, C, eta, J)
 
