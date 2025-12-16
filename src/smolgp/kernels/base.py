@@ -40,7 +40,9 @@ def extract_leaf_kernels(kernel, all=False):
     """
     leaf_level = (Sum, Product) if all else (Sum)
     if isinstance(kernel, leaf_level):
-        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(kernel.kernel2)
+        return extract_leaf_kernels(kernel.kernel1, all=all) + extract_leaf_kernels(
+            kernel.kernel2, all=all
+        )
     else:
         return [kernel]
 
@@ -249,7 +251,7 @@ class StateSpaceModel(Kernel):
 
 class Sum(StateSpaceModel):
     """
-    A helper to represent the sum of two quasiseparable kernels
+    A helper to represent the sum of two StateSpaceModel kernels
 
     The state dimension becomes d = d1 + d2
     """
@@ -461,9 +463,6 @@ class Wrapper(StateSpaceModel):
     def observation_matrix(self, X: JAXArray) -> JAXArray:
         return self.kernel.observation_matrix(X)
 
-    def observation_model(self, X: JAXArray, component=None) -> JAXArray:
-        return self.kernel.observation_model(X, component=component)
-
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         return self.kernel.transition_matrix(X1, X2)
 
@@ -605,7 +604,9 @@ class SHO(StateSpaceModel):
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
-        return jnp.array([[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]])
+        return jnp.array(
+            [[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]]
+        )
 
     def stationary_covariance(self) -> JAXArray:
         """The stationary covariance of the SHO process, Pinf"""
@@ -1217,5 +1218,7 @@ class ExpSineSquared(Wrapper):
             Approximated via a truncated Taylor series expansion.
             """
             k = jnp.arange(terms)
-            log_terms = -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
+            log_terms = (
+                -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
+            )
             return jnp.sum(jnp.exp(log_terms))

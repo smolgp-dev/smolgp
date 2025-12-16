@@ -79,25 +79,43 @@ def test_multicomponent():
             t_test = jnp.linspace(tmin - dt, tmax + dt, 1000)
 
             print("  Testing component means...")
+            ####################################################
             # smolgp version of component means prediction
             llh, condGP = gp_smol.condition(y_train)
-            ys_ssm, yvars_ssm = condGP.component_means(return_var=True)
-            mus_ssm, vars_ssm = condGP.predict_component_means(t_test, return_var=True)
+            ## 1) at the data points
+            cond_comps = condGP.get_all_component_means(return_var=True)
+            ys_ssm = [cond_comps[k][0] for k in cond_comps]
+            yvars_ssm = [cond_comps[k][1] for k in cond_comps]
+            ## Can also extract just a component or group of components like so:
+            # y_sun, yvar_sun = condGP_ssm.get_component_mean(sunnames, return_var=True)
+            ## TODO: add a tinygp version to test this
 
+            ## 2) at predicted points
+            predStates = condGP.predict(t_test, return_full_state=True, return_var=True)
+            pred_comps = predStates.get_all_components(return_var=True)
+            mus_ssm = [pred_comps[k][0] for k in pred_comps]
+            vars_ssm = [pred_comps[k][1] for k in pred_comps]
+            # Can also extract a group of components' joint prediction
+            # mu_sun, var_sun = predStates.get_component(sunnames, return_var=True)
+            ## TODO: add a tinygp version to test this
+
+            ####################################################
             # tinygp version of component means prediction
-            mus_qsm = []
-            vars_qsm = []
-            for k in testgp.extract_leaf_kernels(gp_tiny.kernel):
-                yk, var_k = gp_tiny.predict(y_train, t_test, return_var=True, kernel=k)
-                mus_qsm.append(yk)
-                vars_qsm.append(var_k)
-
+            ## 1) at the data points
             ys_qsm = []
             yvars_qsm = []
             for k in testgp.extract_leaf_kernels(gp_tiny.kernel):
                 yk, var_k = gp_tiny.predict(y_train, t_train, return_var=True, kernel=k)
                 ys_qsm.append(yk)
                 yvars_qsm.append(var_k)
+
+            ## 2) at predicted points
+            mus_qsm = []
+            vars_qsm = []
+            for k in testgp.extract_leaf_kernels(gp_tiny.kernel):
+                yk, var_k = gp_tiny.predict(y_train, t_test, return_var=True, kernel=k)
+                mus_qsm.append(yk)
+                vars_qsm.append(var_k)
 
             # Compare
             for i in range(len(mus_ssm)):

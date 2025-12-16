@@ -75,15 +75,17 @@ class ConditionedStates(eqx.Module):
     """
     An object to hold the conditioned means and variances
 
-    t_states: time coordinates of all states
-    instid: instrument IDs corresponding to the measurement at each state
-    obsid: observation IDs corresponding to the measurement at each state
-    stateid: state IDs corresponding to each state (0 for exposure-start, 1 for exposure-end)
-    predicted_mean/var : Kalman predicted state
-    filtered_mean/var  : Kalman filtered state
-    smoothed_mean/var  : RTS smoothed state
+    X: len(N) data coordinates
+    t_states: len(K) time coordinates of all states
+    instid  : len(N) instrument ID for each measurement
+    obsid   : len(K) observation IDs corresponding to the measurement at each state
+    stateid : len(K) state IDs corresponding to each state (0 for exposure-start, 1 for exposure-end)
+    predicted_mean/var : len(K) Kalman predicted state
+    filtered_mean/var  : len(K) Kalman filtered state
+    smoothed_mean/var  : len(K) RTS smoothed state
     """
 
+    X: JAXArray
     t_states: JAXArray
     instid: JAXArray
     obsid: JAXArray
@@ -97,6 +99,7 @@ class ConditionedStates(eqx.Module):
 
     def __init__(
         self,
+        X,
         t_states: JAXArray,
         instid: JAXArray,
         obsid: JAXArray,
@@ -108,6 +111,7 @@ class ConditionedStates(eqx.Module):
         m_smooth: JAXArray,
         P_smooth: JAXArray,
     ):
+        self.X = X
         self.t_states = t_states
         self.instid = instid
         self.obsid = obsid
@@ -128,6 +132,139 @@ class ConditionedStates(eqx.Module):
         )
         # This should match the output of solver.condition
         return state_coords, packaged_results, None
+
+    def project_at_data(self, observation_model):
+        """
+        Project the states with measurements (e.g. exposure-ends)
+        and sort back into original order as the data
+        """
+
+        @jax.jit
+        def project(X, m, P):
+            H = observation_model(X)
+            mu = H @ m
+            var = H @ P @ H.T
+            return mu, var
+
+        N = jnp.array(self.X).shape[-1]
+        ends_idx = jnp.nonzero(self.stateid == 1, size=N)[0]
+        sort = jnp.argsort(self.obsid[ends_idx])
+        idx = ends_idx[sort]
+        m_sel = jnp.take(self.smoothed_mean, idx, axis=0)
+        P_sel = jnp.take(self.smoothed_cov, idx, axis=0)
+        mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
+        return mu.squeeze(), var.squeeze()
+
+
+class PredictedStates(eqx.Module):
+    """
+    An object to hold the full predictive states
+
+    t_states: time coordinates at each state
+    mean : predictive mean vector for each state
+    cov  : predictive covariance for each state
+    """
+
+    t_states: JAXArray
+    mean: JAXArray
+    cov: JAXArray
+    kernel: StateSpaceModel
+
+    def __init__(
+        self,
+        t_states: JAXArray,
+        m: JAXArray,
+        P: JAXArray,
+        kernel: StateSpaceModel,
+    ):
+        self.t_states = t_states
+        self.mean = m
+        self.cov = P
+        self.kernel = kernel
+
+    def project_mean(self, observation_model) -> JAXArray:
+        """
+        The projected mean at self.t_states given an observation model.
+        """
+
+        def _project(H, m):
+            mu = H @ m
+            return mu
+
+        H = jax.vmap(observation_model)(self.t_states)
+        mu = jax.vmap(_project)(H, self.mean)
+        return mu.squeeze()
+
+    def project_variance(self, observation_model) -> JAXArray:
+        """
+        The projected variance at self.t_states given an observation model.
+        """
+
+        def _project(H, P):
+            var = H @ P @ H.T
+            return var
+
+        H = jax.vmap(observation_model)(self.t_states)
+        var = jax.vmap(_project)(H, self.cov)
+        return var.squeeze()
+
+    @property
+    def loc(self) -> JAXArray:
+        """
+        The overall mean at the predicted states
+        """
+        return self.project_mean(self.kernel.observation_matrix)
+
+    @property
+    def variance(self) -> JAXArray:
+        """
+        The overall variance at the predicted states
+        """
+        return self.project_variance(self.kernel.observation_matrix)
+
+    def get_component(
+        self,
+        component: str | list[str],
+        return_var: bool = False,
+    ) -> PredictedStates:
+        """
+        Extract the predicted states corresponding to a component kernel
+        """
+
+        if isinstance(component, str):
+            component = [component]
+
+        ## Get effective observation model for the desired component(s)
+        def H_comp(X):
+            H = self.kernel.observation_model(X, component=component[0])
+            for k, name in enumerate(component[1:]):
+                H += self.kernel.observation_model(X, component=name)
+            return H
+
+        ## Project at test coordinates with component observation model
+        component_mean = self.project_mean(H_comp)
+        component_var = self.project_variance(H_comp)
+
+        if return_var:
+            return component_mean, component_var
+        else:
+            return component_mean
+
+    def get_all_components(self, return_var: bool = False) -> dict[str, Any]:
+        """
+        Extract the predicted mean/variance corresponding to each component kernel
+        """
+        components = extract_leaf_kernels(self.kernel)
+        results = {}
+        for kernel in components:
+            name = kernel.name
+            if return_var:
+                mu_m, var_m = self.get_component(name, return_var=True)
+                results[name] = (mu_m, var_m)
+            else:
+                mu_m = self.get_component(name, return_var=False)
+                results[name] = mu_m
+        return results
 
 
 class GaussianProcess(eqx.Module):
@@ -386,6 +523,7 @@ class GaussianProcess(eqx.Module):
         # so we can use them to make quick predictions at test
         # points with subsequent calls to self.predict
         states = ConditionedStates(
+            self.X,
             t_states,
             instid,
             obsid,
@@ -420,7 +558,7 @@ class GaussianProcess(eqx.Module):
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
             X_test = self.X
-            mu, var = self._project_at_data(observation_model, states)
+            mu, var = states.project_at_data(observation_model)
 
         ## Create the conditioned GP
         condGP = GaussianProcess(
@@ -517,7 +655,7 @@ class GaussianProcess(eqx.Module):
                         H_comp = lambda X: self.kernel.observation_model(
                             X, component=name
                         )
-                        mu, var = self._project_at_data(H_comp, self.states)
+                        mu, var = self.states.project_at_data(H_comp)
             else:
                 # Predicting at new test points
                 H_test = (
@@ -529,6 +667,9 @@ class GaussianProcess(eqx.Module):
                 if return_full_state:
                     mu = mean
                     var = variance
+                    return PredictedStates(
+                        t_states=X_test, m=mu, P=var, kernel=self.kernel
+                    )
                 else:
                     if kernel is not None:
                         name = kernel if isinstance(kernel, str) else kernel.name
@@ -620,9 +761,62 @@ class GaussianProcess(eqx.Module):
 
         return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 
-    # @jax.jit # TODO: can it be jitted
-    def component_means(self, return_var: bool = False) -> Any:
-        """Get the means of each component kernel in a multi-component model
+    def get_component_mean(
+        self,
+        component: list | str,
+        return_var: bool = False,
+        **kwargs,
+    ) -> Any:
+        """
+        Get the predictive mean (and variance) of a particular
+        (or sum of) component kernel in a multi-component model
+        evaluated at self.X
+
+        Args:
+            X (JAXArray, optional): The coordinates where the prediction
+                should be evaluated. This should have a data type compatible
+                with the ``X`` data provided when instantiating this object.
+            component (list | str): The name(s) of the component kernel(s)
+                to extract the mean for. If a list of names is provided,
+                the joint mean and variance for that collection of kernels
+                will be returned.
+            return_var (bool, optional): If ``True``, also return the variances
+                of each component. Default is ``False``.
+
+        Returns:
+            If ``return_var`` is ``False``:
+                component_mean (JAXArray)
+            If ``return_var`` is ``True``:
+                component_mean (JAXArray)
+                component_var (JAXArray)
+        """
+        if self.states is None:
+            raise ValueError(
+                "The GP must be conditioned before getting component means."
+            )
+
+        if isinstance(component, str):
+            component = [component]
+
+        ## Get effective observation model for the desired component(s)
+        def H_comp(X):
+            H = self.kernel.observation_model(X, component=component[0])
+            for k, name in enumerate(component[1:]):
+                H += self.kernel.observation_model(X, component=name)
+            return H
+
+        ## Project at data
+        component_mean, component_var = self.states.project_at_data(H_comp)
+
+        if return_var:
+            return component_mean, component_var
+        else:
+            return component_mean
+
+    def get_all_component_means(self, return_var: bool = False, **kwargs) -> Any:
+        """
+        Get the predictive mean (and optionally variance) of each
+        component kernels individually, evaluated at self.X
 
         Args:
             return_var (bool, optional): If ``True``, also return the variances
@@ -641,105 +835,21 @@ class GaussianProcess(eqx.Module):
                 "The GP must be conditioned before getting component means."
             )
 
-        means_list = []
-        vars_list = []
-
         ## First, extract all kernels
         kernels = extract_leaf_kernels(self.kernel)
 
         ## Loop through and project each component
+        results = {}
         for k, kernel in enumerate(kernels):
-            H = lambda X: self.kernel.observation_model(X, component=kernel.name)
-            mu, var = self._project_at_data(H, self.states)
-            means_list.append(mu)
-            vars_list.append(var)
-
-        if return_var:
-            return means_list, vars_list
-        else:
-            return means_list
-
-    # @jax.jit # TODO: can it be jitted
-    def predict_component_means(
-        self, X_test, return_var: bool = False, **kwargs
-    ) -> Any:
-        """Get the means of each component kernel in a multi-component model
-        at new test points
-
-        Args:
-            X_test (JAXArray): The coordinates where the prediction
-                should be evaluated. This should have a data type compatible
-                with the ``X`` data provided when instantiating this object.
-            return_var (bool, optional): If ``True``, also return the variances
-                of each component. Default is ``False``.
-
-        Returns:
-            If ``return_var`` is ``False``, a list of JAX arrays containing the
-            means of each component kernel evaluated at the test points.
-            If ``return_var`` is ``True``, a tuple where the first element is
-            the list of means as before, and the second element is a list of
-            JAX arrays containing the variances of each component kernel
-            evaluated at the test points.
-        """
-        if self.states is None:
-            raise ValueError(
-                "The GP must be conditioned before getting component means."
+            mu, var = self.get_component_mean(
+                component=kernel.name, return_var=True, kwargs=kwargs
             )
+            if return_var:
+                results[kernel.name] = (mu, var)
+            else:
+                results[kernel.name] = mu
 
-        means_list = []
-        vars_list = []
-
-        ## First, extract all kernels
-        kernels = extract_leaf_kernels(self.kernel)
-
-        ## Predict full state at test points
-        m_test, P_test = self.predict(X_test, return_full_state=True, return_var=True)
-
-        @jax.jit
-        def project(H, m, P):
-            mu = H @ m
-            var = H @ P @ H.T
-            return mu, var
-
-        ## Loop through and project each component
-        for k, kernel in enumerate(kernels):
-            H_comp = lambda X: self.kernel.observation_model(X, component=kernel.name)
-            H = jax.vmap(H_comp)(X_test)
-            mu, var = jax.vmap(project)(H, m_test, P_test)
-            means_list.append(mu.squeeze())
-            vars_list.append(var.squeeze())
-
-        if return_var:
-            return means_list, vars_list
-        else:
-            return means_list
-
-    # @jax.jit # TODO: can it be jitted
-    def _project_at_data(self, observation_model=None, states=None):
-        """
-        Project the states with measurements (e.g. exposure-ends)
-        and sort back into original order as the data
-        """
-        if states is None:
-            states = self.states
-        if observation_model is None:
-            observation_model = self.kernel.observation_model
-
-        @jax.jit
-        def project(X, m, P):
-            H = observation_model(X)
-            mu = H @ m
-            var = H @ P @ H.T
-            return mu, var
-
-        t_data = self.kernel.coord_to_sortable(self.X)
-        ends_idx = jnp.nonzero(states.stateid == 1, size=t_data.shape[0])[0]
-        sort = jnp.argsort(states.obsid[ends_idx])
-        idx = ends_idx[sort]
-        m_sel = jnp.take(states.smoothed_mean, idx, axis=0)
-        P_sel = jnp.take(states.smoothed_cov, idx, axis=0)
-        mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
-        return mu.squeeze(), var.squeeze()
+        return results
 
 
 class ConditionResult(NamedTuple):
