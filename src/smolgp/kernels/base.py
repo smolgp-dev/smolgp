@@ -702,9 +702,21 @@ class SHO(StateSpaceModel):
             return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
 
         def overdamped(dt: JAXArray) -> JAXArray:
-            Pinf = self.stationary_covariance()
-            A = self.transition_matrix(0, dt)
-            return Pinf - A @ Pinf @ A.T
+            f = 2 * n * q
+            q2 = jnp.square(q)
+            n2 = jnp.square(n)
+            w2 = jnp.square(w)
+            a = w * dt / q  # argument in exponential
+            x = n * w * dt  # argument in sin/cos
+            sinh = jnp.sinh(x)
+            sinh2 = jnp.sinh(2 * x)
+            sinhsq = jnp.square(sinh)
+            exp = jnp.exp(-a)
+            expm1 = jnp.expm1(-a)  # exp(-a) - 1
+            Q11 = -expm1 - (sinh2 / f + sinhsq / (2 * n2 * q2)) * exp
+            Q12 = Q21 = exp * (w * sinhsq / (n2 * q))
+            Q22 = w2 * (-expm1 + exp * (sinh2 / f - sinhsq / (2 * n2 * q2)))
+            return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),
