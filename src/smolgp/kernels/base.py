@@ -20,7 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import expm
-from jax.scipy.special import gammaln
+from jax.scipy.special import gammaln, factorial
 
 from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
@@ -1248,3 +1248,120 @@ class ExpSineSquared(Wrapper):
             """The process noise Q_k for the PeriodicTerm"""
             del X1, X2
             return jnp.zeros((self.dimension, self.dimension))
+
+
+class Matern(StateSpaceModel):
+    r"""
+    A state space implementation of the generic half-integer Matérn kernel
+    with smoothness parameter :math:`\nu = p + 1/2` for integer :math:`p \geq 0`,
+    length scale :math:`\ell`, and amplitude :math:`\sigma`.
+
+    The model is dimension :math:`d = \nu + 1/2` and has the form 
+    (see Eq. 12.34-35 of Särkkä and Solin 2019):
+
+    .. math::
+
+        F = \begin{pmatrix}
+                0      & 1 & 0 & & \\
+                \vdots & 0 & 1 & & \\
+                       &   & \ddots & \ddots & \\
+         -a_1\lambda^d & -a_2\lambda^{d-1} & \cdots & -a_d\lambda
+            \end{pmatrix}, L = \begin{pmatrix}
+                0 \\
+                \vdots \\
+                0 \\
+                1
+            \end{pmatrix},
+    where :math:`\lambda = \sqrt{2\nu}/\ell` and the coefficients 
+    :math:`a_i = \binom{d}{i-1}` are the binomial coefficients.
+    The spectral noise density is given by:
+        .. math::
+
+            Q_c = \sigma^2 \frac{[(d-1)!]^2}{(2d-2)!} (2\lambda)^{2d-1}.
+    
+            
+    Args:
+        nu: The smoothness parameter :math:`\nu` (must be half-integer).
+        scale: The parameter :math:`\ell`.
+        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
+    """
+
+    nu: JAXArray | float
+    scale: JAXArray | float
+    sigma: JAXArray | float
+    lam: JAXArray | float
+
+    def __init__(
+        self,
+        nu: JAXArray | float,
+        scale: JAXArray | float,
+        sigma: JAXArray | float = jnp.ones(()),
+        name: str = "Matern",
+        **kwargs,
+    ):
+        assert jnp.isclose(nu % 1, 0.5), (
+            "nu must be a half-integer (e.g., 1/2, 3/2, 5/2, etc.)"
+        )
+        self.nu = nu
+        self.scale = scale
+        self.sigma = sigma
+        self.name = f"Matern{self.nu * 2:.0f}{2}"
+        self.lam = jnp.sqrt(2 * self.nu) / self.scale
+
+    @property
+    def dimension(self) -> int:
+        """The dimension of the state space for the Matérn process"""
+        return int(self.nu + 0.5)
+
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for the Matern process, F"""
+        d = self.dimension
+        F = jnp.zeros((d, d))
+        for i in range(d - 1):
+            F = F.at[i, i + 1].set(1)
+        for i in range(d):
+            ai = factorial(d) / (factorial(i) * factorial(d - i))
+            F = F.at[d - 1, i].set(-ai * jnp.power(self.lam, d - i))
+        return F
+
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for the Matern process"""
+        del X
+        H = jnp.zeros((1, self.dimension))
+        H = H.at[0, 0].set(1)
+        return H
+
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for the Matern process"""
+        L = jnp.zeros((self.dimension, 1))
+        L = L.at[-1, 0].set(1)
+        return L
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for the Matern process"""
+        d = self.dimension
+        q = (
+            jnp.square(self.sigma)
+            * jnp.square(factorial(d - 1))
+            / factorial(2 * d - 2)
+            * jnp.power(2 * self.lam, 2 * d - 1)
+        )
+        return jnp.array([[q]])
+
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of the Matern-5/2 process, Pinf"""
+        from scipy.linalg import solve_continuous_lyapunov
+
+        # TODO: find a JAX version of solve_continuous_lyapunov
+        # or figure out the general form for Pinf analytically
+        print(
+            "Warning: there does not seem to be a JAX implementation "
+            "of solve_continuous_lyapunov, so we use the scipy version here "
+            "for now. This means that this method will not be JIT-compilable."
+        )
+
+        F = self.design_matrix()
+        L = self.noise_effect_matrix()
+        Qc = self.noise()
+        LQL = L @ Qc @ L.T
+        return jnp.array(solve_continuous_lyapunov(F, -LQL))
