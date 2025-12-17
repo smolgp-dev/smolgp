@@ -1062,11 +1062,10 @@ class Cosine(StateSpaceModel):
         sin = jnp.sin(arg)
         return jnp.array([[cos, -sin], [sin, cos]])
 
-    # def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-    #     """The process noise Q_k for the Cosine process"""
-    #     dt = X2 - X1
-    #     TODO: can implement here the analytic version, but by
-    #           default the parent class will generate w/ Pinf - A Pinf A^T
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The process noise Q_k for the Cosine process"""
+        del X1, X2
+        return jnp.zeros((self.dimension, self.dimension))
 
 
 # class ExpSquared(StateSpaceModel):
@@ -1199,13 +1198,13 @@ class ExpSineSquared(Wrapper):
             self.name = f"PeriodicTerm_{order}"
 
         def design_matrix(self) -> JAXArray:
-            """The design (also called the feedback) matrix for the process, $F$"""
+            """The design (also called the feedback) matrix for the PeriodicTerm, $F$"""
             j = self.order
             w = self.omega
             return jnp.array([[0, -w * j], [w * j, 0]])
 
         def stationary_covariance(self) -> JAXArray:
-            """The stationary covariance of the process, Pinf"""
+            """The stationary covariance of the prPeriodicTermocess, Pinf"""
             j = self.order
             arg = 1 / self.scale
             coeff = jax.lax.cond(j == 0, lambda _: 1.0, lambda _: 2.0, j)
@@ -1213,15 +1212,15 @@ class ExpSineSquared(Wrapper):
             return qj2 * jnp.eye(self.dimension)
 
         def observation_matrix(self, X: JAXArray) -> JAXArray:
-            """The observation matrix for the process, $H$"""
+            """The observation matrix for the PeriodicTerm, $H$"""
             return jnp.array([[1, 0]])
 
         def noise(self) -> JAXArray:
-            """The spectral density of the white noise process, $Q_c$"""
+            """The spectral density of the white noise for the PeriodicTerm, $Q_c$"""
             return jnp.zeros((self.dimension, self.dimension))
 
         def noise_effect_matrix(self) -> JAXArray:
-            """The noise effect matrix, $L$"""
+            """The noise effect matrix $L$ for the PeriodicTerm"""
             return jnp.eye(self.dimension)
 
         def Ij(self, j, x, terms=50) -> JAXArray:
@@ -1234,3 +1233,18 @@ class ExpSineSquared(Wrapper):
                 -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
             )
             return jnp.sum(jnp.exp(log_terms))
+
+        def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+            """The transition matrix A_k for the PeriodicTerm"""
+            t1 = self.coord_to_sortable(X1)
+            t2 = self.coord_to_sortable(X2)
+            dt = t2 - t1
+            arg = self.order * self.omega * dt
+            cos = jnp.cos(arg)
+            sin = jnp.sin(arg)
+            return jnp.array([[cos, -sin], [sin, cos]])
+
+        def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+            """The process noise Q_k for the PeriodicTerm"""
+            del X1, X2
+            return jnp.zeros((self.dimension, self.dimension))
