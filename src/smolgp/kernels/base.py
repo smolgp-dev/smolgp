@@ -699,7 +699,10 @@ class SHO(StateSpaceModel):
             Q11 = -expm1 - (sin2 / f + sinsq / (2 * n2 * q2)) * exp
             Q12 = Q21 = exp * (w * sinsq / (n2 * q))
             Q22 = w2 * (-expm1 + exp * (sin2 / f - sinsq / (2 * n2 * q2)))
-            return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
+            Q = jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
+            return jnp.where(
+                jnp.abs(Q) < 1e-14, jnp.zeros_like(Q), Q
+            )  # prevent underflows
 
         def overdamped(dt: JAXArray) -> JAXArray:
             f = 2 * n * q

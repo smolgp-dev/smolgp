@@ -33,7 +33,6 @@ __all__ = [
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-from functools import partial
 
 from tinygp.helpers import JAXArray
 
@@ -194,7 +193,8 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         K1 = vanloan["K1"]
 
         M = F3.T @ H2
-        W = (F3.T @ K1) + (F3.T @ K1).T
+        F3TK1 = F3.T @ K1
+        W = F3TK1 + F3TK1.T
 
         Qaug12 = M[:, :1]
         Qaug21 = Qaug12.T
@@ -402,8 +402,11 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             iQ22 = jnp.maximum(iQ22, 0.0)  # prevent underflows at dt=0
 
             Qaug12 = sigma2 * jnp.array([[iQ12_1], [iQ12_2]])
-            Qaug21 = Qaug12.T
             Qaug22 = sigma2 * jnp.array([[iQ22]])
+            # Prevent underflows
+            Qaug12 = jnp.where(jnp.abs(Qaug12) < 1e-14, jnp.zeros_like(Qaug12), Qaug12)
+            Qaug22 = jnp.where(jnp.abs(Qaug22) < 1e-14, jnp.zeros_like(Qaug22), Qaug22)
+            Qaug21 = Qaug12.T
             return Qaug12, Qaug21, Qaug22
 
         def overdamped(dt: JAXArray) -> JAXArray:
