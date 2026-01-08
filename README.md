@@ -9,10 +9,12 @@
 
 [`smolgp`](https://github.com/smolgp-dev/smolgp) is a Python/JAX standalone extension of the [`tinygp`](https://github.com/dfm/tinygp) package that implements
 1. A Kalman filter and RTS smoother as a `StateSpaceSolver` compatible with `tinygp`-like GP kernels (see `smolgp.kernels`)
-2. An `IntegratedStateSpaceSolver` that can handle integrated (and possibly overlapping) measurements from multiple instruments (see Rubenzahl and Hattori et al. submitted)
-3. Parallelized versions of 1 (`ParallelStateSpaceSolver`, see [Särkkä and García-Fernández 2020](https://ieeexplore.ieee.org/document/9013038)) and 2 (`ParallelIntegratedStateSpaceSolver`, see Rubenzahl and Hattori et al. submitted) using `jax.lax.associative_scan`
+2. An `IntegratedStateSpaceSolver` that can handle integrated (and possibly overlapping) measurements from multiple instruments (see [Rubenzahl and Hattori et al. submitted](https://arxiv.org/abs/2601.02527))
+3. Parallelized versions of 1 (`ParallelStateSpaceSolver`, see [Särkkä and García-Fernández 2020](https://ieeexplore.ieee.org/document/9013038)) and 2 (`ParallelIntegratedStateSpaceSolver`, see [Rubenzahl and Hattori et al. submitted](https://arxiv.org/abs/2601.02527)) using `jax.lax.associative_scan`
     - see also [Yaghoobi and Särkkä 2024](https://ieeexplore.ieee.org/abstract/document/10804629) and its [implementation](https://github.com/Fatemeh-Yaghoobi/Parallel-integrated-method?tab=readme-ov-file)
 4. Approximations of popular GP kernels that lack quasiseparability (e.g., ExpSineSquared, Quasiperiodic) but can utilize the O(N) states space solvers.
+
+This package (and its documentation) is still under heavy active development, with tutorials coming soon. Please raise issues here and/or reach out to [Ryan Rubenzahl](https://github.com/rrubenza) and/or [So Hattori](https://github.com/soichiro-hattori). 
 
 ## Installation
 
@@ -22,4 +24,4 @@ There is also a version on PyPI (TODO: will be auto-updated with most recent ver
 
 ```uv add smolgp```
 
-Note that `tinygp` dependencies require the latest version of the [`tinygp` GitHub repository](https://github.com/dfm/tinygp) rather than the version on PyPI.
+Note that `tinygp` dependencies require the latest version of the [tinygp GitHub repository](https://github.com/dfm/tinygp), rather than the version on PyPI.
