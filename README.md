@@ -24,4 +24,4 @@ There is also a version on PyPI (TODO: will be auto-updated with most recent ver
 
 ```uv add smolgp```
 
-Note that `tinygp` dependencies require the latest version of the [tinygp GitHub repository](https://github.com/dfm/tinygp), rather than the version on PyPI.
+Note that `tinygp` dependencies require the latest version of the [tinygp GitHub repository](https://github.com/dfm/tinygp), rather than the version on PyPI. `uv` should handle this automatically.
