@@ -3753,6 +3753,8 @@ docs = [
     { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
     { name = "sphinx-autoapi" },
     { name = "sphinx-book-theme" },
+    { name = "sphinx-design" },
+    { name = "sphinxcontrib-lightbox2" },
 ]
 test = [
     { name = "pytest" },
@@ -3784,6 +3786,8 @@ docs = [
     { name = "sphinx", specifier = ">=8.1.3" },
     { name = "sphinx-autoapi", specifier = ">=3.6.1" },
     { name = "sphinx-book-theme" },
+    { name = "sphinx-design" },
+    { name = "sphinxcontrib-lightbox2" },
 ]
 test = [
     { name = "pytest" },
@@ -3920,6 +3924,19 @@ wheels = [
 ]
 
 [[package]]
+name = "sphinx-design"
+version = "0.6.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+    { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2b/69/b34e0cb5336f09c6866d53b4a19d76c227cdec1bbc7ac4de63ca7d58c9c7/sphinx_design-0.6.1.tar.gz", hash = "sha256:b44eea3719386d04d765c1a8257caca2b3e6f8421d7b3a5e742c0fd45f84e632", size = 2193689, upload-time = "2024-08-02T13:48:44.277Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c6/43/65c0acbd8cc6f50195a3a1fc195c404988b15c67090e73c7a41a9f57d6bd/sphinx_design-0.6.1-py3-none-any.whl", hash = "sha256:b11f37db1a802a183d61b159d9a202314d4d2fe29c163437001324fe2f19549c", size = 2215338, upload-time = "2024-08-02T13:48:42.106Z" },
+]
+
+[[package]]
 name = "sphinxcontrib-applehelp"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3953,6 +3970,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b2/e8/9ed3830aeed71f17c026a07a5097edcf44b692850ef215b161b8ad875729/sphinxcontrib-jsmath-1.0.1.tar.gz", hash = "sha256:a9925e4a4587247ed2191a22df5f6970656cb8ca2bd6284309578f2153e0c4b8", size = 5787, upload-time = "2019-01-21T16:10:16.347Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/42/4c8646762ee83602e3fb3fbe774c2fac12f317deb0b5dbeeedd2d3ba4b77/sphinxcontrib_jsmath-1.0.1-py2.py3-none-any.whl", hash = "sha256:2ec2eaebfb78f3f2078e73666b1415417a116cc848b72e5172e596c871103178", size = 5071, upload-time = "2019-01-21T16:10:14.333Z" },
+]
+
+[[package]]
+name = "sphinxcontrib-lightbox2"
+version = "0.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "sphinx", version = "8.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+    { name = "sphinx", version = "8.2.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' or (extra == 'group-6-smolgp-cuda12' and extra == 'group-6-smolgp-cuda13')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2c/df/53cd11b018796417fd5b7288fa089b67d825996e13ad351e1763b71cf849/sphinxcontrib_lightbox2-0.5.0.tar.gz", hash = "sha256:68a7fc911731465552b0fe304448d3ba197bf981505ff4e6c6a19da782a8b920", size = 112177, upload-time = "2025-10-15T10:53:17.209Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/38/94/be4975a34a613fae20017907965792f9886b9fd8c80f479ca63647a1de51/sphinxcontrib_lightbox2-0.5.0-py3-none-any.whl", hash = "sha256:4bb23b700796c2b7b02b8d2992a02c70056cb30907e1cd1c59589e5a50d63903", size = 112998, upload-time = "2025-10-15T10:53:15.813Z" },
 ]
 
 [[package]]

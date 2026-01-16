@@ -11,6 +11,8 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
+    "sphinx_design",
+    "sphinxcontrib.lightbox2",
     "myst_nb",
     "IPython.sphinxext.ipython_console_highlighting",
 ]
