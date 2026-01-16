@@ -10,12 +10,17 @@ or this page to launch the notebook using [Binder](https://mybinder.org),
 [Colab](https://colab.research.google.com), or download the `.ipynb` file
 directly. -->
 
+## Getting Started
+
+```{toctree}
+tutorials/quickstart
+```
+
 ## Introductory Topics
 
 ```{toctree}
 :maxdepth: 1
 
-tutorials/quickstart
 tutorials/introssm
 tutorials/likelihoods
 tutorials/integrated
