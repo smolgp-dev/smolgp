@@ -13,6 +13,7 @@ directly. -->
 ## Getting Started
 
 ```{toctree}
+:maxdepth: 1
 tutorials/quickstart
 ```
 
@@ -22,7 +23,7 @@ tutorials/quickstart
 :maxdepth: 1
 
 tutorials/introssm
-tutorials/likelihoods
+tutorials/optimizing
 tutorials/integrated
 tutorials/customkernels
 ```
