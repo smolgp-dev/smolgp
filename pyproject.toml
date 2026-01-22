@@ -37,6 +37,7 @@ docs = [
     "sphinx-autoapi>=3.6.1",
     "sphinx-book-theme",
     "sphinx-design",
+    "sphinx-togglebutton",
     "sphinxcontrib-lightbox2",
     "matplotlib",
 #    "numpyro",

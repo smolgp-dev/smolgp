@@ -6,17 +6,20 @@
 # import smolgp
 
 extensions = [
+    "autoapi.extension",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.mathjax",
     "sphinx.ext.napoleon",
     "sphinx.ext.viewcode",
     "sphinx_design",
+    "sphinx_togglebutton",
     "sphinxcontrib.lightbox2",
     "myst_nb",
     "IPython.sphinxext.ipython_console_highlighting",
 ]
-myst_enable_extensions = ["dollarmath", "colon_fence"]
+myst_enable_extensions = ["amsmath", "dollarmath", "colon_fence"]
+math_numfig = True  # for section-numbered equations
 master_doc = "index"
 source_suffix = {
     ".rst": "restructuredtext",
@@ -24,6 +27,21 @@ source_suffix = {
 }
 templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+
+# -- Jupyter -------------------------------------------------
+# nb_execution_mode = "auto" # TODO: turn this back on for CI
+nb_execution_mode = "off"
+nb_execution_excludepatterns = ["benchmarks.ipynb"]
+nb_execution_timeout = -1
+
+# -- AutoAPI -------------------------------------------------
+autoapi_type = "python"
+autoapi_dirs = ["../src"]
+# autodoc_output_dir = "apidocs"
+# autoapi_add_toctree_entry = True
+# autodoc_type_aliases = {
+#     "JAXArray": "tinygp.helpers.JAXArray",
+# }
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
@@ -59,16 +77,3 @@ html_theme_options = {
     "use_download_button": True,
 }
 html_baseurl = "https://smolgp.readthedocs.io/en/latest/"
-nb_execution_mode = "auto"
-nb_execution_excludepatterns = ["benchmarks.ipynb"]
-nb_execution_timeout = -1
-
-# -- AutoAPI -------------------------------------------------
-extensions += [
-    "autoapi.extension",
-]
-autoapi_dirs = ["../src/smolgp"]
-# autoapi_add_toctree_entry = True
-autodoc_type_aliases = {
-    "JAXArray": "tinygp.helpers.JAXArray",
-}

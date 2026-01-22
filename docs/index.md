@@ -11,11 +11,11 @@ If you use `smolgp` in your research, please see {ref}`citing`.
 ```{admonition} When should I use smolgp instead of tinygp?
 :class: tip
 
-⚡️ If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see {ref}`quasiperiodic`).
-
-∬ If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. `smolgp` can correctly account for the integrated covariance while maintaining scalable performance. See {ref}`integrated` for more details.
-
-📊 If you are jointly modeling data from multiple instruments and those measurements overlap with one another. `smolgp` naturally accounts for the covariances during the overlap by construction.
+<div style="display: flex"><div style="font-size: 40px;margin-right:16px">⚡️</div><div>  If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see {ref}`kernels`).</div></div>
+<br>
+<div style="display: flex"><div style="font-size: 40px;margin-right:16px">∬</div><div> If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. `smolgp` can correctly account for the integrated covariance while maintaining scalable performance. See {ref}`integrated` for more details.</div></div>
+<br>
+<div style="display: flex"><div style="font-size: 40px;margin-right:16px">📊</div><div> If you are jointly modeling data from multiple instruments and those measurements overlap with one another. `smolgp` naturally accounts for the covariances during the overlap by construction.</div></div>
 ```
 
 If you find any bugs, please raise them on the [GitHub issues
