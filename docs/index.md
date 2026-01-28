@@ -17,11 +17,35 @@ If you use `smolgp` in your research, please see {ref}`citing`.
 ```{admonition} When should I use smolgp instead of tinygp?
 :class: tip
 
-<div style="display: flex"><div style="font-size: 40px;margin-right:16px">⚡️</div><div>  If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see {ref}`kernels`).</div></div>
+<div style="display: flex; align-items: flex-start;">
+  <div style="width:75px; margin-right: 16px;">
+    <img src="_static/quasiperiodic.png" style="max-width: 100%; height: auto;">
+  </div>
+  <div style="flex: 1;">
+    <strong>Scalable non-quasiseparable kernels</strong><br>
+    If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see {ref}`kernels`).
+  </div>
+</div>
 <br>
-<div style="display: flex"><div style="font-size: 40px;margin-right:16px">∬</div><div> If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. `smolgp` can correctly account for the integrated covariance while maintaining scalable performance. See {ref}`integrated` for more details.</div></div>
+<div style="display: flex; align-items: flex-start;">
+  <div style="width:75px; margin-right: 16px;">
+    <img src="_static/integrated_measurement.png" style="max-width: 100%; height: auto;">
+  </div>
+  <div style="flex: 1;">
+    <strong>Integrated measurements</strong><br>
+    If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. <code>smolgp</code> can correctly account for the integrated covariance while maintaining scalable performance. See {ref}`integrated` for more details.
+  </div>
+</div>
 <br>
-<div style="display: flex"><div style="font-size: 40px;margin-right:16px">📊</div><div> If you are jointly modeling data from multiple instruments and those measurements overlap with one another. `smolgp` naturally accounts for the covariances during the overlap by construction.</div></div>
+<div style="display: flex; align-items: flex-start;">
+  <div style="width:75px; margin-right: 16px;">
+    <img src="_static/overlapping_measurements.png" style="max-width: 100%; height: auto;">
+  </div>
+  <div style="flex: 1;">
+    <strong>Overlapping datasets</strong><br>
+    If you are jointly modeling data from multiple instruments and those measurements overlap with one another, <code>smolgp</code> naturally accounts for the covariances during the overlap by construction, preserving scalability.
+  </div>
+</div>
 ```
 
 If you find any bugs, please raise them on the [GitHub issues
