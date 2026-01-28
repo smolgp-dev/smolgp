@@ -2,6 +2,12 @@
 
 _**S**tate Space **M**odels for **O**(**L**inear/Log) **G**aussian **P**rocesses_
 
+[![docs](https://readthedocs.org/projects/smolgp/badge/?version=latest)](https://smolgp.readthedocs.io/en/latest/index.html)
+[![Tests](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml/badge.svg)](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml)
+[![codecov](https://codecov.io/github/smolgp-dev/smolgp/branch/main/graph/badge.svg?token=KQLRPBCV9X)](https://codecov.io/github/smolgp-dev/smolgp)
+[![arXiv](https://img.shields.io/badge/arXiv-2601.02527-b31b1b.svg)](https://arxiv.org/abs/2601.02527)
+
+
 [`smolgp`](https://github.com/smolgp-dev/smolgp) is a Python/JAX standalone extension of the [`tinygp`](https://github.com/dfm/tinygp) package that uses the state space representation of Gaussian Process to achieve substantial performance boosts. Like `tinygp` it is built on top of [`jax`](https://github.com/google/jax) and so can utilize just-in-time compliation, automatic differentiation, and GPU-accelerated linear algebra. It can even be [parallelized](tutorials/parallel) for a further performance boost.
 
 To get started, check out the {ref}`guide` and then the {ref}`quickstart` to hit the ground running. There are also many useful {ref}`tutorials` with example usage, including {ref}`introssm` for those interested in the framework that powers `smolgp`. For all the nitty-gritty details, see the [full API documentation](api-ref). 

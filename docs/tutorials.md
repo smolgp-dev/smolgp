@@ -25,6 +25,7 @@ tutorials/quickstart
 tutorials/introssm
 tutorials/optimizing
 tutorials/integrated
+tutorials/parallel
 tutorials/customkernels
 ```
 
@@ -33,7 +34,6 @@ tutorials/customkernels
 ```{toctree}
 :maxdepth: 1
 
-tutorials/parallel
 tutorials/derivative
 tutorials/multiinstrument
 tutorials/multicomponent
