@@ -17,18 +17,12 @@ permissions:
   contents: read
 
 jobs:
-  pypi-publish:
-    name: pypi-publish
+  release-build:
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/smolgp/
-    permissions:
-      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-        
+
       # https://docs.astral.sh/uv/guides/integration/github/#using-uv-pip
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@v7
@@ -38,6 +32,20 @@ jobs:
 
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+        
+  pypi-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/smolgp/
+    permissions:
+      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+    steps:
+      - name: Retrieve release distributions
+        uses: actions/download-artifact@v5
         with:
           name: release-dists
           path: dist/
