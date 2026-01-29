@@ -28,9 +28,7 @@ jobs:
         uses: astral-sh/setup-uv@v7
   
       - name: Build release distributions
-        run: |
-            uv pip install build
-            uv run -m build
+        run: uv build
 
       - name: Retrieve release distributions
         uses: actions/upload-artifact@v4
