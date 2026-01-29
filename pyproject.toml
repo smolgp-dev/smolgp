@@ -1,6 +1,6 @@
 [project]
 name = "smolgp"
-version = "0.0.1"
+version = "0.1.0"
 description = "Gaussian Process State Space Models in Python/JAX"
 authors = [{ name = "Ryan Rubenzahl", email = "rrubenzahl@gmail.com" },
            { name = "Soichiro Hattori", email = "soichiro.hattori@gmail.com"}]
