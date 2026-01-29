@@ -6,7 +6,7 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-name: Upload Python Package to PyPI with uv
+name: Upload to PyPI
 
 on:
   release:
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   pypi-publish:
-    name: Upload to PyPI
+    name: pypi-publish
     runs-on: ubuntu-latest
     environment:
       name: pypi
