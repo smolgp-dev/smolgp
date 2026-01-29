@@ -28,16 +28,20 @@ jobs:
         uses: astral-sh/setup-uv@v7
   
       - name: Build release distributions
-        run: uv build
+        run: |
+            uv pip install build
+            uv run -m build
 
       - name: Retrieve release distributions
-        uses: actions/download-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: release-dists
           path: dist/
         
   pypi-publish:
     runs-on: ubuntu-latest
+    needs:
+      - release-build
     environment:
       name: pypi
       url: https://pypi.org/project/smolgp/
