@@ -1,0 +1,52 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: smolgp
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Ryan
+    family-names: Rubenzahl
+    email: rrubenzahl@flatironinstitute.org
+    affiliation: Flatiron Institute
+    orcid: 'https://orcid.org/0000-0003-3856-3143'
+  - given-names: Soichiro
+    family-names: Hattori
+    email: soichiro.hattori@columbia.edu
+    affiliation: Columbia University
+    orcid: 'https://orcid.org/0000-0002-0842-863X'
+  - given-names: Simo
+    family-names: Särkkä
+    email: simo.sarkka@aalto.fi
+    affiliation: Aalto University
+    orcid: 'https://orcid.org/0000-0002-7031-9354'
+  - given-names: Will
+    family-names: Farr
+    email: wfarr@flatironinstitute.org
+    affiliation: 'Stony Brook University, Flatiron Institute'
+    orcid: 'https://orcid.org/0000-0003-1540-8562'
+  - given-names: Jacob
+    family-names: Luhn
+    email: jacob.luhn@jpl.nasa.gov
+    affiliation: NASA Jet Propulsion Laboratory
+    orcid: 'https://orcid.org/0000-0002-4927-9925'
+  - given-names: Megan
+    family-names: Bedell
+    email: mbedell@flatironinstitute.org
+    affiliation: Flatiron Institute
+    orcid: 'https://orcid.org/0000-0001-9907-7742'
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.18418837
+  - type: url
+    value: 'https://arxiv.org/abs/2601.02527'
+repository-code: 'https://github.com/smolgp-dev/smolgp'
+url: 'https://smolgp.readthedocs.io/en/latest/'
+abstract: Gaussian Process State Space Models in Python/JAX
+keywords:
+  - Gaussian Process
+  - State Space Models
+license: MIT
