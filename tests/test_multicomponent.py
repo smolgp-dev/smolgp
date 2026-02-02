@@ -86,6 +86,24 @@ def test_multicomponent():
             cond_comps = condGP.get_all_component_means(return_var=True)
             ys_ssm = [cond_comps[k][0] for k in cond_comps]
             yvars_ssm = [cond_comps[k][1] for k in cond_comps]
+            ## can also get component means at the data points by:
+            component_kernels = extract_leaf_kernels(gp_smol.kernel)
+            y1, var1 = gp_smol.predict(
+                X_test=None, y=y_train, return_var=True, kernel=component_kernels[0]
+            )
+            allclose(
+                "component mean via predict vs get_all_component_means",
+                y1 - ys_ssm[0],
+                tol=1e-12,
+                atol=1e-15,
+            )
+            allclose(
+                "component var via predict vs get_all_component_means",
+                var1 - yvars_ssm[0],
+                tol=1e-12,
+                atol=1e-15,
+            )
+
             ## Can also extract just a component or group of components like so:
             # y_sun, yvar_sun = condGP_ssm.get_component_mean(sunnames, return_var=True)
             ## TODO: add a tinygp version to test this

@@ -32,7 +32,7 @@ def likelihood(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     allclose("likelihood", res, tol=tol, atol=atol)
 
 
-def condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
+def condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12, test_all_cases=False):
     """
     Check the conditioned means/vars are the same
     """
@@ -42,6 +42,25 @@ def condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     var_res = (condGP_tiny.variance - offset) - condGP_smol.variance
     allclose("conditioned means", mu_res, tol=tol, atol=atol)
     allclose("conditioned variances", var_res, tol=tol, atol=atol)
+
+    if test_all_cases:
+        # also check that predict with X_test=None gives the same results
+        mu_smol, var_smol = gp_smol.predict(X_test=None, y=y_train, return_var=True)
+        res = mu_smol - condGP_smol.loc
+        allclose("  predict with X_test=None (mean)", res, tol=tol, atol=atol)
+        res = var_smol - condGP_smol.variance
+        allclose("  predict with X_test=None (var)", res, tol=tol, atol=atol)
+
+        # check full state returns correctly
+        m_smol, P_smol = gp_smol.predict(
+            X_test=None, y=y_train, return_var=True, return_full_state=True
+        )
+        m = condGP_smol.states.smoothed_mean
+        P = condGP_smol.states.smoothed_cov
+        res = m_smol - m
+        allclose("  full state predict (mean)", res, tol=tol, atol=atol)
+        res = P_smol - P
+        allclose("  full state predict (var)", res, tol=tol, atol=atol)
 
 
 def predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
@@ -66,7 +85,7 @@ def predict(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12):
     allclose("predicted variances", var_res, tol=tol, atol=atol)
 
 
-def kernel(kernel_smol, kernel_tiny):
+def kernel(kernel_smol, kernel_tiny, test_all_cases=False):
     """
     Check the smolgp kernel produces the same
     results as tinygp for all the above tests
@@ -99,7 +118,14 @@ def kernel(kernel_smol, kernel_tiny):
     likelihood(gp_smol, gp_tiny, y_train, tol=llhtol, atol=llhatol)
 
     # Check conditioning
-    condition(gp_smol, gp_tiny, y_train, tol=condtol, atol=condatol)
+    condition(
+        gp_smol,
+        gp_tiny,
+        y_train,
+        tol=condtol,
+        atol=condatol,
+        test_all_cases=test_all_cases,
+    )
 
     # Check predictions
     predict(gp_smol, gp_tiny, y_train, tol=predtol, atol=predatol)
@@ -154,7 +180,7 @@ def test_kernels():
     for name in kernels:
         ksmol, ktiny = kernels[name]
         print(f"Testing {name}...")
-        kernel(ksmol, ktiny)
+        kernel(ksmol, ktiny, test_all_cases=name == "Exp")
         print()
 
 
