@@ -1,6 +1,16 @@
+"""
+This module uses tinygp to construct dense representations of
+kernels for testing/benchmarking performance and accuracy.
+
+They are not meant for use on large datasets!
+
+Kernels defined here:
+- SHOKernel: A stochastic harmonic oscillator (SHO) kernel
+- IntegratedSHOKernel: A tinygp/JAX implementation of the integrated SHO kernel from Luhn et al. 2026
+"""
+
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 import tinygp
 
 from tinygp.kernels.base import Sum, Product
@@ -53,53 +63,6 @@ def unpack_coordinates(X1, X2):
     return (t1, delta1, instid1), (t2, delta2, instid2)
 
 
-################## Full/dense Matern-5/2 #################
-class Matern52Kernel(tinygp.kernels.Kernel):
-    amp: jax.Array | float
-    lam: jax.Array | float
-    instid: jax.Array = eqx.field(static=True)
-
-    def __init__(self, amp=None, lam=None, instid=0):
-        """
-        Matern-5/2 kernel for smooth instrumental drift.
-
-        Parameters
-        ----------
-        amp : float
-            Amplitude (m/s)
-        lam : float
-            Timescale (days)
-        instid : float
-            Instrument ID this kernel describes
-        """
-        self.instid = instid
-
-        self.amp = 1.0 if amp is None else amp
-        self.lam = 3 / 24 if lam is None else lam
-
-    def evaluate(self, X1, X2):
-        """
-        Calculate the kernel for given pair of times X1 and X2.
-
-        X1 and X2 should be a unxt.Quantity with units
-            can also be a tuple consisting of (t1, instid)
-        """
-        (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
-
-        # time between pairs of observations in units the kernel is defined in
-        # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
-        Delta = jnp.abs(t1 - t2)
-
-        # Matern 5/2 kernel
-        R = jnp.sqrt(5) / self.lam
-        k = jnp.exp(-R * Delta) * (1 + R * Delta + R**2 * Delta**2 / 3)
-
-        # Decorrelate different instruments
-        dij_inst = ((instid1 == self.instid) & (instid2 == self.instid)).astype(int)
-
-        return self.amp**2 * k * dij_inst
-
-
 ################# Full (dense) SHO kernel  #################
 class SHOKernel(tinygp.kernels.Kernel):
     S: jax.Array | float
@@ -117,12 +80,9 @@ class SHOKernel(tinygp.kernels.Kernel):
         rho=None,
         tau=None,
         sig=None,
-        #  unit=u.unit('m')**2 / u.unit('s')**2,
-        #  tunit=u.unit('s'),
     ):
         """
-        A simple harmonic oscillator (SHO)
-        kernel that is aware of time units
+        A dense representation of the stochastic harmonic oscillator (SHO)
 
         Parameters
         ----------
@@ -132,10 +92,6 @@ class SHOKernel(tinygp.kernels.Kernel):
             Characteristic frequency (rad/s)
         Q : jax.Array | float
             Quality factor (dimensionless).
-        unit: unxt.Unit
-            Covariance unit (default: m^2/s^2)
-        tunit: unxt.Unit
-            Time unit (default: s)
 
         Alternatively, one can give a more physical parameterization
         ----------
@@ -171,14 +127,18 @@ class SHOKernel(tinygp.kernels.Kernel):
         """
         Calculate the kernel for given pair of times X1 and X2.
 
-        X1 and X2 should be a unxt.Quantity with units
-            can also be a tuple consisting of (t1, instid)
+        X1 and X2 can either be
+            t1 and t2 for single instrument, no exposure times
+        or
+            (t1, instid1) and (t2, instid2) for multiple instruments, no exposure times
+        or
+            (t1, delta1, instid1) and (t2, delta2, instid2) for exposure times,
+                also requires instrument IDs even if a single instrument
         """
 
         (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 
-        # time between pairs of observations in units the kernel is defined in
-        # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
+        # Time between pair of observations
         Delta = jnp.abs(t1 - t2)
 
         # Calculate the kernel
@@ -221,10 +181,10 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         sig=None,
     ):
         """
-        A simple harmonic oscillator (SHO)
-        kernel integrated over an exposure
+        The full/dense representation of the stochastic harmonic oscillator (SHO)
+        kernel integrated over a finite time interval
 
-        Details in Luhn et al. 2025 (in prep)
+        Details in `Luhn et al. 2026 <https://arxiv.org/abs/2601.02462>`__.
 
         Parameters
         ----------
@@ -234,10 +194,6 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
             Characteristic frequency (rad/s)
         Q : jax.Array | float
             Quality factor (dimensionless).
-        unit: unxt.Unit
-            Covariance unit (default: m^2/s^2)
-        tunit: unxt.Unit
-            Time unit (default: s)
 
         Alternatively, one can give a more physical parameterization
         ----------
@@ -294,8 +250,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         t1 = X1[0] if isinstance(X1, tuple) else X1
         t2 = X2[0] if isinstance(X2, tuple) else X2
 
-        # time between pairs of observations in units the kernel is defined in
-        # Delta = jnp.abs((t1 - t2).to(self.tunit).value)
+        # Time between pair of observations
         Delta = jnp.abs(t1 - t2)
         return Delta
 
@@ -322,13 +277,13 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
     #     return self.latent_process(self.Delta(X1, X2))
 
     def I0(self, y):
-        """Eq. 5 - helper function for single integral (Eq. 4)"""
+        """Helper function for single integral (Eq. 11 in L26)"""
         return jnp.exp(-self.a * y) * (
             (1 - self.a**2) * jnp.sin(y) - 2 * self.a * jnp.cos(y)
         )
 
     def I1(self, lower, upper):
-        """Eq. 8 - helper function for double integrals (Eq. 7, 11)"""
+        """Helper function for double integrals (Eq. 14 in L26)"""
 
         def f1(y):
             num = (
@@ -342,7 +297,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         return f1(upper) - f1(lower)
 
     def I2(self, lower, upper):
-        """Eq. 9 - helper function for double integrals (Eq. 7, 11)"""
+        """Helper function for double integrals (Eq. 15 in L26)"""
 
         def f2(y):
             num = (
@@ -358,7 +313,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         The double integral for two non-overlapping observations.
         Depends on the time-lag (Delta) and the two exposure times (delta1, delta2)
 
-        Eq. 11 in Luhn et al. (2025, in prep)
+        Eq. 17 in Luhn et al. (2026): https://arxiv.org/abs/2601.02462
         """
         # Bounds of integrals
         y1 = self.eta * self.w * ((delta1 + delta2) / 2 + Delta)  # Eq. 12
@@ -377,7 +332,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         observations (i.e. zero time-lag). As such, this
         only depends on the exposure time (delta)
 
-        Eq. 7 in Luhn et al. (2025, in prep)
+        Eq. 13 in Luhn et al. (2026): https://arxiv.org/abs/2601.02462
         """
         # Bounds of integrals
         y1, y2 = self.eta * self.w * delta, 0.0
@@ -469,9 +424,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         X1 and X2 can either be
             (t1, texp1) and (t2, texp2) for single instrument
         or
-            (t1, instid1, texp1) and (t2, instid2, texp2) for multiple instruments
-
-        t1 and t2 can be a unxt.Quantity with units
+            (t1, texp1, instid1) and (t2, texp2, instid2) for multiple instruments
         """
         (t1, delta1, instid1), (t2, delta2, instid2) = unpack_coordinates(X1, X2)
 

@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import tinygp
 import smolgp
 
-import tests.testgp as testgp
 from tests.utils import generate_integrated_data
 from tests.test_kernels import (
     kernel_function,
@@ -57,7 +56,7 @@ def test_integrated():
     kernel_smol = smolgp.kernels.integrated.IntegratedSHO(
         omega=w, quality=Q, sigma=sigma, num_insts=Ninst
     )
-    kernel_tiny = testgp.IntegratedSHOKernel(S=S, w=w, Q=Q)
+    kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
     print("Testing IntegratedSHO kernel...")
 

@@ -8,8 +8,6 @@ import smolgp
 from benchmark import run_benchmark, run_pred_benchmark
 from benchmark import save_benchmark_data
 
-from .. import testgp
-
 from funcs import ss_llh, qs_llh, gp_llh, pss_llh
 from funcs import ss_cond, qs_cond, gp_cond, pss_cond
 from funcs import ss_pred, qs_pred, gp_pred
@@ -76,7 +74,7 @@ if __name__ == "__main__":
         ssm_kernel = smolgp.kernels.integrated.IntegratedSHO(
             omega=w, quality=Q, sigma=sigma, num_inst=1
         )
-        gp_kernel = testgp.IntegratedSHOKernel(w=w, Q=Q, S=S)
+        gp_kernel = smolgp.kernels.dense.IntegratedSHOKernel(w=w, Q=Q, S=S)
         kernels = {
             "SSM": ssm_kernel,
             "GP": gp_kernel,
@@ -85,7 +83,7 @@ if __name__ == "__main__":
     else:
         qsm_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
         ssm_kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
-        gp_kernel = testgp.SHOKernel(w=w, Q=Q, S=S)
+        gp_kernel = smolgp.kernels.dense.SHOKernel(w=w, Q=Q, S=S)
         kernels = {
             "SSM": ssm_kernel,
             "QSM": qsm_kernel,

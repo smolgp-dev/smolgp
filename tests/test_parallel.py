@@ -3,7 +3,6 @@ import jax.numpy as jnp
 import tinygp
 import smolgp
 
-import tests.testgp as testgp
 from tests.utils import generate_data, generate_integrated_data
 from tests.test_kernels import (
     likelihood,
@@ -64,7 +63,7 @@ def test_parallel():
     ikernel_smol = smolgp.kernels.integrated.IntegratedSHO(
         omega=w, quality=Q, sigma=sigma, num_insts=1
     )
-    ikernel_tiny = testgp.IntegratedSHOKernel(S=S, w=w, Q=Q)
+    ikernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
     # Build GP objects
     gp_smol = smolgp.GaussianProcess(

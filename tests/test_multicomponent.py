@@ -4,7 +4,6 @@ import tinygp
 import smolgp
 from smolgp.kernels.base import extract_leaf_kernels
 
-import tests.testgp as testgp
 from tests.utils import generate_data
 from tests.test_kernels import allclose, offset
 from tests.test_kernels import (
@@ -122,7 +121,7 @@ def test_multicomponent():
             ## 1) at the data points
             ys_qsm = []
             yvars_qsm = []
-            for k in testgp.extract_leaf_kernels(gp_tiny.kernel):
+            for k in smolgp.kernels.dense.extract_leaf_kernels(gp_tiny.kernel):
                 yk, var_k = gp_tiny.predict(y_train, t_train, return_var=True, kernel=k)
                 ys_qsm.append(yk)
                 yvars_qsm.append(var_k)
@@ -130,7 +129,7 @@ def test_multicomponent():
             ## 2) at predicted points
             mus_qsm = []
             vars_qsm = []
-            for k in testgp.extract_leaf_kernels(gp_tiny.kernel):
+            for k in smolgp.kernels.dense.extract_leaf_kernels(gp_tiny.kernel):
                 yk, var_k = gp_tiny.predict(y_train, t_test, return_var=True, kernel=k)
                 mus_qsm.append(yk)
                 vars_qsm.append(var_k)

@@ -47,3 +47,6 @@ from smolgp.kernels.integrated import (
     IntegratedMatern52 as IntegratedMatern52,
     IntegratedCosine as IntegratedCosine,
 )
+
+# Dense kernels (for testing)
+import smolgp.kernels.dense
