@@ -23,10 +23,10 @@ tutorials/quickstart
 :maxdepth: 1
 
 tutorials/introssm
-tutorials/optimizing
 tutorials/integrated
+tutorials/kernels
+tutorials/optimizing
 tutorials/parallel
-tutorials/customkernels
 ```
 
 ## Advanced Topics
@@ -35,7 +35,9 @@ tutorials/customkernels
 :maxdepth: 1
 
 tutorials/derivative
-tutorials/multiinstrument
-tutorials/multicomponent
 tutorials/multivariate
+tutorials/multicomponent
+tutorials/multiinstrument
+tutorials/multidimensional
+tutorials/spatiotemporal
 ```

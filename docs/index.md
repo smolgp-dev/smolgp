@@ -6,7 +6,7 @@ _**S**tate Space **M**odels for **O**(**L**inear/Log) **G**aussian **P**rocesses
 [![Tests](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml/badge.svg)](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml)
 [![codecov](https://codecov.io/github/smolgp-dev/smolgp/branch/main/graph/badge.svg?token=KQLRPBCV9X)](https://codecov.io/github/smolgp-dev/smolgp)
 [![arXiv](https://img.shields.io/badge/arXiv-2601.02527-b31b1b.svg)](https://arxiv.org/abs/2601.02527)
-
+[![DOI](https://zenodo.org/badge/1065470871.svg)](https://doi.org/10.5281/zenodo.18418837)
 
 [`smolgp`](https://github.com/smolgp-dev/smolgp) is a Python/JAX standalone extension of the [`tinygp`](https://github.com/dfm/tinygp) package that uses the state space representation of Gaussian Process to achieve substantial performance boosts. Like `tinygp` it is built on top of [`jax`](https://github.com/google/jax) and so can utilize just-in-time compliation, automatic differentiation, and GPU-accelerated linear algebra. It can even be [parallelized](tutorials/parallel) for a further performance boost.
 
@@ -14,7 +14,7 @@ To get started, check out the {ref}`guide` and then the {ref}`quickstart` to hit
 
 If you use `smolgp` in your research, please see {ref}`citing`.
 
-```{admonition} When should I use smolgp instead of tinygp?
+```{admonition} When should I use <code>smolgp</code> instead of <code>tinygp</code> ?
 :class: tip
 
 <div style="display: flex; align-items: flex-start;">
@@ -23,7 +23,7 @@ If you use `smolgp` in your research, please see {ref}`citing`.
   </div>
   <div style="flex: 1;">
     <strong>Scalable non-quasiseparable kernels</strong><br>
-    If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see {ref}`kernels`).
+    If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see See <a href="tutorials/kernels.html">Defining Kernels</a>).
   </div>
 </div>
 <br>
@@ -33,7 +33,7 @@ If you use `smolgp` in your research, please see {ref}`citing`.
   </div>
   <div style="flex: 1;">
     <strong>Integrated measurements</strong><br>
-    If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. <code>smolgp</code> can correctly account for the integrated covariance while maintaining scalable performance. See {ref}`integrated` for more details.
+    If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. <code>smolgp</code> can correctly account for the integrated covariance while maintaining scalable performance. See <a href="tutorials/integrated.html">Integrated Measurements</a> for more details.
   </div>
 </div>
 <br>
