@@ -35,9 +35,9 @@ tutorials/parallel
 :maxdepth: 1
 
 tutorials/derivative
-tutorials/multivariate
 tutorials/multicomponent
 tutorials/multiinstrument
+tutorials/multivariate
 tutorials/multidimensional
 tutorials/spatiotemporal
 ```
