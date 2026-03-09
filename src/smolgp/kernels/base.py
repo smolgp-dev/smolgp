@@ -547,7 +547,7 @@ class Constant(StateSpaceModel):
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The transition matrix A_k for a Constant process"""
         del X1, X2
-        return self.eye(self.dimension)
+        return jnp.array([[1]])
 
     def process_noise(self, X1, X2, use_van_loan=False):
         """The process noise Q_k for a Constant process"""
@@ -555,7 +555,7 @@ class Constant(StateSpaceModel):
 
 
 class SHO(StateSpaceModel):
-    r"""The damped, driven simple harmonic oscillator kernel
+    r"""The damped, driven stochastic harmonic oscillator kernel
 
     This form of the kernel was introduced by `Foreman-Mackey et al. (2017)
     <https://arxiv.org/abs/1703.09710>`_, and it takes the form:
@@ -1142,8 +1142,8 @@ class ExpSineSquared(Wrapper):
         self.scale = 2 / self.gamma  # \ell^2 in Solin & Särkkä (2014)
         self.omega = 2 * jnp.pi / self.period  # \omega_0 in Solin & Särkkä (2014)
 
-        # Auto-select order (J) using Fig 2 of
-        # Solin & Särkkä (2014) as a
+        # Auto-select order (J) using Fig 2c of
+        # Solin & Särkkä (2014) as a guide.
         ell = jnp.sqrt(self.scale)
         if order is None:
             if ell >= 1:

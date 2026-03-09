@@ -23,7 +23,7 @@ If you use `smolgp` in your research, please see {ref}`citing`.
   </div>
   <div style="flex: 1;">
     <strong>Scalable non-quasiseparable kernels</strong><br>
-    If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see See <a href="tutorials/kernels.html">Defining Kernels</a>).
+    If you want scalable (O(N) or better) performance for GP kernels which do not have quasiseparable representations but can be approximated by a state space model, such as the quasiperiodic kernel (see See <a href="tutorials/kernels.html#arbitrary-kernels">Defining Kernels</a>).
   </div>
 </div>
 <br>
@@ -33,7 +33,7 @@ If you use `smolgp` in your research, please see {ref}`citing`.
   </div>
   <div style="flex: 1;">
     <strong>Integrated measurements</strong><br>
-    If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. <code>smolgp</code> can correctly account for the integrated covariance while maintaining scalable performance. See <a href="tutorials/integrated.html">Integrated Measurements</a> for more details.
+    If your measurements are integrated over finite time intervals that are appreciable compared to the variability timescale of the GP. <code>smolgp</code>  correctly accounts for the integrated covariance while maintaining scalable performance. See <a href="tutorials/integrated.html">Integrated Measurements</a> for more details.
   </div>
 </div>
 <br>
@@ -43,7 +43,7 @@ If you use `smolgp` in your research, please see {ref}`citing`.
   </div>
   <div style="flex: 1;">
     <strong>Overlapping datasets</strong><br>
-    If you are jointly modeling data from multiple instruments and those measurements overlap with one another, <code>smolgp</code> naturally accounts for the covariances during the overlap by construction, preserving scalability.
+    If you are jointly modeling integrated data from multiple instruments where exposures overlap with one another, <code>smolgp</code> naturally accounts for the covariances during the overlap by construction, preserving scalability.
   </div>
 </div>
 ```

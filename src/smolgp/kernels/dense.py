@@ -2,11 +2,16 @@
 This module uses tinygp to construct dense representations of
 kernels for testing/benchmarking performance and accuracy.
 
+```{admonition}
+:class: danger
 They are not meant for use on large datasets!
+```
 
 Kernels defined here:
-- SHOKernel: A stochastic harmonic oscillator (SHO) kernel
-- IntegratedSHOKernel: A tinygp/JAX implementation of the integrated SHO kernel from Luhn et al. 2026
+
+- `SHOKernel`: A stochastic harmonic oscillator (SHO) kernel
+
+- `IntegratedSHOKernel`: A tinygp/JAX implementation of the integrated SHO kernel from `Luhn et al. 2026 <https://arxiv.org/abs/2601.02462>`__.
 """
 
 import jax
@@ -18,7 +23,7 @@ from tinygp.kernels.quasisep import Sum as qsSum, Product as qsProduct
 
 
 def extract_leaf_kernels(kernel, all=False):
-    """Recursively extract all leaf kernels from a sum or product of kernels"""
+    """Recursively extract all tinygp leaf kernels from a sum or product of tinygp kernels"""
     leaf_level = (Sum, qsSum, Product, qsProduct) if all else (Sum, qsSum)
     if isinstance(kernel, leaf_level):
         return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
