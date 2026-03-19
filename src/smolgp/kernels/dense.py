@@ -189,7 +189,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         The full/dense representation of the stochastic harmonic oscillator (SHO)
         kernel integrated over a finite time interval
 
-        Details in `Luhn et al. 2026 <https://arxiv.org/abs/2601.02462>`__.
+        Details in `Luhn et al. 2026 <https://arxiv.org/abs/2601.02462>`__ (L26).
 
         Parameters
         ----------
@@ -318,7 +318,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         The double integral for two non-overlapping observations.
         Depends on the time-lag (Delta) and the two exposure times (delta1, delta2)
 
-        Eq. 17 in Luhn et al. (2026): https://arxiv.org/abs/2601.02462
+        Eq. 17 in L26
         """
         # Bounds of integrals
         y1 = self.eta * self.w * ((delta1 + delta2) / 2 + Delta)  # Eq. 12
@@ -337,7 +337,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         observations (i.e. zero time-lag). As such, this
         only depends on the exposure time (delta)
 
-        Eq. 13 in Luhn et al. (2026): https://arxiv.org/abs/2601.02462
+        Eq. 13 in L26
         """
         # Bounds of integrals
         y1, y2 = self.eta * self.w * delta, 0.0
@@ -350,7 +350,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         The single integral for when one observation
         has zero exposure time (e.g. latent curve)
 
-        Eq. 4 in Luhn et al. (2025, in prep)
+        Eq. 10 in L26
         """
         # Bounds of integrals
         y1 = self.eta * self.w * (delta / 2 + Delta)
