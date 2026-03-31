@@ -7,6 +7,7 @@
 [![docs](https://readthedocs.org/projects/smolgp/badge/?version=latest)](https://smolgp.readthedocs.io/en/latest/index.html)
 [![Tests](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml/badge.svg)](https://github.com/smolgp-dev/smolgp/actions/workflows/tests.yml)
 [![codecov](https://codecov.io/github/smolgp-dev/smolgp/branch/main/graph/badge.svg?token=KQLRPBCV9X)](https://codecov.io/github/smolgp-dev/smolgp)
+[![Journal](https://img.shields.io/badge/AAS_Journals-AJ_171_259-blue)](https://doi.org/10.3847/1538-3881/ae4d0b)
 [![arXiv](https://img.shields.io/badge/arXiv-2601.02527-b31b1b.svg)](https://arxiv.org/abs/2601.02527)
 [![DOI](https://zenodo.org/badge/1065470871.svg)](https://doi.org/10.5281/zenodo.18418837)
 
