@@ -42,8 +42,6 @@ cd smolgp
 uv pip install -e .
 ```
 
-Note that `tinygp` dependencies require the latest version of the [tinygp GitHub repository](https://github.com/dfm/tinygp), rather than the version on PyPI. [uv](https://docs.astral.sh/uv/) should handle this automatically.
-
 ## Citation
 [![DOI](https://zenodo.org/badge/1065470871.svg)](https://doi.org/10.5281/zenodo.18418837)
 [![arXiv](https://img.shields.io/badge/arXiv-2601.02527-b31b1b.svg)](https://arxiv.org/abs/2601.02527)

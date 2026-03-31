@@ -6,11 +6,6 @@
 
 As `smolgp` extends the functionality of `tinygp`, it utilizes a number of fundamental `tinygp` functions and classes and so requires `tinygp` as a dependency. 
 
-:::{admonition} **Note: if not using uv** 
-:class: tip
-`smolgp` requires the latest version of the [tinygp GitHub repository](https://github.com/dfm/tinygp), rather than the version on PyPI (which is out of date on some aspects of the `quasisep` definitions). If you install `smolgp` with [uv](https://docs.astral.sh/uv/), this should be handled automatically. Otherwise, you will want to [install tinygp from source](https://tinygp.readthedocs.io/en/stable/install.html#from-source) in the environment which you wish to install `smolgp`.
-:::
-
 :::{admonition} **Installing on GPU** 
 :class: tip
 If you want to take advantage of the GPU-optimized parts of the code (e.g. the parallel solvers), you'll want to install the CUDA version of [`jax`](https://github.com/google/jax/#installation). You can do that with `uv` like so:
