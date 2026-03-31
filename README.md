@@ -16,8 +16,8 @@ The `smolgp` API is designed to be as similar to `tinygp` as possible. In almost
 
 ## Main features
 1. A Kalman filter and RTS smoother compatible with `tinygp`-like GP kernels.
-3. Scalable (O(N)) solving with integrated (and possibly overlapping) measurements from multiple instruments (see [Rubenzahl and Hattori et al. 2026](https://arxiv.org/abs/2601.02527)).
-4. Parallelized versions of 1 (see [Särkkä and García-Fernández 2020](https://ieeexplore.ieee.org/document/9013038)) and 2 (see [Rubenzahl and Hattori et al. 2026](https://arxiv.org/abs/2601.02527)).
+3. Scalable (O(N)) solving with integrated (and possibly overlapping) measurements from multiple instruments (see [Rubenzahl and Hattori et al. 2026](https://doi.org/10.3847/1538-3881/ae4d0b)).
+4. Parallelized versions of 1 (see [Särkkä and García-Fernández 2020](https://ieeexplore.ieee.org/document/9013038)) and 2 (see [Rubenzahl and Hattori et al. 2026](https://doi.org/10.3847/1538-3881/ae4d0b)).
     - see also [Yaghoobi and Särkkä 2024](https://ieeexplore.ieee.org/abstract/document/10804629) and its [implementation](https://github.com/Fatemeh-Yaghoobi/Parallel-integrated-method?tab=readme-ov-file).
 5. Approximations of popular GP kernels that lack quasiseparability (e.g., ExpSineSquared, Quasiperiodic) that can utilize the O(N) state space solvers.
 6. A convenient and optimally-efficient model-building framework to assemble multicomponent GPs and compute per-component distributions.
@@ -44,9 +44,10 @@ uv pip install -e .
 
 ## Citation
 [![DOI](https://zenodo.org/badge/1065470871.svg)](https://doi.org/10.5281/zenodo.18418837)
+[![Journal](https://img.shields.io/badge/AAS_Journals-AJ_171_259-blue)](https://doi.org/10.3847/1538-3881/ae4d0b)
 [![arXiv](https://img.shields.io/badge/arXiv-2601.02527-b31b1b.svg)](https://arxiv.org/abs/2601.02527)
 
-If you use `smolgp` in your research, please cite the relevant [software release](https://zenodo.org/records/18418838) and [paper](https://ui.adsabs.harvard.edu/abs/2026arXiv260102527R/abstract). The [`cffconvert` tool](https://github.com/citation-file-format/cffconvert) can be used to generate a bibtex entry from the included [CITATION.cff](https://github.com/smolgp-dev/smolgp/blob/main/CITATION.cff) (or just use the "cite this repository" button on the GitHub sidebar).
+If you use `smolgp` in your research, please cite the relevant [software release](https://zenodo.org/records/18418838) and published [paper](https://doi.org/10.3847/1538-3881/ae4d0b). The [`cffconvert` tool](https://github.com/citation-file-format/cffconvert) can be used to generate a bibtex entry from the included [CITATION.cff](https://github.com/smolgp-dev/smolgp/blob/main/CITATION.cff) (or just use the "cite this repository" button on the GitHub sidebar).
 
 ## Author & Contact 
 [![GitHub followers](https://img.shields.io/github/followers/rrubenza?label=Follow&style=social)](https://github.com/rrubenza)
