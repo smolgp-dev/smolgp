@@ -1,11 +1,11 @@
 [project]
 name = "smolgp"
-version = "0.1.1"
+version = "0.1.2"
 description = "Gaussian Process State Space Models in Python/JAX"
 authors = [{ name = "Ryan Rubenzahl", email = "rrubenzahl@gmail.com" },
            { name = "Soichiro Hattori", email = "soichiro.hattori@gmail.com"}]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -19,7 +19,7 @@ classifiers = [
 dependencies = [
     "equinox>=0.13.1",
     "jax>=0.6.2",
-    "tinygp>=0.3.0",
+    "tinygp>=0.3.1",
 ]
 
 # Dependency groups are for development, testing, documentation, etc.
@@ -61,9 +61,6 @@ conflicts = [
 [build-system]
 requires = ["hatchling >= 1.26"]
 build-backend = "hatchling.build"
-
-[tool.uv.sources]
-tinygp = { git = "https://github.com/dfm/tinygp" }
 
 [project.urls]
 Homepage = "https://github.com/smolgp-dev/smolgp"
