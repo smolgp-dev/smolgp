@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import equinox as eqx
 
 from tinygp.helpers import JAXArray
-from tinygp.noise import Noise
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.kalman import KalmanFilter
@@ -20,21 +19,21 @@ class StateSpaceSolver(eqx.Module):
 
     X: JAXArray
     kernel: StateSpaceModel
-    noise: Noise
+    noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
     t_states: JAXArray
 
     def __init__(
         self,
         kernel: StateSpaceModel,
         X: JAXArray,
-        noise: Noise,
+        noise: JAXArray,
     ):
         """Build a :class:`StateSpaceSolver` for a given kernel and coordinates
 
         Args:
             kernel: The kernel function.
             X: The input coordinates.
-            noise: The noise model for the process.
+            noise: Observation noise covariance array of shape ``(N, D, D)``.
         """
         self.kernel = kernel
         self.X = X
@@ -43,12 +42,22 @@ class StateSpaceSolver(eqx.Module):
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-        return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
+        class _NoiseAdapter:
+            def __init__(self, n):
+                self._n = n
+
+            def diagonal(self):
+                return self._n[0, 0, :]
+
+        return QuasisepSolver(
+            self.kernel, self.X, _NoiseAdapter(self.noise)
+        ).normalization()
 
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
+        y_nd = y[:, None] if y.ndim == 1 else y
         return KalmanFilter(
-            self.kernel, self.t_states, y, self.noise, return_v_S=return_v_S
+            self.kernel, self.t_states, y_nd, self.noise, return_v_S=return_v_S
         )
 
     def RTS(self, kalman_results) -> Any:

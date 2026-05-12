@@ -36,7 +36,7 @@ def test_parallel():
     gp_smol = smolgp.GaussianProcess(
         kernel=kernel_smol,
         X=t_train,
-        diag=yerr_train**2,
+        noise=yerr_train**2,
         solver=smolgp.solvers.ParallelStateSpaceSolver,
     )
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=t_train, diag=yerr_train**2)
@@ -69,7 +69,7 @@ def test_parallel():
     gp_smol = smolgp.GaussianProcess(
         kernel=ikernel_smol,
         X=X_train,
-        diag=yerr_train**2,
+        noise=yerr_train**2,
         solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver,
     )
     gp_tiny = tinygp.GaussianProcess(kernel=ikernel_tiny, X=X_train, diag=yerr_train**2)

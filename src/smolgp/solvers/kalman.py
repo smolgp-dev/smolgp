@@ -5,15 +5,15 @@ import jax.numpy as jnp
 from tinygp.helpers import JAXArray
 
 
-def KalmanFilter(kernel, X, y, noise, return_v_S=False):
+def KalmanFilter(kernel, X, y, R, return_v_S=False):
     """
     Wrapper for jitted kalman_filter function
 
     Parameters:
         kernel: StateSpaceModel kernel
         X: data coordinates, e.g. time or (time, texp, instid)
-        y: observations at data coordinates
-        noise: Noise model
+        y: observations, shape (N, D)
+        R: observation noise covariance, shape (N, D, D)
 
     Returns:
         m_filtered: filtered means
@@ -24,7 +24,6 @@ def KalmanFilter(kernel, X, y, noise, return_v_S=False):
     H = kernel.observation_model
     A = kernel.transition_matrix
     Q = kernel.process_noise
-    R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
     if not isinstance(P0, JAXArray):

@@ -21,7 +21,7 @@ def unpack_data(data):
 #################### LIKELIHOOD ####################
 def ss_llh(data, kernel):
     t_train, y_train, yerr = unpack_data(data)
-    gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    gp_ss = smolgp.GaussianProcess(kernel, t_train, noise=yerr**2)
     return gp_ss.log_probability(y_train)
 
 def qs_llh(data, kernel):
@@ -37,14 +37,14 @@ def gp_llh(data, kernel):
 def pss_llh(data, kernel):
     t_train, y_train, yerr = unpack_data(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, t_train, diag=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
+        kernel, t_train, noise=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
     )
     return gp_ss.log_probability(y_train)
 
 #################### CONDITION ####################
 def ss_cond(data, kernel):
     t_train, y_train, yerr = unpack_data(data)
-    gp_ss = smolgp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    gp_ss = smolgp.GaussianProcess(kernel, t_train, noise=yerr**2)
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
 
@@ -63,7 +63,7 @@ def gp_cond(data, kernel):
 def pss_cond(data, kernel):
     t_train, y_train, yerr = unpack_data(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, t_train, diag=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
+        kernel, t_train, noise=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
     )
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
@@ -88,7 +88,7 @@ def gp_pred(t_test, gp_gp, y_train):
 #################### LIKELIHOOD ####################
 def iss_llh(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
-    gp_ss = smolgp.GaussianProcess(kernel, X_train, diag=yerr**2)
+    gp_ss = smolgp.GaussianProcess(kernel, X_train, noise=yerr**2)
     return gp_ss.log_probability(y_train)
 
 def igp_llh(data, kernel):
@@ -99,14 +99,14 @@ def igp_llh(data, kernel):
 def ipss_llh(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
+        kernel, X_train, noise=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
     )
     return gp_ss.log_probability(y_train)
 
 #################### CONDITION ####################
 def iss_cond(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
-    gp_ss = smolgp.GaussianProcess(kernel, X_train, diag=yerr**2)
+    gp_ss = smolgp.GaussianProcess(kernel, X_train, noise=yerr**2)
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
 
@@ -119,7 +119,7 @@ def igp_cond(data, kernel):
 def ipss_cond(data, kernel):
     X_train, y_train, yerr = unpack_idata(data)
     gp_ss = smolgp.GaussianProcess(
-        kernel, X_train, diag=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
+        kernel, X_train, noise=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
     )
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])

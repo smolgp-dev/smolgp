@@ -4,15 +4,15 @@ import jax
 import jax.numpy as jnp
 
 
-def ParallelKalmanFilter(kernel, X, y, noise, return_v_S=False):
+def ParallelKalmanFilter(kernel, X, y, R, return_v_S=False):
     """
     Wrapper for the parallel Kalman filter.
 
     Parameters:
         kernel: StateSpaceModel kernel
         X: data coordinates, e.g. time or (time, texp, instid)
-        y: observations
-        noise: Noise model
+        y: observations, shape (N, D)
+        R: observation noise covariance, shape (N, D, D)
 
     Returns:
         A:
@@ -24,7 +24,6 @@ def ParallelKalmanFilter(kernel, X, y, noise, return_v_S=False):
     H = kernel.observation_model
     Phi = kernel.transition_matrix
     Q = kernel.process_noise
-    R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
     t = kernel.coord_to_sortable(X)
@@ -208,7 +207,7 @@ def postprocess(Phi, H, Q, R, X, t, y, b, C, m0, P0):
         m_pred,
     )
 
-    v = y[..., jnp.newaxis] - y_pred
+    v = y - y_pred  # both (N, D)
 
     S = jax.vmap(lambda _H, _P, _R: _H @ _P @ _H.T + _R)(
         H_all,

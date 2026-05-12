@@ -57,7 +57,7 @@ def test_multicomponent():
 
         print(f"Testing {name}...")
         # Build GP objects
-        gp_smol = smolgp.GaussianProcess(kernel=ksmol, X=t_train, diag=yerr_train**2)
+        gp_smol = smolgp.GaussianProcess(kernel=ksmol, X=t_train, noise=yerr_train**2)
         gp_tiny = tinygp.GaussianProcess(kernel=ktiny, X=t_train, diag=yerr_train**2)
 
         # Check likelihood

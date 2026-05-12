@@ -476,7 +476,7 @@ def run_pred_benchmark(
         if "QSM" in kernels:
             gp_qs = tinygp.GaussianProcess(kernels["QSM"], X_train, diag=yerr_train**2)
         gp_gp = tinygp.GaussianProcess(kernels["GP"], X_train, diag=yerr_train**2)
-        gp_ss = smolgp.GaussianProcess(kernels["SSM"], X_train, diag=yerr_train**2)
+        gp_ss = smolgp.GaussianProcess(kernels["SSM"], X_train, noise=yerr_train**2)
         ## Pre-condition those that are compatible with it
         # _, condGPss = gp_ss.condition(y_train)
         ## Pack dict

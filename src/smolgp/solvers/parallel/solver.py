@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import equinox as eqx
 
 from tinygp.helpers import JAXArray
-from tinygp.noise import Noise
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
 
@@ -22,21 +21,20 @@ class ParallelStateSpaceSolver(eqx.Module):
 
     X: JAXArray
     kernel: StateSpaceModel
-    noise: Noise
+    noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
 
     def __init__(
         self,
         kernel: StateSpaceModel,
         X: JAXArray,
-        noise: Noise,
+        noise: JAXArray,
     ):
         """Build a :class:`StateSpaceSolver` for a given kernel and coordinates
 
         Args:
             kernel: The kernel function.
             X: The input coordinates.
-            y: The measurement values.
-            noise: The noise model for the process.
+            noise: Observation noise covariance array of shape ``(N, D, D)``.
         """
         self.kernel = kernel
         self.X = X
@@ -44,12 +42,23 @@ class ParallelStateSpaceSolver(eqx.Module):
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-        return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
+        class _NoiseAdapter:
+            def __init__(self, n):
+                self._n = n
+
+            def diagonal(self):
+                return self._n[0, 0, :]
+
+        return QuasisepSolver(
+            self.kernel, self.X, _NoiseAdapter(self.noise)
+        ).normalization()
 
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
+        # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
+        y_nd = y[:, None] if y.ndim == 1 else y
         return ParallelKalmanFilter(
-            self.kernel, self.X, y, self.noise, return_v_S=return_v_S
+            self.kernel, self.X, y_nd, self.noise, return_v_S=return_v_S
         )
 
     def RTS(self, kalman_results) -> Any:

@@ -12,7 +12,7 @@ def ParallelIntegratedKalmanFilter(
     obsid,
     instid,
     stateid,
-    noise=None,
+    R,
     return_v_S=False,
 ):
     """
@@ -21,12 +21,12 @@ def ParallelIntegratedKalmanFilter(
     Parameters:
         kernel  : IntegratedStateSpaceModel kernel
         X       : Array of size N, data coordinates (e.g. (time, texp, instid))
-        y       : Array of size N, measurements at the data coordinates
+        y       : Array of size (N, D), measurements at the data coordinates
         t_states: Array of size K, sorted time coordinate of all states (exposure starts and ends)
         obsid   : Array of size N, which observation (0,...,N-1) is being made at each state k
         instid  : Array of size N, which instrument (0,...,Ninst-1) recorded observation n
         stateid : Array of size K, 0 for exposure-start, 1 for exposure-end
-        noise   : Noise model
+        R       : Observation noise covariance, shape (N, D, D)
         return_v_S : Whether to return innovation and its covariance (for likelihood computation)
 
     Returns:
@@ -40,7 +40,6 @@ def ParallelIntegratedKalmanFilter(
     Phi_aug = kernel.transition_matrix
     Q_aug = kernel.process_noise
     RESET = kernel.reset_matrix
-    R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
 
     m0 = jnp.zeros(kernel.dimension)
     P0 = kernel.stationary_covariance()
@@ -332,15 +331,15 @@ def _calc_vS(
     Pm = jnp.take(P_pred, ends_idx, axis=0)
     Xm = jax.tree.map(lambda x: jnp.take(x, obsidx_in_ends_order), X)
     Hm = jax.vmap(H_aug)(Xm)
-    ym = jnp.take(y, obsidx_in_ends_order)
-    Rm = jnp.take(R, obsidx_in_ends_order)
+    ym = jnp.take(y, obsidx_in_ends_order, axis=0)  # (N_ends, D)
+    Rm = jnp.take(R, obsidx_in_ends_order, axis=0)  # (N_ends, D, D)
 
     y_pred = jax.vmap(
         lambda H, m: H @ m,
         in_axes=(0, 0),
     )(Hm, mm)
 
-    v = ym[..., jnp.newaxis] - y_pred
+    v = ym - y_pred  # both (N_ends, D)
     S = jax.vmap(
         lambda H, P, R: H @ P @ H.T + R,
         in_axes=(0, 0, 0),

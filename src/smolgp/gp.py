@@ -14,7 +14,6 @@ import jax.numpy as jnp
 
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
-from tinygp.noise import Diagonal, Noise
 
 from smolgp.kernels import StateSpaceModel, Sum, Product
 from smolgp.kernels.base import extract_leaf_kernels
@@ -275,17 +274,13 @@ class GaussianProcess(eqx.Module):
         X (JAXArray): The input coordinates. This can be any PyTree that is
             compatible with ``kernel`` where the zeroth dimension is ``N_data``,
             the size of the data set.
-        diag (JAXArray, optional): The value to add to the diagonal of the
-            covariance matrix, often used to capture measurement uncertainty.
-            This should be a scalar or have the shape ``(N_data,)``. If not
-            provided, this will default to the square root of machine epsilon
-            for the data type being used. This can sometimes be sufficient to
-            avoid numerical issues, but if you're getting NaNs, try increasing
-            this value.
-        noise (Noise, optional): Used to implement more expressive observation
-            noise models than those supported by just ``diag``. This can be any
-            object that implements the :class:`tinygp.noise.Noise` protocol. If
-            this is provided, the ``diag`` parameter will be ignored.
+        noise (JAXArray, optional): The observation noise covariance matrices
+            with shape ``(D, D, N)`` where ``D`` is the observation dimension
+            (usually 1) and ``N`` is the number of data points. Each slice
+            ``noise[:, :, k]`` is the ``D×D`` noise covariance for the k-th
+            observation. If not provided, defaults to a small jitter
+            (sqrt of machine epsilon) times the identity applied to all
+            observations.
         mean (Callable, optional): A callable or constant mean function that
             will be evaluated with the ``X`` as input: ``mean(X)``
         solver: The solver type to be used to execute the required linear
@@ -299,7 +294,7 @@ class GaussianProcess(eqx.Module):
     mean_function: means.MeanBase
     mean: JAXArray
     var: JAXArray | None
-    noise: Noise
+    noise: JAXArray  # shape (D, D, N): observation noise covariance per time step
     solver: StateSpaceSolver
     states: ConditionedStates
 
@@ -308,8 +303,7 @@ class GaussianProcess(eqx.Module):
         kernel: kernels.Kernel,
         X: JAXArray,
         *,
-        diag: JAXArray | None = None,
-        noise: Noise | None = None,
+        noise: JAXArray | None = None,
         mean: means.MeanBase | Callable[[JAXArray], JAXArray] | JAXArray | None = None,
         solver: Any | None = None,
         mean_value: JAXArray | None = None,
@@ -356,15 +350,18 @@ class GaussianProcess(eqx.Module):
         self.mean = mean_value
         self.var = variance_value
         self.states = states
-        if self.mean.ndim != 1:
+        if self.mean.ndim > 2:
             raise ValueError(
-                f"Invalid mean shape: expected ndim = 1, got ndim={self.mean.ndim}"
+                f"Invalid mean shape: expected ndim = 1 or 2, got ndim={self.mean.ndim}"
             )
 
-        # Observation noise model
+        # Observation noise: shape (N, D, D)
+        # A 1-D array of shape (N,) is treated as scalar per-obs variance -> (N, 1, 1)
         if noise is None:
-            diag = _default_diag(self.mean) if diag is None else diag
-            noise = Diagonal(diag=jnp.broadcast_to(diag, self.mean.shape))
+            jitter = _default_jitter(self.mean)
+            noise = jnp.full((self.num_data, 1, 1), jitter, dtype=self.dtype)
+        elif jnp.ndim(noise) == 1:
+            noise = jnp.asarray(noise)[:, None, None]
         self.noise = noise
 
         # Set up the solver
@@ -447,8 +444,6 @@ class GaussianProcess(eqx.Module):
         y: JAXArray,
         X_test: JAXArray | None = None,
         *,
-        diag: JAXArray | None = None,  # TODO: is this needed?
-        noise: Noise | None = None,  # TODO: is this needed?
         include_mean: bool = True,
         kernel: kernels.Kernel | None = None,  # TODO: select a component kernel
     ) -> ConditionResult:
@@ -463,9 +458,6 @@ class GaussianProcess(eqx.Module):
                 with the ``X`` data provided when instantiating this object. If
                 it is not provided, ``X`` will be used by default, so the
                 predictions will be made.
-            diag (JAXArray, optional): Will be passed as the diagonal to the
-                conditioned ``GaussianProcess`` object, so this can be used to
-                introduce, for example, observational noise to predicted data.
             include_mean (bool, optional): If ``True`` (default), the predicted
                 values will include the mean function evaluated at ``X_test``.
             kernel (Kernel, optional): A kernel to optionally specify the
@@ -485,8 +477,9 @@ class GaussianProcess(eqx.Module):
         # convoluted since we need to support arbitrary pytrees.
         if X_test is not None:
             matches = jax.tree_util.tree_map(
-                lambda a, b: jnp.ndim(a) == jnp.ndim(b)
-                and jnp.shape(a)[1:] == jnp.shape(b)[1:],
+                lambda a, b: (
+                    jnp.ndim(a) == jnp.ndim(b) and jnp.shape(a)[1:] == jnp.shape(b)[1:]
+                ),
                 self.X,
                 X_test,
             )
@@ -876,9 +869,9 @@ class ConditionResult(NamedTuple):
     """
 
 
-def _default_diag(reference: JAXArray) -> JAXArray:
+def _default_jitter(reference: JAXArray) -> JAXArray:
     """Default to adding some amount of jitter to the diagonal, just in case,
     we use sqrt(eps) for the dtype of the mean function because that seems to
     give sensible results in general.
     """
-    return jnp.sqrt(jnp.finfo(reference).eps)
+    return jnp.sqrt(jnp.finfo(reference.dtype).eps)

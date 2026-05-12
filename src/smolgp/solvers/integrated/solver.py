@@ -7,7 +7,6 @@ import jax.numpy as jnp
 import equinox as eqx
 
 from tinygp.helpers import JAXArray
-from tinygp.noise import Noise
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.integrated.kalman import IntegratedKalmanFilter
@@ -22,14 +21,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
     X: JAXArray
     kernel: StateSpaceModel
-    noise: Noise
+    noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
     state_coords: JAXArray
 
     def __init__(
         self,
         kernel: StateSpaceModel,
         X: JAXArray,
-        noise: Noise,
+        noise: JAXArray,
     ):
         """Build a :class:`IntegratedStateSpaceSolver` for a given kernel and coordinates
 
@@ -40,7 +39,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
                 where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
                 `delta` is the integration range (e.g. exposure time) for each measurement,
                 and `instid` is an index encoding which instrument the measurement corresponds to.
-            noise: The noise model for the process.
+            noise: Observation noise covariance array of shape ``(N, D, D)``.
             state_coords: Bookkeeping indices for the discretized states used in Kalman/RTS
         """
         self.kernel = kernel
@@ -77,15 +76,26 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-        return QuasisepSolver(self.kernel, self.X, self.noise).normalization()
+        class _NoiseAdapter:
+            def __init__(self, n):
+                self._n = n
+
+            def diagonal(self):
+                return self._n[0, 0, :]
+
+        return QuasisepSolver(
+            self.kernel, self.X, _NoiseAdapter(self.noise)
+        ).normalization()
 
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         t_states, instid, obsid, stateid = self.state_coords
+        # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
+        y_nd = y[:, None] if y.ndim == 1 else y
         return IntegratedKalmanFilter(
             self.kernel,
             self.X,
-            y,
+            y_nd,
             t_states,
             obsid,
             instid,

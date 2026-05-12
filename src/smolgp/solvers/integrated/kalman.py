@@ -5,7 +5,7 @@ import jax.numpy as jnp
 
 
 def IntegratedKalmanFilter(
-    kernel, X, y, t_states, obsid, instid, stateid, noise=None, return_v_S=False
+    kernel, X, y, t_states, obsid, instid, stateid, R, return_v_S=False
 ):
     """
     Wrapper for integrated_kalman_filter function
@@ -13,12 +13,12 @@ def IntegratedKalmanFilter(
     Parameters:
         kernel  : IntegratedStateSpaceModel kernel
         X       : Array of size N, data coordinates (e.g. (time, texp, instid))
-        y       : Array of size N, measurements at the data coordinates
+        y       : Array of size (N, D), measurements at the data coordinates
         t_states: Array of size K, sorted time coordinate of all states (exposure starts and ends)
         obsid   : Array of size N, which observation (0,...,N-1) is being made at each state k
         instid  : Array of size N, which instrument (0,...,Ninst-1) recorded observation n
         stateid : Array of size K, 0 for exposure-start, 1 for exposure-end
-        noise   : Noise model
+        R       : Observation noise covariance, shape (N, D, D)
         return_v_S : Whether to return innovation and its covariance (for likelihood computation)
 
     Returns:
@@ -33,7 +33,6 @@ def IntegratedKalmanFilter(
     A_aug = kernel.transition_matrix
     Q_aug = kernel.process_noise
     RESET = kernel.reset_matrix
-    R = noise.diagonal() if noise is not None else jnp.zeros_like(y)
 
     # Initial state and covariance
     # mean = jnp.zeros(kernel.d) # TODO: mean function of base kernel
@@ -70,7 +69,9 @@ def integrated_kalman_filter(
         m_prev, P_prev = carry
 
         # If k==0 we use the prior m0, Pinf and zero time-lag (dt=0)
-        Delta = jax.lax.cond(k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k)
+        Delta = jax.lax.cond(
+            k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k
+        )
         n = obsid[k]
 
         # Get transition matrix

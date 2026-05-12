@@ -64,7 +64,7 @@ def test_integrated():
     kernel_function(kernel_smol, kernel_tiny, tol=1e-9, atol=1e-12)
 
     # Build GP objects
-    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X_train, diag=yerr_train**2)
+    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X_train, noise=yerr_train**2)
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X_train, diag=yerr_train**2)
 
     # Check likelihood
