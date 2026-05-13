@@ -11,7 +11,7 @@ _**S**tate Space **M**odels for **O**(**L**inear/Log) **G**aussian **P**rocesses
 
 [`smolgp`](https://github.com/smolgp-dev/smolgp) is a Python/JAX standalone extension of the [`tinygp`](https://github.com/dfm/tinygp) package that uses the state space representation of Gaussian Process to achieve substantial performance boosts. Like `tinygp` it is built on top of [`jax`](https://github.com/google/jax) and so can utilize just-in-time compliation, automatic differentiation, and GPU-accelerated linear algebra. It can even be [parallelized](tutorials/parallel) for a further performance boost.
 
-To get started, check out the {ref}`guide` and then the {ref}`quickstart` to hit the ground running. There are also many useful {ref}`tutorials` with example usage, including {ref}`introssm` for those interested in the framework that powers `smolgp`. For all the nitty-gritty details, see the [full API documentation](api-ref). 
+To get started, check out the {ref}`guide` and then the {ref}`quickstart` to hit the ground running. There are also many useful {ref}`tutorials` with example usage, including {ref}`introssm` for those interested in the framework that powers `smolgp`. For all the nitty-gritty details, see the [full API documentation](autoapi/smolgp/index). 
 
 If you use `smolgp` in your research, please see {ref}`citing`.
 
