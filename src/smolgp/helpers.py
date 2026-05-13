@@ -12,21 +12,25 @@ def block_view(A, b):
 
 
 def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXArray:
-    """
-    Van Loan method to compute Q = ∫0^dt exp(F (dt-s)) L Qc L^T exp(F^T (dt-s)) ds
+    r"""Compute the process noise covariance via the Van Loan method.
 
-    Parameters:
-        F: StateSpaceModel.design_matrix
-        L: StateSpaceModel.noise_effect_matrix
-        Qc: StateSpaceModel.process_noise
-        dt: time step between measurements (dt = X2 - X1)
+    Evaluates
+
+    .. math::
+
+        Q_k = \int_0^{\Delta t} e^{F(\Delta t - s)}\, L\, Q_c\, L^T\, e^{F^T(\Delta t - s)}\, ds
+
+    See `Van Loan (1978) <https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c>`_,
+    "Computing Integrals Involving the Matrix Exponential" (`PDF <https://www.olemartin.no/artikler/vanloan.pdf>`_).
+
+    Args:
+        F: Feedback (design) matrix :math:`F` from :meth:`~smolgp.kernels.StateSpaceModel.design_matrix`.
+        L: Noise effect matrix :math:`L` from :meth:`~smolgp.kernels.StateSpaceModel.noise_effect_matrix`.
+        Qc: Spectral density :math:`Q_c` from :meth:`~smolgp.kernels.StateSpaceModel.noise`.
+        dt: Time step :math:`\Delta t = X_2 - X_1`.
 
     Returns:
-        Q: Process noise covariance matrix over time step dt
-
-    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
-    PDF at https://www.olemartin.no/artikler/vanloan.pdf
-    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
+        Process noise covariance matrix :math:`Q_k` over time step :math:`\Delta t`.
     """
     QL = L @ Qc @ L.T
     b = len(F)  # block size
@@ -39,19 +43,23 @@ def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXA
 
 
 def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
-    """
-    Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
+    r"""Compute the integrated transition matrix via the Van Loan method.
 
-    Parameters:
-        F: StateSpaceModel.design_matrix
-        dt: time step between measurements (dt = X2 - X1)
+    Evaluates
+
+    .. math::
+
+        \bar{\Phi} = \int_0^{\Delta t} e^{F s}\, ds
+
+    See `Van Loan (1978) <https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c>`_,
+    "Computing Integrals Involving the Matrix Exponential" (`PDF <https://www.olemartin.no/artikler/vanloan.pdf>`_).
+
+    Args:
+        F: Feedback (design) matrix :math:`F` from :meth:`~smolgp.kernels.StateSpaceModel.design_matrix`.
+        dt: Time step :math:`\Delta t = X_2 - X_1`.
 
     Returns:
-        Phibar: The integrated transition matrix over time step dt
-
-    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
-    PDF at https://www.olemartin.no/artikler/vanloan.pdf
-    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
+        Integrated transition matrix :math:`\bar{\Phi}` over time step :math:`\Delta t`.
     """
     b = len(F)  # block size
     Z = jnp.zeros((b, b))
@@ -64,23 +72,25 @@ def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
 
 def VanLoan(
     F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray
-) -> tuple[JAXArray, JAXArray]:
-    """
-    Constructs the full matrix C and returns its matrix exponential
+) -> dict[str, JAXArray]:
+    r"""Compute all submatrices of the Van Loan matrix exponential.
 
-    Parameters:
-        F: StateSpaceModel.design_matrix
-        L: StateSpaceModel.noise_effect_matrix
-        Qc: StateSpaceModel.process_noise
-        dt: time step between measurements (dt = X2 - X1)
+    Assembles the block matrix :math:`C` and returns its matrix exponential,
+    partitioned into the submatrices ``F1``-``F4``, ``G1``-``G3``, ``H1``-``H2``,
+    ``K1`` (see Van Loan 1978 for notation), from which various integrals such as
+    :func:`Q_from_VanLoan` and :func:`Phibar_from_VanLoan` can be derived.
+
+    See `Van Loan (1978) <https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c>`_,
+    "Computing Integrals Involving the Matrix Exponential" (`PDF <https://www.olemartin.no/artikler/vanloan.pdf>`_).
+
+    Args:
+        F: Feedback (design) matrix :math:`F`.
+        L: Noise effect matrix :math:`L`.
+        Qc: Spectral density :math:`Q_c`.
+        dt: Time step :math:`\Delta t = X_2 - X_1`.
 
     Returns:
-        dict : Dictionary of the submatrices of the Van Loan exponential, from which
-                                various integrals (e.g. Q, Phibar) can be computed.
-
-    See Van Loan (1978) "Computing Integrals Involving the Matrix Exponential"
-    PDF at https://www.olemartin.no/artikler/vanloan.pdf
-    https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c
+        Dictionary of named submatrices of the Van Loan exponential.
     """
     QL = L @ Qc @ L.T
     b = len(F)  # block size

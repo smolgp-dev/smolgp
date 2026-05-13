@@ -13,13 +13,38 @@ from smolgp.solvers.rts import RTSSmoother
 
 
 class StateSpaceSolver(eqx.Module):
-    """
-    A solver that uses ``jax.lax.scan`` to implement Kalman filtering and RTS smoothing
+    r"""A solver that implements Kalman filtering and RTS smoothing for state space GPs.
+
+    Given a :class:`~smolgp.kernels.StateSpaceModel` kernel and a set of observed
+    coordinates, this solver computes the Kalman filtered and
+    Rauch-Tung-Striebel (RTS) smoothed posterior means and covariances using
+    ``jax.lax.scan`` for efficient JIT-compiled sequential computation.
+
+    Predictions at arbitrary test coordinates are handled by :meth:`predict`,
+    which dispatches among retrodiction, interpolation, and extrapolation
+    depending on whether each test point falls before, between, or after
+    the observed data.
+
+    :param kernel: The kernel function; must be a
+        :class:`~smolgp.kernels.StateSpaceModel` instance.
+    :type kernel: StateSpaceModel
+    :param X: The input coordinates with leading dimension of size ``N``.
+    :type X: JAXArray
+    :param noise: Observation noise covariance array of shape ``(N, D, D)``,
+        where ``D`` is the observation dimension.
+    :type noise: JAXArray
+
+    Attributes:
+        kernel (StateSpaceModel): The kernel defining the state space model.
+        X (JAXArray): The observed input coordinates.
+        noise (JAXArray): Per-observation noise covariance matrices, shape ``(N, D, D)``.
+        t_states (JAXArray): Sortable scalar coordinates derived from ``X`` via
+            :meth:`~smolgp.kernels.StateSpaceModel.coord_to_sortable`.
     """
 
     X: JAXArray
     kernel: StateSpaceModel
-    noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
+    noise: JAXArray
     t_states: JAXArray
 
     def __init__(
@@ -94,23 +119,27 @@ class StateSpaceSolver(eqx.Module):
 
     @jax.jit
     def predict(self, X_test, conditioned_results) -> JAXArray:
-        """
-        Algorithm for making predictions at arbitrary coordinates X_test
+        """Algorithm for making predictions at arbitrary coordinates ``X_test``.
 
         Args:
-            X_test              : The test coordinates; same shape as self.X
-            conditioned_results : The output of self.condition
+            X_test (JAXArray): The test coordinates; same shape as ``self.X``.
+            conditioned_results (tuple): The output of :meth:`condition`.
 
         Returns:
-            pred_mean : Predicted means of the states at X_test
-            pred_var  : Predicted variances of the states at X_test
+            tuple: A pair ``(pred_mean, pred_var)`` of arrays with leading
+            dimension ``M = len(X_test)``, giving the predicted state means
+            and covariances at each test coordinate.
 
-        There are three cases:
-            1. Retrodiction  : smoothing from the first data point
-                               using the prior as the prediction
-            2. Interpolation : filtering from most recent data point
-                               and smoothing from next future point
-            3. Extrapolation : predicting from final filtered point
+        Each test point is handled by one of three cases depending on its
+        position relative to the observed data:
+
+        1. **Retrodiction** — test point precedes all observations: smoothed
+           backward from the first data point using the stationary prior.
+        2. **Interpolation** — test point falls between two observations:
+           Kalman-predicted forward from the nearest past point, then
+           RTS-smoothed backward from the nearest future point.
+        3. **Extrapolation** — test point follows all observations:
+           Kalman-predicted forward from the final filtered state.
         """
 
         # Unpack conditioned results

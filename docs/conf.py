@@ -23,6 +23,7 @@ math_numfig = True  # for section-numbered equations
 master_doc = "index"
 source_suffix = {
     ".rst": "restructuredtext",
+    ".md": "myst-nb",
     ".ipynb": "myst-nb",
 }
 templates_path = ["_templates"]

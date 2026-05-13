@@ -2,10 +2,9 @@
 This module uses tinygp to construct dense representations of
 kernels for testing/benchmarking performance and accuracy.
 
-```{admonition}
-:class: danger
-They are not meant for use on large datasets!
-```
+.. danger::
+
+   They are not meant for use on large datasets!
 
 Kernels defined here:
 

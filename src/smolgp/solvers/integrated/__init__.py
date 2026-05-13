@@ -5,9 +5,7 @@ state space model which includes an integral state as a
 :class:`smolgp.kernels.integrated` state space models to properly account
 for integrated (e.g. exposure-averaged) measurements.
 
-TODO: add documentation from the paper as a refresher/explainer of the augmented approach
-        see this file in tinygp for example doc style
-
+See :ref:`integrated` for a tutorial on using the integrated solvers.
 """
 
 from smolgp.solvers.integrated.solver import (

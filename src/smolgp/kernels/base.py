@@ -1,13 +1,13 @@
 """
 These kernels are compatible with :class:`smolgp.solvers.StateSpaceSolver`,
 which uses Bayesian filtering and smoothing algorithms to perform scalable GP
-inference. (see :ref:`api-solvers-statespace` for more technical details).
+inference. (see :mod:`smolgp.solvers` for more technical details).
 On GPU, a performance boost may be observed for large datasets by using the
 :class:`smolgp.solvers.parallel.ParallelStateSpaceSolver` class.
 
 Like the quasisep kernels, these methods are experimental, so you may find
 the documentation patchy in places. You are encouraged to `open issues or
-pull requests <https://github.com/rrubenza/smolgp/issues>`_ as you find gaps.
+pull requests <https://github.com/smolgp-dev/smolgp/issues>`_ as you find gaps.
 """
 
 from __future__ import annotations
@@ -48,27 +48,29 @@ def extract_leaf_kernels(kernel, all=False):
 
 
 class StateSpaceModel(Kernel):
-    """
-    The base class for an instantaneous linear Gaussian state space model
+    r"""The base class for an instantaneous linear Gaussian state space model.
 
-    Has attributes
-        `name` (str) : used for unique identification in multicomponent models
-        `dimension` (int) : dimensionality $d$ of the state space model
+    Attributes:
+        name (str): Unique identifier used in multi-component models to select
+            individual components from a sum or product kernel.
+        dimension (int): Dimensionality :math:`d` of the state space model.
 
-    The components of a state space model are:
-    1. design_matrix         : The feedback matrix, F
-    2. stationary_covariance : The stationary covariance, Pinf
-    3. observation_model     : The observation model, H
-    4. noise                 : The spectral density of the white noise process, Qc
-    5. noise_effect_matrix   : The noise effect matrix, L
-    6. transition_matrix     : The transition matrix, A_k
-        (optional, default uses jax.scipy.linalg.expm)
-    7. process_noise        : The process noise, Q_k
-        (optional, default uses Pinf and A or (alternatively) Van Loan matrix exponential)
+    A state space model is defined by the following components:
 
-    As a child of :class:`tinygp.kernels.Kernel`, this class also implements
-    addition and multiplication with other kernels, as well as evaluation
+    1. :meth:`design_matrix` — The feedback matrix :math:`F`
+    2. :meth:`stationary_covariance` — The stationary covariance :math:`\mathbf{P}_\infty`
+    3. :meth:`observation_matrix` — The observation matrix :math:`H`
+    4. :meth:`noise` — The spectral density :math:`Q_c` of the driving white noise
+    5. :meth:`noise_effect_matrix` — The noise effect matrix :math:`L`
+    6. :meth:`transition_matrix` — The transition matrix :math:`A_k`
+       (optional; default uses :func:`jax.scipy.linalg.expm`)
+    7. :meth:`process_noise` — The process noise :math:`Q_k`
+       (optional; default uses :math:`\mathbf{P}_\infty - A_k \mathbf{P}_\infty A_k^\top`
+       or the Van Loan matrix exponential)
 
+    As a subclass of :class:`tinygp.kernels.Kernel`, this class supports
+    addition and multiplication with other kernels via :class:`Sum` and
+    :class:`Product`, as well as direct kernel evaluation.
     """
 
     name: str = eqx.field(static=True)
@@ -91,37 +93,36 @@ class StateSpaceModel(Kernel):
 
     @abstractmethod
     def design_matrix(self) -> JAXArray:
-        """The design (also called the feedback) matrix for the process, $F$"""
+        r"""The design (also called the feedback) matrix for the process, :math:`F`"""
         raise NotImplementedError
 
     @abstractmethod
     def stationary_covariance(self) -> JAXArray:
-        """The stationary covariance of the process, Pinf"""
+        r"""The stationary covariance of the process, :math:`\mathbf{P}_\infty`"""
         raise NotImplementedError
 
     def observation_model(self, X: JAXArray, component: str | None = None) -> JAXArray:
-        """The observation model for the process, $H$"""
+        r"""The observation model for the process, :math:`H`"""
         keep = (component is None) or (self.name == component)
         return self.observation_matrix(X) * int(keep)
 
     @abstractmethod
     def observation_matrix(self, X: JAXArray) -> JAXArray:
-        """The observation matrix for the process, $H$"""
+        r"""The observation matrix for the process, :math:`H`"""
         raise NotImplementedError
 
     @abstractmethod
     def noise(self) -> JAXArray:
-        """The spectral density of the white noise process, $Q_c$"""
+        r"""The spectral density of the white noise process, :math:`Q_c`"""
         raise NotImplementedError
 
     @abstractmethod
     def noise_effect_matrix(self) -> JAXArray:
-        """The noise effect matrix, $L$"""
+        r"""The noise effect matrix, :math:`L`"""
         raise NotImplementedError
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        The transition matrix between two states at coordinates X1 and X2, $A_k$
+        r"""The transition matrix :math:`A_k` between two states at coordinates X1 and X2.
 
         Default behavior uses jax.scipy.linalg.expm(self.design_matrix() * (X2 - X1)),
         which is appropriate for stationary kernels defined by a linear Gaussian SSM.
@@ -136,15 +137,15 @@ class StateSpaceModel(Kernel):
         return expm(F * dt)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray, use_van_loan=False) -> JAXArray:
-        """
-        The process noise matrix $Q_k$
+        r"""The process noise matrix :math:`Q_k`
 
-        Default behavior computes Q from Pinf - A @ Pinf @ A
-        (see Eq. 7 in Solin & Sarkka 2014). Alternatively,
-        give use_van_loan=True to use the Van Loan method to compute
-        Q from the matrix exponential involving the F, L, and Qc
+        Default behavior computes :math:`Q_k = \mathbf{P}_\infty - A_k \mathbf{P}_\infty A_k^T`
+        (see `Eq. 7 in Solin & Särkka (2014) <https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf>`_).
+        Pass ``use_van_loan=True`` to instead compute :math:`Q_k` via the
+        `Van Loan (1978) <https://ecommons.cornell.edu/items/cba38b2e-6ad4-45e6-8109-0a019fe5114c>`_
+        matrix exponential method using :math:`F`, :math:`L`, and :math:`Q_c`.
 
-        Overload this method if you have a more general model or simply wish to
+        Overload this method if you have a more general model or wish to
         define the process noise analytically.
         """
         if use_van_loan:
@@ -208,11 +209,9 @@ class StateSpaceModel(Kernel):
         return Scale(kernel=self, scale=other)
 
     def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        The kernel evaluated via the state space representatio
+        """The kernel evaluated via the state space representation.
 
-        See Eq. 4 in Hartikainen & Särkkä 2010
-        https://users.aalto.fi/~ssarkka/pub/gp-ts-kfrts.pdf
+        See `Eq. 4 in Hartikainen & Särkkä (2010) <https://users.aalto.fi/~ssarkka/pub/gp-ts-kfrts.pdf>`_.
         """
         Pinf = self.stationary_covariance()
         h1 = self.observation_model(X1)
@@ -229,11 +228,9 @@ class StateSpaceModel(Kernel):
         return h @ self.stationary_covariance() @ h.T
 
     def psd(self, omega: JAXArray) -> JAXArray:
-        """
-        The power spectral density (PSD) of the kernel
+        """The power spectral density (PSD) of the kernel.
 
-        See Eq. 8 in Solin & Sarkka 2014
-        https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf
+        See `Eq. 8 in Solin & Särkka (2014) <https://users.aalto.fi/~ssarkka/pub/solin_mlsp_2014.pdf>`_.
         """
         F = self.design_matrix()
         L = self.noise_effect_matrix()
@@ -250,10 +247,10 @@ class StateSpaceModel(Kernel):
 
 
 class Sum(StateSpaceModel):
-    """
-    A helper to represent the sum of two StateSpaceModel kernels
+    """The sum of two :class:`StateSpaceModel` kernels.
 
-    The state dimension becomes d = d1 + d2
+    The joint state dimension is :math:`d = d_1 + d_2`, and all matrices are
+    assembled as block-diagonal combinations of the two component kernels.
     """
 
     kernel1: StateSpaceModel
@@ -274,40 +271,40 @@ class Sum(StateSpaceModel):
         return self.kernel1.coord_to_sortable(X)
 
     def design_matrix(self) -> JAXArray:
-        """F = BlockDiag(F1, F2)"""
+        r""":math:`F = \mathrm{BlockDiag}(F_1,\, F_2)`"""
         return Block(
             self.kernel1.design_matrix(),
             self.kernel2.design_matrix(),
         ).to_dense()
 
     def noise_effect_matrix(self) -> JAXArray:
-        """L = BlockDiag(L1, L2)"""
+        r""":math:`L = \mathrm{BlockDiag}(L_1,\, L_2)`"""
         return Block(
             self.kernel1.noise_effect_matrix(), self.kernel2.noise_effect_matrix()
         ).to_dense()
 
     def stationary_covariance(self) -> JAXArray:
-        """Pinf = BlockDiag(Pinf1, Pinf2)"""
+        r""":math:`\mathbf{P}_\infty = \mathrm{BlockDiag}(\mathbf{P}_{\infty,1},\, \mathbf{P}_{\infty,2})`"""
         return Block(
             self.kernel1.stationary_covariance(),
             self.kernel2.stationary_covariance(),
         ).to_dense()
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """A = BlockDiag(A1, A2)"""
+        r""":math:`A_k = \mathrm{BlockDiag}(A_{k,1},\, A_{k,2})`"""
         return Block(
             self.kernel1.transition_matrix(X1, X2),
             self.kernel2.transition_matrix(X1, X2),
         ).to_dense()
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """Q = BlockDiag(Q1, Q2)"""
+        r""":math:`Q_k = \mathrm{BlockDiag}(Q_{k,1},\, Q_{k,2})`"""
         return Block(
             self.kernel1.process_noise(X1, X2), self.kernel2.process_noise(X1, X2)
         ).to_dense()
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
-        """H = [H1, H2] with component extraction"""
+        r""":math:`H = [H_1 \;\; H_2]`, with optional component masking."""
         return jnp.hstack(
             (
                 self.kernel1.observation_model(X, component=component),
@@ -316,7 +313,7 @@ class Sum(StateSpaceModel):
         )
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
-        """H = [H1, H2]"""
+        r""":math:`H = [H_1 \;\; H_2]`"""
         return jnp.hstack(
             (
                 self.kernel1.observation_matrix(X),
@@ -325,21 +322,21 @@ class Sum(StateSpaceModel):
         )
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
-        """RESET = BlockDiag(RESET1, RESET2)"""
+        r""":math:`\mathrm{RESET} = \mathrm{BlockDiag}(\mathrm{RESET}_1,\, \mathrm{RESET}_2)`"""
         return Block(
             self.kernel1.reset_matrix(instid), self.kernel2.reset_matrix(instid)
         ).to_dense()
 
     def noise(self) -> JAXArray:
-        """Qc = BlockDiag(Qc1, Qc2)"""
+        r""":math:`Q_c = \mathrm{BlockDiag}(Q_{c,1},\, Q_{c,2})`"""
         return Block(self.kernel1.noise(), self.kernel2.noise()).to_dense()
 
 
 class Product(StateSpaceModel):
-    """
-    A helper to represent the product of two StateSpaceModel kernels
+    r"""The product of two :class:`StateSpaceModel` kernels.
 
-    The state dimension becomes d = d1 * d2
+    The joint state dimension is :math:`d = d_1 \cdot d_2`, and all matrices are
+    assembled using Kronecker products of the two component kernels.
     """
 
     kernel1: StateSpaceModel
@@ -360,7 +357,7 @@ class Product(StateSpaceModel):
         return self.kernel1.coord_to_sortable(X)
 
     def design_matrix(self) -> JAXArray:
-        """F = F1 ⊗ I + I ⊗ F2"""
+        r""":math:`F = F_1 \otimes I + I \otimes F_2`"""
         F1 = self.kernel1.design_matrix()
         F2 = self.kernel2.design_matrix()
         I1 = jnp.eye(F1.shape[0])
@@ -368,30 +365,28 @@ class Product(StateSpaceModel):
         return jnp.kron(F1, I2) + jnp.kron(I1, F2)
 
     def noise_effect_matrix(self) -> JAXArray:
-        """
-        L for products is not uniquely defined!
-        We choose a convenient form here where
-        L is simply the identity, and choose
-        Qc such that we get the correct L@Qc@L^T
+        r""":math:`L` for products is not uniquely defined, only the combination
+        :math:`L Q_c L^T` is. A convenient choice then for :math:`L` is the
+        identity matrix, which we return here. Then, :math:`Q_c` is chosen so that
+        :math:`L Q_c L^T` gives the correct process noise.
         """
         return jnp.eye(self.dimension)
 
     def stationary_covariance(self) -> JAXArray:
-        """Pinf = Pinf1 ⊗ Pinf2"""
+        r""":math:`\mathbf{P}_\infty = \mathbf{P}_{\infty,1} \otimes \mathbf{P}_{\infty,2}`"""
         Pinf1 = self.kernel1.stationary_covariance()
         Pinf2 = self.kernel2.stationary_covariance()
         return jnp.kron(Pinf1, Pinf2)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """A = A1 ⊗ A2"""
+        r""":math:`A_k = A_{k,1} \otimes A_{k,2}`"""
         A1 = self.kernel1.transition_matrix(X1, X2)
         A2 = self.kernel2.transition_matrix(X1, X2)
         return jnp.kron(A1, A2)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        Q for a product is best determined via the identity
-        Q = Pinf - A Pinf A^T
+        r""":math:`Q_k` for a product is best determined via the identity
+        :math:`Q_k = \mathbf{P}_\infty - A_k \mathbf{P}_\infty A_k^T`.
         """
         Q1 = self.kernel1.process_noise(X1, X2)
         Q2 = self.kernel2.process_noise(X1, X2)
@@ -400,29 +395,28 @@ class Product(StateSpaceModel):
         return jnp.kron(Pinf1, Q2) + jnp.kron(Q1, Pinf2) - jnp.kron(Q1, Q2)
 
     def observation_model(self, X: JAXArray, component=None) -> JAXArray:
-        """H = H1 ⊗ H2 with component extraction"""
+        r""":math:`H = H_1 \otimes H_2`, with optional component masking."""
         H1 = self.kernel1.observation_model(X, component=component)
         H2 = self.kernel2.observation_model(X, component=component)
         return jnp.kron(H1, H2)
 
     def observation_matrix(self, X: JAXArray) -> JAXArray:
-        """H = H1 ⊗ H2"""
+        r""":math:`H = H_1 \otimes H_2`"""
         H1 = self.kernel1.observation_matrix(X)
         H2 = self.kernel2.observation_matrix(X)
         return jnp.kron(H1, H2)
 
     def reset_matrix(self, instid: int = 0) -> JAXArray:
-        """RESET = RESET1 ⊗ RESET2"""
+        r""":math:`\mathrm{RESET} = \mathrm{RESET}_1 \otimes \mathrm{RESET}_2`"""
         Reset1 = self.kernel1.reset_matrix(instid)
         Reset2 = self.kernel2.reset_matrix(instid)
         return jnp.kron(Reset1, Reset2)
 
     def noise(self) -> JAXArray:
-        """
-        Qc for products is not uniquely defined!
-        Here we choose a convenient form where
-        Qc = L1 Qc1 L1^T ⊗ Pinf2 + Pinf1 ⊗ L2 Qc2 L2^T
-        and L is the identity, so that L Qc L^T gives the correct process noise
+        r""":math:`Q_c` for products is not uniquely defined.
+
+        Returns :math:`Q_c = L_1 Q_{c,1} L_1^T \otimes \mathbf{P}_{\infty,2} + \mathbf{P}_{\infty,1} \otimes L_2 Q_{c,2} L_2^T`,
+        with :math:`L = I`, so that :math:`L Q_c L^T` yields the correct process noise.
         """
         Qc1 = self.kernel1.noise()
         Qc2 = self.kernel2.noise()
@@ -474,7 +468,7 @@ class Wrapper(StateSpaceModel):
 
 
 class Scale(Wrapper):
-    """The product of a scalar and a quasiseparable kernel"""
+    """The product of a scalar and a state space kernel."""
 
     scale: JAXArray | float
 
@@ -565,7 +559,7 @@ class SHO(StateSpaceModel):
         k(\Delta) = \sigma^2\,\exp\left(-\frac{\omega_0\,\Delta}{2\,Q}\right)
         \left\{\begin{array}{ll}
             1 + \omega_0\,\Delta & \mbox{for } Q = 1/2 \\
-            \cosh(\eta\,\omega_0\,\Delta) + \fra{1}{2\eta Q} \sinh(\eta\,\omega_0\,\Delta)
+            \cosh(\eta\,\omega_0\,\Delta) + \frac{1}{2\eta Q} \sinh(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q < 1/2 \\
             \frac{1}{2\eta Q}\cos(\eta\,\omega_0\,\Delta) + \sin(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q > 1/2
@@ -1106,8 +1100,8 @@ class ExpSineSquared(Wrapper):
 
     In the state space representation, this kernel is approximated using
     a finite number of basis functions. The method was introduced by
-    `Solin & Särkkä (2014) <https://proceedings.mlr.press/v33/solin14.html`_.
-    See their Figure 2 for number of basis functions to reach desired accuracy.
+    `Solin & Särkkä (2014) <https://proceedings.mlr.press/v33/solin14.html>`_.
+    See their Figure 2 for the number of basis functions required to reach desired accuracy.
     Default behavior will automatically select the number of basis functions
     based on the length scale :math:`\ell`.
 
@@ -1201,13 +1195,13 @@ class ExpSineSquared(Wrapper):
             self.name = f"PeriodicTerm_{order}"
 
         def design_matrix(self) -> JAXArray:
-            """The design (also called the feedback) matrix for the PeriodicTerm, $F$"""
+            r"""The design (also called the feedback) matrix for the PeriodicTerm, :math:`F`"""
             j = self.order
             w = self.omega
             return jnp.array([[0, -w * j], [w * j, 0]])
 
         def stationary_covariance(self) -> JAXArray:
-            """The stationary covariance of the prPeriodicTermocess, Pinf"""
+            r"""The stationary covariance of the PeriodicTerm process, :math:`\mathbf{P}_\infty`"""
             j = self.order
             arg = 1 / self.scale
             coeff = jax.lax.cond(j == 0, lambda _: 1.0, lambda _: 2.0, j)
@@ -1215,15 +1209,15 @@ class ExpSineSquared(Wrapper):
             return qj2 * jnp.eye(self.dimension)
 
         def observation_matrix(self, X: JAXArray) -> JAXArray:
-            """The observation matrix for the PeriodicTerm, $H$"""
+            r"""The observation matrix for the PeriodicTerm, :math:`H`"""
             return jnp.array([[1, 0]])
 
         def noise(self) -> JAXArray:
-            """The spectral density of the white noise for the PeriodicTerm, $Q_c$"""
+            r"""The spectral density of the white noise for the PeriodicTerm, :math:`Q_c`"""
             return jnp.zeros((self.dimension, self.dimension))
 
         def noise_effect_matrix(self) -> JAXArray:
-            """The noise effect matrix $L$ for the PeriodicTerm"""
+            r"""The noise effect matrix :math:`L` for the PeriodicTerm"""
             return jnp.eye(self.dimension)
 
         def Ij(self, j, x, terms=50) -> JAXArray:
@@ -1278,11 +1272,11 @@ class Matern(StateSpaceModel):
     where :math:`\lambda = \sqrt{2\nu}/\ell` and the coefficients 
     :math:`a_i = \binom{d}{i-1}` are the binomial coefficients.
     The spectral noise density is given by:
-        .. math::
 
-            Q_c = \sigma^2 \frac{[(d-1)!]^2}{(2d-2)!} (2\lambda)^{2d-1}.
-    
-            
+    .. math::
+
+        Q_c = \sigma^2 \frac{[(d-1)!]^2}{(2d-2)!} (2\lambda)^{2d-1}.
+
     Args:
         nu: The smoothness parameter :math:`\nu` (must be half-integer).
         scale: The parameter :math:`\ell`.
@@ -1352,7 +1346,7 @@ class Matern(StateSpaceModel):
         return jnp.array([[q]])
 
     def stationary_covariance(self) -> JAXArray:
-        """The stationary covariance of the Matern-5/2 process, Pinf"""
+        r"""The stationary covariance of the Matérn process, :math:`\mathbf{P}_\infty`"""
         from scipy.linalg import solve_continuous_lyapunov
 
         # TODO: find a JAX version of solve_continuous_lyapunov

@@ -11,13 +11,13 @@
 """
 These kernels are compatible with :class:`smolgp.solvers.integrated.IntegratedStateSpaceSolver`,
 which uses Bayesian filtering and smoothing algorithms to perform scalable GP
-inference. (see :ref:`api-solvers-statespace` for more technical details).
+inference. (see :mod:`smolgp.solvers` for more technical details).
 On GPU, a performance boost may be observed for large datasets by using the
 :class:`smolgp.solvers.parallel.ParallelStateSpaceSolver` class.
 
 Like the quasisep kernels, these methods are experimental, so you may find
 the documentation patchy in places. You are encouraged to `open issues or
-pull requests <https://github.com/rrubenza/smolgp/issues>`_ as you find gaps.
+pull requests <https://github.com/smolgp-dev/smolgp/issues>`_ as you find gaps.
 """
 
 from __future__ import annotations
@@ -42,16 +42,19 @@ from smolgp.helpers import Phibar_from_VanLoan
 
 
 class IntegratedStateSpaceModel(StateSpaceModel):
-    """
-    A generic class that augments a :class:`StateSpaceModel`
-    object (which has state `x`) with an integral state `z`,
-    to model the joint state `X = [x; z]`.
+    r"""Base class for a :class:`StateSpaceModel` augmented with an integral state.
 
-    The coordinates for an integrated model should be a tuple of
-        X = (t, delta, instid),
-    where `t` is the usual coordinate (e.g. time) at the measurements (midpoints),
-    `delta` is the integration range (e.g. exposure time) for each measurement,
-    and `instid` is an index encoding which instrument the measurement corresponds to.
+    Augments a base model with latent state :math:`x` by appending an integral
+    state :math:`z`, forming the joint state :math:`[x;\, z]`. This enables
+    modeling of time-averaged measurements such as long-exposure observations.
+
+    Coordinates for an integrated model must be a tuple ``(t, delta, instid)``:
+
+    - ``t``: measurement coordinate (e.g. the midpoint time of each exposure)
+    - ``delta``: integration range (e.g. exposure time); each measurement
+      spans :math:`[t - \delta/2,\; t + \delta/2]`
+    - ``instid``: integer index identifying which instrument/dataset each
+      measurement belongs to (supports overlapping multi-instrument datasets)
     """
 
     base_model: StateSpaceModel  # the base (non-integrated) SSM
@@ -248,19 +251,20 @@ class IntegratedStateSpaceModel(StateSpaceModel):
 
 
 class IntegratedSHO(IntegratedStateSpaceModel):
-    r"""The damped, driven simple harmonic oscillator kernel
-        integrated over a finite time range, :math:`\delta`.
+    r"""The :class:`~smolgp.kernels.SHO` kernel integrated over a finite time range :math:`\delta`.
 
-    This form of the kernel was introduced by `Luhn et al. (in prep)
-    <LINK>`_, and it takes the form:
+    Models the time-averaged version of the damped, driven stochastic harmonic
+    oscillator kernel (see :class:`~smolgp.kernels.SHO`).  Each measurement
+    is the average of the latent GP over an exposure window of length
+    :math:`\delta` centred on the observation time.
 
     Args:
-        omega: The parameter :math:`\omega_0`.
-        quality: The parameter :math:`Q`.
-        sigma (optional): The parameter :math:`\sigma`. Defaults to a value of
-            1. Specifying the explicit value here provides a slight performance
-            boost compared to independently multiplying the kernel with a
-            prefactor.
+        omega: The natural frequency :math:`\omega_0`.
+        quality: The quality factor :math:`Q`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+            Specifying it here provides a slight performance boost over
+            multiplying the kernel by a scalar after construction.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
     """
 
     omega: JAXArray | float
@@ -426,6 +430,15 @@ class IntegratedSHO(IntegratedStateSpaceModel):
 ## IntegratedStateSpaceModel parent class will handle the augmentation
 ## All component matrices will be auto-generated numerically (e.g. A via expm, Q via Van Loan)
 class IntegratedExp(IntegratedStateSpaceModel):
+    r"""The :class:`~smolgp.kernels.Exp` (Ornstein–Uhlenbeck / Matérn-1/2) kernel
+    integrated over a finite time range :math:`\delta`.
+
+    Args:
+        scale: The length scale :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+    """
+
     scale: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     lam: JAXArray | float
@@ -447,6 +460,14 @@ class IntegratedExp(IntegratedStateSpaceModel):
 
 
 class IntegratedMatern32(IntegratedStateSpaceModel):
+    r"""The :class:`~smolgp.kernels.Matern32` kernel integrated over a finite time range :math:`\delta`.
+
+    Args:
+        scale: The length scale :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+    """
+
     scale: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     lam: JAXArray | float
@@ -468,6 +489,14 @@ class IntegratedMatern32(IntegratedStateSpaceModel):
 
 
 class IntegratedMatern52(IntegratedStateSpaceModel):
+    r"""The :class:`~smolgp.kernels.Matern52` kernel integrated over a finite time range :math:`\delta`.
+
+    Args:
+        scale: The length scale :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+    """
+
     scale: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     lam: JAXArray | float
@@ -489,6 +518,14 @@ class IntegratedMatern52(IntegratedStateSpaceModel):
 
 
 class IntegratedCosine(IntegratedStateSpaceModel):
+    r"""The :class:`~smolgp.kernels.Cosine` kernel integrated over a finite time range :math:`\delta`.
+
+    Args:
+        scale: The period :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+    """
+
     scale: JAXArray | float
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     omega: JAXArray | float

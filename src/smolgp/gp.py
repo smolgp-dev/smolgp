@@ -31,9 +31,14 @@ import dataclasses
 
 
 def assign_unique_kernel_names(kernel: StateSpaceModel) -> StateSpaceModel:
-    """
-    Return a new kernel where leaf kernel names
-    are made unique by appending _1, _2, etc.
+    """Return a new kernel where duplicated leaf kernel names are made unique by appending _1, _2, etc.
+
+    For example, if the original kernel has three components
+    named "SHO", "Matern", and "Matern", they will be renamed
+    to "SHO", "Matern_1", and "Matern_2". This is useful for
+    ensuring that the component kernels can be uniquely identified
+    when making predictions at test points or when extracting
+    component contributions.
     """
     leaves = extract_leaf_kernels(kernel)
     names = [k.name for k in leaves]
@@ -267,24 +272,28 @@ class PredictedStates(eqx.Module):
 
 
 class GaussianProcess(eqx.Module):
-    """An interface for designing a Gaussian Process regression model
+    r"""An interface for designing a Gaussian Process regression model.
 
-    Args:
-        kernel (Kernel): The kernel function
-        X (JAXArray): The input coordinates. This can be any PyTree that is
-            compatible with ``kernel`` where the zeroth dimension is ``N_data``,
-            the size of the data set.
-        noise (JAXArray, optional): The observation noise covariance matrices
-            with shape ``(D, D, N)`` where ``D`` is the observation dimension
-            (usually 1) and ``N`` is the number of data points. Each slice
-            ``noise[:, :, k]`` is the ``D×D`` noise covariance for the k-th
-            observation. If not provided, defaults to a small jitter
-            (sqrt of machine epsilon) times the identity applied to all
-            observations.
-        mean (Callable, optional): A callable or constant mean function that
-            will be evaluated with the ``X`` as input: ``mean(X)``
-        solver: The solver type to be used to execute the required linear
-            algebra.
+    :param kernel: The kernel function.
+    :type kernel: Kernel
+    :param X: The input coordinates — any PyTree compatible with ``kernel``
+        whose leading dimension has size ``N_data``.
+        For integrated kernels, pass ``(t, texp)`` where ``t`` is the array of
+        exposure midpoints and ``texp`` is the array of exposure durations.
+    :type X: JAXArray
+    :param noise: Observation noise covariance matrices with shape
+        ``(N, D, D)``, where ``N`` is the number of data points and ``D`` is
+        the observation dimension (usually 1). Each slice ``noise[k]`` is the
+        :math:`D \times D` noise covariance for the ``k``-th observation.
+        A 1-D array of shape ``(N,)`` is interpreted as scalar per-observation
+        variances. Defaults to :math:`\sqrt{\varepsilon_{\mathrm{machine}}}
+        \cdot I` for all observations.
+    :type noise: JAXArray, optional
+    :param mean: A callable or constant mean function evaluated as
+        ``mean(X)``.
+    :type mean: Callable, optional
+    :param solver: Solver class for filtering and smoothing. If ``None``
+        (default), selected automatically based on the kernel type.
     """
 
     num_data: int = eqx.field(static=True)
@@ -294,7 +303,7 @@ class GaussianProcess(eqx.Module):
     mean_function: means.MeanBase
     mean: JAXArray
     var: JAXArray | None
-    noise: JAXArray  # shape (D, D, N): observation noise covariance per time step
+    noise: JAXArray
     solver: StateSpaceSolver
     states: ConditionedStates
 
@@ -460,9 +469,9 @@ class GaussianProcess(eqx.Module):
                 predictions will be made.
             include_mean (bool, optional): If ``True`` (default), the predicted
                 values will include the mean function evaluated at ``X_test``.
-            kernel (Kernel, optional): A kernel to optionally specify the
-                covariance between the observed data and predicted data. See
-                :ref:`mixture` for an example.
+            kernel (Kernel, optional): A kernel to optionally specify the component
+                kernel to be used for predicting after conditioning. See
+                :ref:`multicomponent` for an example.
 
         Returns:
             A named tuple where the first element ``log_probability`` is the log

@@ -1,22 +1,27 @@
 """
-The primary model building interface in ``smolgp`` is via "kernels", which are
-typically constructed as sums and products of objects defined in this
-subpackage, or by subclassing :class:`Kernel` as discussed in the :ref:`kernels`
-tutorial. The kernels implemented here are extensions of those defined in
-``tinygp.kernels.quasisep`` to be fully-compatible with the state space solvers.
-The key differences are that `smolgp` kernels:
-1. Include the `noise_effect_matrix` and `process_noise` matrix
-2. Treat the observation model as a row vector that can be selected on/off via the kernel's name
-3. The transition matrix is in its usual form (compared to transposed forms in tinygp.kernels.quasisep)
+The primary model-building interface in ``smolgp`` is via "kernels", typically
+constructed as sums and products of the objects defined in this subpackage.
+The kernels here are extensions of those in ``tinygp.kernels.quasisep`` and are
+fully compatible with the state space solvers.  Key differences from
+``tinygp.kernels.quasisep``:
 
-For modeling integrated measurements, use the kernels in ``smolgp.kernels.integrated``.
+1. Each kernel exposes :meth:`~smolgp.kernels.StateSpaceModel.noise_effect_matrix`
+   (:math:`L`) and :meth:`~smolgp.kernels.StateSpaceModel.process_noise` (:math:`Q_k`).
+2. The observation model is a row vector that can be selected per-component via
+   the kernel's ``name`` attribute (used for multi-component decomposition).
+3. The transition matrix is in its conventional form (not transposed as in
+   ``tinygp.kernels.quasisep``).
 
-Sums and Products of ``smolgp`` kernels are also ``smolgp`` kernels.
+For modeling time-averaged (integrated) measurements, use the kernels in
+:mod:`smolgp.kernels.integrated`.
+
+Sums and products of ``smolgp`` kernels are themselves ``smolgp`` kernels.
 Their conditioned and predictive distributions can be decomposed per-component
-using GaussianProcess.component_means and predict_component_means, respectively.
+via :meth:`~smolgp.GaussianProcess.get_component_mean` and
+:meth:`~smolgp.GaussianProcess.get_all_component_means`.
 
-For mixed kernels containing some integrated and some instantaneous components,
-the integrated solver will be used to handle the entire kernel.
+For mixed kernels with both integrated and instantaneous components, the
+:class:`~smolgp.solvers.IntegratedStateSpaceSolver` is used automatically.
 """
 
 # Model class and utilities

@@ -28,7 +28,7 @@ def rts_smoother(A, t, m_filtered, P_filtered, m_predicted, P_predicted):
     Jax implementation of the Rauch-Tung-Striebel (RTS) smoothing algorithm
 
     See Theorem 8.2 (pdf page 156) in "Bayesian Filtering and Smoothing"
-    by Simo S{\"a}rkk{\"a} for detailed description of the algorithm and notation.
+    by Simo Särkkä for detailed description of the algorithm and notation.
     """
     N = len(t)  # number of data points
 
