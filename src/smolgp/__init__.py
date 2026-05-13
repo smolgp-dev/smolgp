@@ -15,7 +15,7 @@ also compatible with the parallel methods.
 
 The primary way that you interact with ``smolgp`` is to construct
 "kernel" functions using the building blocks provided in the ``kernels``
-subpackage (see :ref:`api-kernels`), and then passing that to a
+subpackage (see :mod:`smolgp.kernels`), and then passing that to a
 :class:`GaussianProcess` object to do all the computations. Check out the
 :ref:`tutorials` for a more complete introduction.
 """
@@ -25,4 +25,9 @@ from smolgp import (
     solvers as solvers,
 )
 from smolgp.gp import GaussianProcess as GaussianProcess
-# from smolgp.smolgp_version import __version__ as __version__
+from importlib.metadata import version as _version, PackageNotFoundError as _PackageNotFoundError
+
+try:
+    __version__ = _version("smolgp")
+except _PackageNotFoundError:
+    __version__ = "unknown"

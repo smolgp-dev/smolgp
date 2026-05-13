@@ -3,7 +3,7 @@
 # For the full list of built-in configuration values, see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-# import smolgp
+import smolgp
 
 extensions = [
     "autoapi.extension",
@@ -37,6 +37,7 @@ nb_execution_timeout = -1
 # -- AutoAPI -------------------------------------------------
 autoapi_type = "python"
 autoapi_dirs = ["../src"]
+autoapi_template_dir = "_templates/autoapi"
 # autodoc_output_dir = "apidocs"
 # autoapi_add_toctree_entry = True
 # autodoc_type_aliases = {
@@ -48,10 +49,8 @@ autoapi_dirs = ["../src"]
 project = "smolgp"
 copyright = "2025, 2026 Ryan Rubenzahl, Soichiro Hattori, Simons Foundation, Inc."
 author = "Ryan Rubenzahl & Soichiro Hattori"
-# version = smolgp.__version__
-# release = smolgp.__version__
-version = "0.0.1"
-release = "0.0.1"
+version = smolgp.__version__
+release = smolgp.__version__
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
