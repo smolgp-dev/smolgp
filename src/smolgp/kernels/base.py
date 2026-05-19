@@ -241,7 +241,7 @@ class StateSpaceModel(Kernel):
         def compute_psd(w: JAXArray) -> JAXArray:
             M = jnp.linalg.inv(F + 1j * w * I)
             S = H @ M.conj() @ L @ Qc @ L.T @ M.T @ H.T
-            return S.squeeze().real / (2 * jnp.pi)
+            return S.squeeze().real
 
         return jax.vmap(compute_psd)(omega)
 
