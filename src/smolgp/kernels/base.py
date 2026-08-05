@@ -1247,6 +1247,41 @@ class ExpSineSquared(Wrapper):
             return jnp.zeros((self.dimension, self.dimension))
 
 
+class Quasiperiodic(Wrapper):
+    r"""A state space implementation of the quasiperiodic kernel
+
+    .. math::
+
+        k(\mathbf{x}_i,\,\mathbf{x}_j) = \sigma^2 \exp(-\frac{\Delta}{\ell})\,\exp(-\Gamma\,\sin^2(\frac{\pi \Delta}{P}))
+
+    for :math:`\Delta = |x_i - x_j|`. I.e., the kernel is the product of an exponential kernel
+    (smolgp.kernels.Exp) and a periodic kernel (smolgp.kernels.ExpSineSquared).
+
+    Args:
+        period: The parameter :math:`P`, the period of the periodic component.
+        gamma: The parameter :math:`\Gamma`, the "smoothness" of the periodic component.
+        scale: The parameter :math:`\ell`, the length scale of the exponential component.
+        sigma: The parameter :math:`\sigma`, the amplitude of the process. Defaults to a value of 1.
+    """
+
+    kernel: StateSpaceModel
+    sigma: float | JAXArray
+    period: float | JAXArray
+    gamma: float | JAXArray
+    scale: float | JAXArray
+
+    def __init__(self, period, gamma, scale, sigma, name=None):
+        self.period = period
+        self.gamma = gamma
+        self.scale = scale
+        self.sigma = sigma
+        self.name = "Quasiperiodic" if name is None else name
+
+        Periodic = ExpSineSquared(period=period, gamma=gamma, sigma=1.0)
+        Decaying = Exp(sigma=sigma, scale=scale)
+        self.kernel = Decaying * Periodic
+
+
 class Matern(StateSpaceModel):
     r"""
     A state space implementation of the generic half-integer Matérn kernel

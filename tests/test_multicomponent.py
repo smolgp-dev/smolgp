@@ -155,6 +155,14 @@ def test_multicomponent():
     assert components == [ssm1, (ssm2 * ssm1)], (
         "Kernel was over-decomposed! Recall we cannot decompose products into individual GPs, only sums."
     )
+
+    # Can also use Quasiperiodic to test this
+    testqp = smolgp.kernels.Quasiperiodic(period=1.0, gamma=1.0, scale=1.0, sigma=1.0)
+    components = extract_leaf_kernels(testqp.kernel)
+    assert components == [testqp.kernel], (
+        "QP Kernel was over-decomposed! Recall we cannot decompose products into individual GPs, only sums."
+    )
+
     # print("    Checking names are unique & correct...")
     # # kernel = assign_unique_kernel_names(kernel) # TODO: add this check if it isn't covered naturally by other tests
 

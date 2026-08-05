@@ -42,6 +42,7 @@ from smolgp.kernels.base import (
     Matern52 as Matern52,
     Cosine as Cosine,
     ExpSineSquared as ExpSineSquared,
+    Quasiperiodic as Quasiperiodic,
 )
 
 # Integrated kernels
