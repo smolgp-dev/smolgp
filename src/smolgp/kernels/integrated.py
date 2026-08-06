@@ -55,6 +55,11 @@ class IntegratedStateSpaceModel(StateSpaceModel):
       spans :math:`[t - \delta/2,\; t + \delta/2]`
     - ``instid``: integer index identifying which instrument/dataset each
       measurement belongs to (supports overlapping multi-instrument datasets)
+
+    ``num_insts`` does not need to be set correctly by hand: when a
+    :class:`~smolgp.GaussianProcess` is constructed, it is automatically
+    brought into alignment with the number of instruments implied by the
+    ``instid`` array in ``X`` (reinitializing this kernel if needed).
     """
 
     base_model: StateSpaceModel  # the base (non-integrated) SSM
@@ -121,7 +126,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
             H_aug = jax.lax.dynamic_update_slice(H_aug, H_x, (0,))
             return H_aug
 
-        if isinstance(X, tuple) or isinstance(X, list):
+        if isinstance(X, (tuple, list)):
             # Observing integral state (z) with exposure time (delta)
             t, delta, instid = X
             H_aug = jax.lax.cond(
@@ -265,6 +270,10 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             Specifying it here provides a slight performance boost over
             multiplying the kernel by a scalar after construction.
         num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
     """
 
     omega: JAXArray | float
@@ -276,7 +285,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         self,
         omega: JAXArray | float,
         quality: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         num_insts: int = 1,
         name: str = "IntegratedSHO",
         **kwargs,
@@ -287,6 +296,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         # SHO parameters
         self.omega = omega
         self.quality = quality
+        sigma = jnp.ones(()) if sigma is None else sigma
         self.sigma = sigma
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
@@ -437,6 +447,10 @@ class IntegratedExp(IntegratedStateSpaceModel):
         scale: The length scale :math:`\ell`.
         sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
         num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
     """
 
     scale: JAXArray | float
@@ -446,11 +460,13 @@ class IntegratedExp(IntegratedStateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         num_insts: int = 1,
         name: str = "IntegratedExp",
         **kwargs,
     ):
+        if sigma is None:
+            sigma = jnp.ones(())
         self.scale = scale
         self.sigma = sigma
         self.name = name
@@ -466,6 +482,10 @@ class IntegratedMatern32(IntegratedStateSpaceModel):
         scale: The length scale :math:`\ell`.
         sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
         num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
     """
 
     scale: JAXArray | float
@@ -475,11 +495,13 @@ class IntegratedMatern32(IntegratedStateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         num_insts: int = 1,
         name: str = "IntegratedMatern32",
         **kwargs,
     ):
+        if sigma is None:
+            sigma = jnp.ones(())
         self.scale = scale
         self.sigma = sigma
         self.name = name
@@ -495,6 +517,10 @@ class IntegratedMatern52(IntegratedStateSpaceModel):
         scale: The length scale :math:`\ell`.
         sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
         num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
     """
 
     scale: JAXArray | float
@@ -504,11 +530,13 @@ class IntegratedMatern52(IntegratedStateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         num_insts: int = 1,
         name: str = "IntegratedMatern52",
         **kwargs,
     ):
+        if sigma is None:
+            sigma = jnp.ones(())
         self.scale = scale
         self.sigma = sigma
         self.name = name
@@ -524,6 +552,10 @@ class IntegratedCosine(IntegratedStateSpaceModel):
         scale: The period :math:`\ell`.
         sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
         num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
     """
 
     scale: JAXArray | float
@@ -533,11 +565,13 @@ class IntegratedCosine(IntegratedStateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         num_insts: int = 1,
         name: str = "IntegratedCosine",
         **kwargs,
     ):
+        if sigma is None:
+            sigma = jnp.ones(())
         self.scale = scale
         self.sigma = sigma
         self.name = name

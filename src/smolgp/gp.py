@@ -1,4 +1,5 @@
 from __future__ import annotations
+import warnings
 from collections.abc import Sequence
 from functools import partial
 from typing import (
@@ -15,8 +16,8 @@ import jax.numpy as jnp
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.kernels import StateSpaceModel, Sum, Product
-from smolgp.kernels.base import extract_leaf_kernels
+from smolgp.kernels import StateSpaceModel, Sum, Product, Wrapper
+from smolgp.kernels.base import extract_leaf_kernels, extract_all_components
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
 
 from smolgp.solvers import StateSpaceSolver
@@ -73,6 +74,43 @@ def assign_unique_kernel_names(kernel: StateSpaceModel) -> StateSpaceModel:
             return k
 
     return _rename(kernel)
+
+
+def assign_num_insts(kernel: StateSpaceModel, num_insts: int) -> StateSpaceModel:
+    """Return a new kernel where every IntegratedStateSpaceModel component has
+    num_insts set to the given value, reinitializing any that don't already match.
+
+    Traverses Sum, Product, and Wrapper nodes to find IntegratedStateSpaceModel
+    leaves anywhere in the kernel tree.
+    """
+    if isinstance(kernel, (Sum, Product)):
+        k1 = assign_num_insts(kernel.kernel1, num_insts)
+        k2 = assign_num_insts(kernel.kernel2, num_insts)
+        if k1 is kernel.kernel1 and k2 is kernel.kernel2:
+            return kernel
+        return type(kernel)(k1, k2)
+    if isinstance(kernel, IntegratedStateSpaceModel):
+        if kernel.num_insts == num_insts:
+            return kernel
+        warnings.warn(
+            f"Kernel '{kernel.name}' has num_insts={kernel.num_insts}, but the data's "
+            f"instid array implies {num_insts} instrument(s). Reinitializing this "
+            f"kernel component with num_insts={num_insts}."
+        )
+        return dataclasses.replace(kernel, num_insts=num_insts)
+    if isinstance(kernel, Wrapper):
+        inner = assign_num_insts(kernel.kernel, num_insts)
+        if inner is kernel.kernel:
+            return kernel
+        updated = dataclasses.replace(kernel, kernel=inner)
+        if updated.kernel is not inner:
+            raise NotImplementedError(
+                f"Cannot automatically update num_insts inside a {type(kernel).__name__} "
+                "wrapper; construct its integrated component with the correct num_insts "
+                "directly."
+            )
+        return updated
+    return kernel
 
 
 class ConditionedStates(eqx.Module):
@@ -329,7 +367,8 @@ class GaussianProcess(eqx.Module):
             self.kernel = kernel
 
         # Check if the kernel contains any integrated components
-        kernels = extract_leaf_kernels(self.kernel)
+        # (fully unwraps Sum/Product/Wrapper so e.g. 2.0 * IntegratedExp(...) is detected)
+        kernels = extract_all_components(self.kernel)
         is_integrated = any([isinstance(k, IntegratedStateSpaceModel) for k in kernels])
         is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
 
@@ -341,6 +380,43 @@ class GaussianProcess(eqx.Module):
                 " where t is the midpoint of each measurement and texp is the exposure time"
                 " (i.e. each measurement is over the interval [t - texp/2, t + texp/2])."
             )
+
+            # If instid is provided (X = (t, texp, instid)), validate its format
+            # and reconcile num_insts across any integrated kernel components.
+            if len(X) > 2:
+                t_coord, _texp, instid = X
+                instid = jnp.asarray(instid)
+                if not jnp.issubdtype(instid.dtype, jnp.integer):
+                    raise ValueError(
+                        f"instid must be an integer array, got dtype {instid.dtype}"
+                    )
+                if instid.shape[0] != jnp.shape(t_coord)[0]:
+                    raise ValueError(
+                        "instid must have the same length as the data coordinates "
+                        f"(got {instid.shape[0]} vs {jnp.shape(t_coord)[0]})"
+                    )
+                unique_insts = jnp.unique(instid)
+                num_insts = int(unique_insts.shape[0])
+                if not jnp.array_equal(unique_insts, jnp.arange(num_insts)):
+                    raise ValueError(
+                        "instid must contain consecutive integer instrument ids "
+                        f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
+                    )
+
+                # Only reinitialize when we're about to build a fresh solver from
+                # this kernel. When a pre-built solver instance is passed through
+                # (as GaussianProcess.condition() does when constructing the
+                # conditioned/prediction GP), the kernel must stay consistent with
+                # that already-built solver rather than be resized to match a
+                # possibly-partial test-time instid subset.
+                building_fresh_solver = solver is None or solver in [
+                    StateSpaceSolver,
+                    IntegratedStateSpaceSolver,
+                    ParallelStateSpaceSolver,
+                    ParallelIntegratedStateSpaceSolver,
+                ]
+                if building_fresh_solver:
+                    self.kernel = assign_num_insts(self.kernel, num_insts)
 
         # Data coordinates (or tuple of coordinates)
         self.X = X
@@ -387,7 +463,7 @@ class GaussianProcess(eqx.Module):
                 )
 
             self.solver = solver(
-                kernel,
+                self.kernel,
                 self.X,
                 self.noise,
                 **solver_kwargs,
@@ -400,7 +476,7 @@ class GaussianProcess(eqx.Module):
             ParallelIntegratedStateSpaceSolver,
         ]:
             self.solver = solver(
-                kernel,
+                self.kernel,
                 self.X,
                 self.noise,
                 **solver_kwargs,

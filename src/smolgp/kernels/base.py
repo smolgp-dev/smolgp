@@ -47,6 +47,25 @@ def extract_leaf_kernels(kernel, all=False):
         return [kernel]
 
 
+def extract_all_components(kernel):
+    """
+    Recursively extract every leaf kernel, fully unwrapping Sum, Product, and Wrapper nodes.
+
+    Unlike extract_leaf_kernels, this also unwraps Wrapper (e.g. Scale) so that,
+    for example, `2.0 * IntegratedExp(...)` correctly surfaces the IntegratedExp
+    leaf. Intended for internal type-inspection (e.g. "does this tree contain any
+    IntegratedStateSpaceModel?"), not for component-name-based extraction --
+    extract_leaf_kernels remains the right tool for that.
+    """
+    if isinstance(kernel, (Sum, Product)):
+        return extract_all_components(kernel.kernel1) + extract_all_components(
+            kernel.kernel2
+        )
+    if isinstance(kernel, Wrapper):
+        return extract_all_components(kernel.kernel)
+    return [kernel]
+
+
 class StateSpaceModel(Kernel):
     r"""The base class for an instantaneous linear Gaussian state space model.
 
@@ -173,7 +192,7 @@ class StateSpaceModel(Kernel):
 
     def __add__(self, other: Kernel | JAXArray) -> Kernel:
         if not isinstance(other, StateSpaceModel):
-            raise ValueError(
+            raise TypeError(
                 "StateSpaceModel kernels can only be added to other StateSpaceModel kernels"
             )
         return Sum(self, other)
@@ -183,7 +202,7 @@ class StateSpaceModel(Kernel):
         if other == 0:
             return self
         if not isinstance(other, StateSpaceModel):
-            raise ValueError(
+            raise TypeError(
                 "StateSpaceModel kernels can only be added to other StateSpaceModel kernels"
             )
         return Sum(other, self)
@@ -192,7 +211,7 @@ class StateSpaceModel(Kernel):
         if isinstance(other, StateSpaceModel):
             return Product(self, other)
         if isinstance(other, Kernel) or jnp.ndim(other) != 0:
-            raise ValueError(
+            raise TypeError(
                 "StateSpaceModel kernels can only be multiplied by scalars and other "
                 "StateSpaceModel kernels"
             )
@@ -472,6 +491,16 @@ class Scale(Wrapper):
 
     scale: JAXArray | float
 
+    def __init__(
+        self,
+        kernel: StateSpaceModel,
+        scale: JAXArray | float,
+        name: str | None = None,
+    ):
+        self.kernel = kernel
+        self.scale = scale
+        self.name = f"Scale({kernel.name})" if name is None else name
+
     def stationary_covariance(self) -> JAXArray:
         return self.scale * self.kernel.stationary_covariance()
 
@@ -510,10 +539,12 @@ class Constant(StateSpaceModel):
 
     def __init__(
         self,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "Constant",
         **kwargs,
     ):
+        if sigma is None:
+            sigma = jnp.ones(())
         self.sigma = sigma
         self.name = name
 
@@ -585,14 +616,14 @@ class SHO(StateSpaceModel):
         self,
         omega: JAXArray | float,
         quality: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "SHO",
         **kwargs,
     ):
         # SHO parameters
         self.omega = omega
         self.quality = quality
-        self.sigma = sigma
+        self.sigma = jnp.ones(()) if sigma is None else sigma
         self.name = name
         self.eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.quality**2)))
 
@@ -747,12 +778,14 @@ class Exp(StateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "Exp",
         **kwargs,
     ):
         # Exp parameters
         self.scale = scale
+        if sigma is None:
+            sigma = jnp.ones(())
         self.sigma = sigma
         self.name = name
         self.lam = 1 / self.scale
@@ -817,13 +850,13 @@ class Matern32(StateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "Matern32",
         **kwargs,
     ):
         # Matern-3/2 parameters
         self.scale = scale
-        self.sigma = sigma
+        self.sigma = jnp.ones(()) if sigma is None else sigma
         self.name = name
         self.lam = jnp.sqrt(3) / self.scale
 
@@ -902,13 +935,13 @@ class Matern52(StateSpaceModel):
     def __init__(
         self,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "Matern52",
         **kwargs,
     ):
         # Matern-5/2 parameters
         self.scale = scale
-        self.sigma = sigma
+        self.sigma = jnp.ones(()) if sigma is None else sigma
         self.name = name
         self.lam = jnp.sqrt(5) / self.scale
 
@@ -1020,10 +1053,10 @@ class Cosine(StateSpaceModel):
     sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
     omega: JAXArray | float
 
-    def __init__(self, scale, sigma=jnp.ones(()), name="Cosine", **kwargs):
+    def __init__(self, scale, sigma=None, name="Cosine", **kwargs):
         # Cosine parameters
         self.scale = scale
-        self.sigma = sigma
+        self.sigma = jnp.ones(()) if sigma is None else sigma
         self.name = name
         self.omega = 2 * jnp.pi / self.scale
 
@@ -1122,12 +1155,17 @@ class ExpSineSquared(Wrapper):
     def __init__(
         self,
         period: JAXArray | float,
-        gamma: JAXArray | float = jnp.ones(()),
-        sigma: JAXArray | float = jnp.ones(()),
+        gamma: JAXArray | float | None = None,
+        sigma: JAXArray | float | None = None,
         name: str = "ExpSineSquared",
         order: int | None = None,
         **kwargs,
     ):
+        if gamma is None:
+            gamma = jnp.ones(())
+        if sigma is None:
+            sigma = jnp.ones(())
+
         self.period = period  # P
         self.gamma = gamma  # \Gamma
         self.sigma = sigma  # \sigma

@@ -1,3 +1,5 @@
+import warnings
+
 import jax
 import jax.numpy as jnp
 import tinygp
@@ -79,6 +81,95 @@ def test_integrated():
     # TODO: test predict with exposure times
 
 
+def _make_instid_data(insts):
+    """A minimal X = (t, texp, instid) tuple with a given instid array."""
+    t = jnp.arange(len(insts), dtype=float)
+    texp = jnp.full(len(insts), 0.1)
+    instid = jnp.array(insts, dtype=int)
+    return t, texp, instid
+
+
+def test_num_insts_mismatch_reinit():
+    """
+    A kernel constructed with the default num_insts=1 should be automatically
+    reinitialized (with a warning) to match the number of instruments implied
+    by the data's instid array.
+    """
+    kernel = smolgp.kernels.IntegratedExp(scale=1.0)  # default num_insts=1
+    X = _make_instid_data([0, 1, 2, 0, 1, 2])  # 3 instruments
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        gp = smolgp.GaussianProcess(kernel=kernel, X=X)
+        assert any("Reinitializing" in str(wi.message) for wi in w), (
+            "Expected a warning about reinitializing num_insts"
+        )
+
+    assert gp.kernel.num_insts == 3
+    assert gp.solver.kernel.num_insts == 3
+    print("    ...num_insts mismatch: auto-reinitialized to 3 with a warning")
+
+
+def test_num_insts_wrapped_kernel():
+    """
+    An integrated kernel wrapped in a Scale (e.g. via scalar multiplication)
+    should still be found and reinitialized.
+    """
+    kernel = 2.0 * smolgp.kernels.IntegratedExp(scale=1.0)
+    X = _make_instid_data([0, 1, 2, 0, 1, 2])  # 3 instruments
+
+    gp = smolgp.GaussianProcess(kernel=kernel, X=X)
+
+    assert gp.kernel.kernel.num_insts == 3
+    assert gp.solver.kernel.kernel.num_insts == 3
+    print("    ...Scale-wrapped integrated kernel: num_insts fixed to 3")
+
+
+def test_instid_validation():
+    """
+    Malformed instid arrays should raise a clear ValueError.
+    """
+    t, texp, instid = _make_instid_data([0, 1, 2, 0, 1, 2])
+    bad_cases = {
+        "non-integer dtype": (t, texp, instid.astype(float)),
+        "wrong length": (t, texp, instid[:3]),
+        "non-dense values": (t, texp, jnp.array([0, 2, 0, 2, 0, 2])),
+    }
+    for name, badX in bad_cases.items():
+        try:
+            smolgp.GaussianProcess(kernel=smolgp.kernels.IntegratedExp(scale=1.0), X=badX)
+            raise AssertionError(f"Expected ValueError for {name}, but none was raised")
+        except ValueError:
+            print(f"    ...instid validation: correctly rejected {name}")
+
+
+def test_num_insts_preserved_on_subset_predict():
+    """
+    Predicting at test points that only cover a subset of instruments must
+    not shrink num_insts (or otherwise desync the kernel from the solver
+    it was already conditioned with).
+    """
+    kernel = smolgp.kernels.IntegratedExp(scale=1.0, num_insts=3)
+    X = _make_instid_data([0, 1, 2, 0, 1, 2])
+    y = jnp.sin(X[0])
+
+    gp = smolgp.GaussianProcess(kernel=kernel, X=X, noise=jnp.full(6, 1e-4))
+    _, condgp = gp.condition(y)
+    assert condgp.kernel.num_insts == 3
+
+    X_test = _make_instid_data([0, 0, 0])  # only instrument 0
+    mu = condgp.predict(X_test)
+
+    assert condgp.kernel.num_insts == 3
+    assert condgp.solver.kernel.num_insts == 3
+    assert mu.shape == (3,)
+    print("    ...num_insts preserved (3) after predicting on an instrument subset")
+
+
 if __name__ == "__main__":
     test_integrated()
+    test_num_insts_mismatch_reinit()
+    test_num_insts_wrapped_kernel()
+    test_instid_validation()
+    test_num_insts_preserved_on_subset_predict()
     print("All integrated kernel tests passed.")
