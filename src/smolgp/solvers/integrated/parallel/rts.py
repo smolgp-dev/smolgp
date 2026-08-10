@@ -3,6 +3,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from smolgp.helpers import get_smoothing_gain
+
 
 def ParallelIntegratedRTSSmoother(
     kernel,
@@ -104,7 +106,7 @@ def make_associative_params(
         A = Phik @ Pk @ Phik.T + Qk
         b = Pk @ Phik.T
 
-        E = jax.scipy.linalg.solve(A.T, b.T, assume_a="pos").T
+        E = get_smoothing_gain(A, b)
         g = mk - E @ (Phik @ mk)
         L = Pk - E @ Phik @ Pk
 

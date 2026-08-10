@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import expm
 from tinygp.helpers import JAXArray
@@ -68,6 +69,61 @@ def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
     VanLoanBlock = expm(C * dt)
     G3 = VanLoanBlock[:b, b:]
     return G3
+
+
+def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
+    r"""
+
+    TLDR; usage converts
+        ``G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T``
+    to
+        ``G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)``
+
+    Computes the RTS smoothing gain :math:`G_k` from
+
+    .. math::
+
+        G_k^T = \mathrm{solve}(\mathbf{P}_{\mathrm{pred,next}}^T,\ \mathrm{numerator}^T),
+
+    guarding against :math:`\mathbf{P}_{\mathrm{pred,next}}` being exactly singular. This
+    arises when two states in an exposure-aware model occupy the same instant in time,
+    which produces a singular covariance in two different ways:
+        1. An exposure-start reset zeroes a row/column of the covariance. If the following
+           transition has zero duration, that zeroed row/column passes through unregularized.
+        2. At *nonzero* transition lengths, whenever two or more instruments are reset
+           at the exact same instant, their integral states become perfectly (diagonal and
+           row identical) correlated, since they share the same driving process noise.
+           This can persist through several further transitions before it clears.
+
+    Checking ``Delta == 0`` only catches the first case, so we instead directly check for
+    singularity in :math:`\mathbf{P}_{\mathrm{pred,next}}` itself.
+
+    The detection is via ``P_pred_next``'s (scale-normalized) log-determinant: dividing
+    by ``trace(P_pred_next) / n`` before taking ``slogdet`` makes the threshold
+    independent of the kernel's overall amplitude (a plain absolute threshold on the raw
+    determinant would not be, since determinant scales as amplitude\ :sup:`n`). A
+    genuinely singular matrix here shows up many orders of magnitude below this
+    threshold; typically ``-inf`` to around ``-40``, whereas well-conditioned states
+    have around ``-2`` to ``-24``. The threshold set here is ``-30``.
+
+    Both branches compute the correct smoothing gain by inverting the predicted covariance, but with different methods:
+    - The common (non-singular) case uses :func:`jnp.linalg.solve` (LU-based, cheap), which assumes invertibility.
+    - The degenerate case uses :func:`jnp.linalg.lstsq` (SVD-based), which is more expensive but handles singular matrices correctly.
+    """
+    n = P_pred_next.shape[0]
+    scale = jnp.trace(P_pred_next) / n
+    sign, logdet = jnp.linalg.slogdet(P_pred_next)
+    logdet_normalized = logdet - n * jnp.log(scale)
+    is_singular = (sign <= 0) | (logdet_normalized < -30.0)
+
+    def solve_generic(_):
+        return jnp.linalg.solve(P_pred_next.T, numerator.T).T
+
+    def solve_degenerate(_):
+        Y, *_ = jnp.linalg.lstsq(P_pred_next.T, numerator.T)
+        return Y.T
+
+    return jax.lax.cond(is_singular, solve_degenerate, solve_generic, operand=None)
 
 
 def VanLoan(

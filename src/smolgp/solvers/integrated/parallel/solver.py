@@ -7,6 +7,7 @@ import equinox as eqx
 from tinygp.helpers import JAXArray
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
+from smolgp.helpers import get_smoothing_gain
 from smolgp.solvers.integrated.parallel.kalman import ParallelIntegratedKalmanFilter
 from smolgp.solvers.integrated.parallel.rts import ParallelIntegratedRTSSmoother
 
@@ -235,7 +236,7 @@ class ParallelIntegratedStateSpaceSolver(eqx.Module):
             A_k = A_aug(dt)
 
             # RTS update
-            G_k = jnp.linalg.solve(P_pred_next.T, (P_star_pred @ A_k.T).T).T
+            G_k = get_smoothing_gain(P_pred_next, P_star_pred @ A_k.T)
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
             P_star_hat = P_star_pred + G_k @ (P_hat_next - P_pred_next) @ G_k.T
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from smolgp.helpers import get_smoothing_gain
+
 
 def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_results):
     """
@@ -72,14 +74,14 @@ def integrated_rts_smoother(
 
             Reset = RESET(instid[obsid[k]])
             AR = A_k @ Reset
-            G_k = jnp.linalg.solve(P_pred_next.T, (P_k_pre @ AR.T).T).T
+            G_k = get_smoothing_gain(P_pred_next, P_k_pre @ AR.T)
             m_hat_k = m_k_pre + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k_pre + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
 
         def smooth_end():
             """RTS smooth an exposure-end state"""
-            G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T
+            G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)
             m_hat_k = m_k + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
