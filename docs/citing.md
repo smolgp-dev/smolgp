@@ -19,22 +19,24 @@ If you use `smolgp` in your research, please cite [Rubenzahl et al. 2026](https:
 }
 ```
 
-If in particular you are using `smolgp` to jointly model multiple datasets with exposure-informed GPs, please also cite [Luhn et al. 2026](https://ui.adsabs.harvard.edu/abs/2026arXiv260102462L/exportcitation):
+If in particular you are using `smolgp` to jointly model multiple datasets with exposure-informed GPs, please also cite [Luhn et al. 2026](https://doi.org/10.3847/1538-3881/ae5d38):
 ```
-@ARTICLE{2026arXiv260102462L,
+@ARTICLE{2026AJ....171..342L,
        author = {{Luhn}, Jacob K. and {Rubenzahl}, Ryan A. and {Halverson}, Samuel and {Zhao}, Lily L.},
         title = "{Exposure-averaged Gaussian Processes for Combining Overlapping Datasets}",
-      journal = {arXiv e-prints},
-     keywords = {Instrumentation and Methods for Astrophysics, Earth and Planetary Astrophysics, Solar and Stellar Astrophysics},
+      journal = {\aj},
+     keywords = {Gaussian Processes regression, Radial velocity, 1930, 1332, Instrumentation and Methods for Astrophysics, Earth and Planetary Astrophysics, Solar and Stellar Astrophysics},
          year = 2026,
-        month = jan,
-          eid = {arXiv:2601.02462},
-        pages = {arXiv:2601.02462},
-          doi = {10.48550/arXiv.2601.02462},
+        month = jun,
+       volume = {171},
+       number = {6},
+          eid = {342},
+        pages = {342},
+          doi = {10.3847/1538-3881/ae5d38},
 archivePrefix = {arXiv},
        eprint = {2601.02462},
  primaryClass = {astro-ph.IM},
-       adsurl = {https://ui.adsabs.harvard.edu/abs/2026arXiv260102462L},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2026AJ....171..342L},
       adsnote = {Provided by the SAO/NASA Astrophysics Data System}
 }
 ```
