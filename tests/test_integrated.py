@@ -3,15 +3,15 @@ import warnings
 import jax
 import jax.numpy as jnp
 import tinygp
-import smolgp
 
-from tests.utils import generate_integrated_data
+import smolgp
 from tests.test_kernels import (
+    condition,
     kernel_function,
     likelihood,
-    condition,
     predict,
 )
+from tests.utils import generate_integrated_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -137,7 +137,9 @@ def test_instid_validation():
     }
     for name, badX in bad_cases.items():
         try:
-            smolgp.GaussianProcess(kernel=smolgp.kernels.IntegratedExp(scale=1.0), X=badX)
+            smolgp.GaussianProcess(
+                kernel=smolgp.kernels.IntegratedExp(scale=1.0), X=badX
+            )
             raise AssertionError(f"Expected ValueError for {name}, but none was raised")
         except ValueError:
             print(f"    ...instid validation: correctly rejected {name}")
@@ -183,13 +185,25 @@ def _tied_exposure_data(tie):
     # a realistic multi-exposure dataset to fit.
     if tie == "start-start":
         # tmid=11, texp=4 -> start = 11-2 = 9 (ties with instrument 0's start)
-        tB, texpB, tied_t = jnp.array([-15.0, 11.0, 25.0]), jnp.array([2.0, 4.0, 2.0]), 9.0
+        tB, texpB, tied_t = (
+            jnp.array([-15.0, 11.0, 25.0]),
+            jnp.array([2.0, 4.0, 2.0]),
+            9.0,
+        )
     elif tie == "end-end":
         # tmid=9, texp=4 -> end = 9+2 = 11 (ties with instrument 0's end)
-        tB, texpB, tied_t = jnp.array([-15.0, 9.0, 25.0]), jnp.array([2.0, 4.0, 2.0]), 11.0
+        tB, texpB, tied_t = (
+            jnp.array([-15.0, 9.0, 25.0]),
+            jnp.array([2.0, 4.0, 2.0]),
+            11.0,
+        )
     elif tie == "end-start":
         # tmid=13, texp=4 -> start = 13-2 = 11 (ties with instrument 0's end)
-        tB, texpB, tied_t = jnp.array([-15.0, 13.0, 25.0]), jnp.array([2.0, 4.0, 2.0]), 11.0
+        tB, texpB, tied_t = (
+            jnp.array([-15.0, 13.0, 25.0]),
+            jnp.array([2.0, 4.0, 2.0]),
+            11.0,
+        )
     else:
         raise ValueError(tie)
 
@@ -209,7 +223,9 @@ def _run_tie_scenario(tie, solver=None):
     t, texp, instid, tied_t = _tied_exposure_data(tie)
     y = jnp.sin(0.1 * t)
 
-    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
+    kernel = smolgp.kernels.IntegratedSHO(
+        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
+    )
     kwargs = {} if solver is None else {"solver": solver}
     gp = smolgp.GaussianProcess(
         kernel=kernel, X=(t, texp, instid), noise=jnp.full(t.shape, 0.1**2), **kwargs
@@ -225,7 +241,9 @@ def _run_tie_scenario(tie, solver=None):
     X_test = (jnp.array([tied_t]), jnp.array([0.0]), jnp.array([0], dtype=int))
     mu_test, var_test = condgp.predict(X_test, return_var=True)
     assert jnp.all(jnp.isfinite(mu_test)), f"[{tie}] predict mean at tie is NaN/Inf"
-    assert jnp.all(jnp.isfinite(var_test)), f"[{tie}] predict variance at tie is NaN/Inf"
+    assert jnp.all(jnp.isfinite(var_test)), (
+        f"[{tie}] predict variance at tie is NaN/Inf"
+    )
 
     print(f"    ...tie='{tie}' ({type(gp.solver).__name__}): finite throughout")
 
@@ -270,11 +288,15 @@ def test_smoothing_gain_singular_input():
     G_lstsq, *_ = jnp.linalg.lstsq(P_pred_next.T, numerator.T)
     G_lstsq = G_lstsq.T
 
-    assert jnp.all(jnp.isfinite(G)), "get_smoothing_gain produced NaN/Inf on a singular input"
+    assert jnp.all(jnp.isfinite(G)), (
+        "get_smoothing_gain produced NaN/Inf on a singular input"
+    )
     assert jnp.allclose(G, G_lstsq, atol=1e-10), (
         f"get_smoothing_gain did not fall back to the lstsq solution:\n{G}\nvs\n{G_lstsq}"
     )
-    print("    ...get_smoothing_gain: correctly falls back to lstsq on a singular P_pred_next")
+    print(
+        "    ...get_smoothing_gain: correctly falls back to lstsq on a singular P_pred_next"
+    )
 
 
 def _generic_tie_dataset(Ninst, tie_type, key):
@@ -336,10 +358,18 @@ def _generic_tie_dataset(Ninst, tie_type, key):
     yerr = 0.05
     y = y_true + yerr * jax.random.normal(jax.random.split(key)[1], shape=y_true.shape)
 
-    return dict(
-        t=t, texp=texp, instid=instid, num_insts=Ninst, y=y, yerr=yerr,
-        S=S, w=w, Q=Q, sigma=sigma,
-    )
+    return {
+        "t": t,
+        "texp": texp,
+        "instid": instid,
+        "num_insts": Ninst,
+        "y": y,
+        "yerr": yerr,
+        "S": S,
+        "w": w,
+        "Q": Q,
+        "sigma": sigma,
+    }
 
 
 def _assert_smol_matches_tiny(Ninst, tie_type, key, tol=1e-8):
@@ -357,11 +387,17 @@ def _assert_smol_matches_tiny(Ninst, tie_type, key, tol=1e-8):
     S, w, Q, sigma = d["S"], d["w"], d["Q"], d["sigma"]
     X_train = (t, texp, instid)
 
-    kernel_smol = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
+    kernel_smol = smolgp.kernels.IntegratedSHO(
+        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
+    )
     kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
-    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X_train, noise=jnp.full(t.shape, yerr**2))
-    gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2))
+    gp_smol = smolgp.GaussianProcess(
+        kernel=kernel_smol, X=X_train, noise=jnp.full(t.shape, yerr**2)
+    )
+    gp_tiny = tinygp.GaussianProcess(
+        kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2)
+    )
 
     # tinygp adds a machine-epsilon jitter to variances that smolgp doesn't
     offset = jnp.sqrt(jnp.finfo(jnp.array([0.0])).eps)
@@ -414,8 +450,10 @@ def test_smol_matches_tiny_all_tie_types():
     """
     key = jax.random.PRNGKey(42)
     for Ninst in (1, 2, 3):
-        tie_types = ("endstart", "startend") if Ninst == 1 else (
-            "starts", "ends", "endstart", "startend"
+        tie_types = (
+            ("endstart", "startend")
+            if Ninst == 1
+            else ("starts", "ends", "endstart", "startend")
         )
         for tie_type in tie_types:
             key, subkey = jax.random.split(key)

@@ -1,15 +1,15 @@
 import jax
 import jax.numpy as jnp
 import tinygp
-import smolgp
 
-from tests.utils import generate_data
+import smolgp
 from tests.test_kernels import (
+    condition,
     kernel_function,
     likelihood,
-    condition,
     predict,
 )
+from tests.utils import generate_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -101,8 +101,12 @@ def test_instantaneous_tied_timestamps():
 
         kernel_smol = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
 
-        gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=t_tied, noise=yerr_train**2)
-        gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=t_tied, diag=yerr_train**2)
+        gp_smol = smolgp.GaussianProcess(
+            kernel=kernel_smol, X=t_tied, noise=yerr_train**2
+        )
+        gp_tiny = tinygp.GaussianProcess(
+            kernel=kernel_tiny, X=t_tied, diag=yerr_train**2
+        )
 
         condition(gp_smol, gp_tiny, y_tied, tol=1e-9, atol=1e-12)
         predict(gp_smol, gp_tiny, y_tied, tol=1e-9, atol=1e-12)
