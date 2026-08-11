@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import tinygp
+
 import smolgp
 from tests.utils import allclose, generate_data
 
@@ -36,8 +37,8 @@ def condition(gp_smol, gp_tiny, y_train, tol=1e-12, atol=1e-12, test_all_cases=F
     """
     Check the conditioned means/vars are the same
     """
-    llh_smol, condGP_smol = gp_smol.condition(y_train)
-    llh_tiny, condGP_tiny = gp_tiny.condition(y_train, gp_tiny.X)
+    _llh_smol, condGP_smol = gp_smol.condition(y_train)
+    _llh_tiny, condGP_tiny = gp_tiny.condition(y_train, gp_tiny.X)
     mu_res = condGP_tiny.loc - condGP_smol.loc
     var_res = (condGP_tiny.variance - offset) - condGP_smol.variance
     allclose("conditioned means", mu_res, tol=tol, atol=atol)
@@ -161,8 +162,7 @@ def test_kernels():
 
     ################ SHO ################
     quality = {"underdamped": 5.3, "critical": 0.5, "overdamped": 0.1}
-    for shotype in quality:
-        q = quality[shotype]
+    for shotype, q in quality.items():
         ksmol = smolgp.kernels.SHO(omega, q, sigma)
         ktiny = tinygp.kernels.quasisep.SHO(omega, q, sigma)
         kernels[f"SHO_{shotype}"] = [ksmol, ktiny]
@@ -177,8 +177,7 @@ def test_kernels():
     kernels["ExpSineSquared"] = [ksmol, ktiny]
 
     ## Test them
-    for name in kernels:
-        ksmol, ktiny = kernels[name]
+    for name, (ksmol, ktiny) in kernels.items():
         print(f"Testing {name}...")
         kernel(ksmol, ktiny, test_all_cases=name == "Exp")
         print()

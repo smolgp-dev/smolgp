@@ -20,8 +20,7 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import expm
-from jax.scipy.special import gammaln, factorial
-
+from jax.scipy.special import factorial, gammaln
 from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
 from tinygp.solvers.quasisep.block import Block
@@ -1365,13 +1364,15 @@ class Matern(StateSpaceModel):
         self,
         nu: JAXArray | float,
         scale: JAXArray | float,
-        sigma: JAXArray | float = jnp.ones(()),
+        sigma: JAXArray | float | None = None,
         name: str = "Matern",
         **kwargs,
     ):
         assert jnp.isclose(nu % 1, 0.5), (
             "nu must be a half-integer (e.g., 1/2, 3/2, 5/2, etc.)"
         )
+        if sigma is None:
+            sigma = jnp.ones(())
         self.nu = nu
         self.scale = scale
         self.sigma = sigma

@@ -1,14 +1,14 @@
 import jax
 import jax.numpy as jnp
 import tinygp
-import smolgp
 
-from tests.utils import generate_data, generate_integrated_data
+import smolgp
 from tests.test_kernels import (
-    likelihood,
     condition,
+    likelihood,
     predict,
 )
+from tests.utils import generate_data, generate_integrated_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)

@@ -158,7 +158,7 @@ def test_num_insts_preserved_on_subset_predict():
     assert condgp.kernel.num_insts == 3
 
     X_test = _make_instid_data([0, 0, 0])  # only instrument 0
-    mu = condgp.predict(X_test)
+    mu = condgp.predict(X_test, y=y)
 
     assert condgp.kernel.num_insts == 3
     assert condgp.solver.kernel.num_insts == 3

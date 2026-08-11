@@ -1,16 +1,17 @@
 import jax
 import jax.numpy as jnp
 import tinygp
+
 import smolgp
 from smolgp.kernels.base import extract_leaf_kernels
-
-from tests.utils import generate_data
-from tests.test_kernels import allclose, offset
 from tests.test_kernels import (
-    likelihood,
+    allclose,
     condition,
+    likelihood,
+    offset,
     predict,
 )
+from tests.utils import generate_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)

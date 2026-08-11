@@ -1,7 +1,8 @@
 import jax
 import jax.numpy as jnp
-import smolgp
 from jax.scipy.linalg import expm
+
+import smolgp
 from tests.utils import allclose
 
 key = jax.random.PRNGKey(0)
