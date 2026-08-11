@@ -1,29 +1,28 @@
 from __future__ import annotations
+
 import warnings
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from functools import partial
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     NamedTuple,
 )
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.kernels import StateSpaceModel, Sum, Product, Wrapper
-from smolgp.kernels.base import extract_leaf_kernels, extract_all_components
+from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
+from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
-
-from smolgp.solvers import StateSpaceSolver
-from smolgp.solvers import ParallelStateSpaceSolver
-from smolgp.solvers.integrated import IntegratedStateSpaceSolver
-from smolgp.solvers.integrated import ParallelIntegratedStateSpaceSolver
+from smolgp.solvers import ParallelStateSpaceSolver, StateSpaceSolver
+from smolgp.solvers.integrated import (
+    IntegratedStateSpaceSolver,
+    ParallelIntegratedStateSpaceSolver,
+)
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
@@ -118,6 +117,7 @@ class ConditionedStates(eqx.Module):
     An object to hold the conditioned means and variances
 
     X: len(N) data coordinates
+    y: len(N) observed data this was conditioned on
     t_states: len(K) time coordinates of all states
     instid  : len(N) instrument ID for each measurement
     obsid   : len(K) observation IDs corresponding to the measurement at each state
@@ -128,6 +128,7 @@ class ConditionedStates(eqx.Module):
     """
 
     X: JAXArray
+    y: JAXArray
     t_states: JAXArray
     instid: JAXArray
     obsid: JAXArray
@@ -142,6 +143,7 @@ class ConditionedStates(eqx.Module):
     def __init__(
         self,
         X,
+        y: JAXArray,
         t_states: JAXArray,
         instid: JAXArray,
         obsid: JAXArray,
@@ -154,6 +156,7 @@ class ConditionedStates(eqx.Module):
         P_smooth: JAXArray,
     ):
         self.X = X
+        self.y = y
         self.t_states = t_states
         self.instid = instid
         self.obsid = obsid
@@ -369,8 +372,8 @@ class GaussianProcess(eqx.Module):
         # Check if the kernel contains any integrated components
         # (fully unwraps Sum/Product/Wrapper so e.g. 2.0 * IntegratedExp(...) is detected)
         kernels = extract_all_components(self.kernel)
-        is_integrated = any([isinstance(k, IntegratedStateSpaceModel) for k in kernels])
-        is_instantaneous = all([isinstance(k, StateSpaceModel) for k in kernels])
+        is_integrated = any(isinstance(k, IntegratedStateSpaceModel) for k in kernels)
+        is_instantaneous = all(isinstance(k, StateSpaceModel) for k in kernels)
 
         # If using an integrated solver, ensure X has both coords and bin sizes
         if is_integrated:
@@ -602,6 +605,7 @@ class GaussianProcess(eqx.Module):
         # points with subsequent calls to self.predict
         states = ConditionedStates(
             self.X,
+            y,
             t_states,
             instid,
             obsid,
@@ -673,10 +677,11 @@ class GaussianProcess(eqx.Module):
                 with the ``X`` data provided when instantiating this object. If
                 it is not provided, ``X`` will be used by default, so the
                 predictions will be made at the data coordinates.
-            y (JAXArray): The observed data. Only needs to be given if the GP
-                has not yet been conditioned. This should have the shape
-                ``(N_data,)``, where ``N_data`` was the zeroth axis of the ``X``
-                data provided when instantiating this object.
+            y (JAXArray, optional): The observed data. Only needs to be given
+                if the GP has not yet been conditioned. Once conditioned,
+                the data, if needed, is recalled automatically from ``self.states.y``.
+                This should have the shape ``(N_data,)``, where ``N_data`` was the
+                zeroth axis of the ``X`` data provided when instantiating this object.
             include_mean (bool, optional): If ``True`` (default), the predicted
                 values will include the mean function evaluated at ``X_test``.
             return_var (bool, optional): If ``True`` (default), the variance of the
@@ -708,7 +713,7 @@ class GaussianProcess(eqx.Module):
             assert y is not None, (
                 "The GP has not been conditioned yet, and no data array `y` was given."
             )
-            llh, condGP = self.condition(y)
+            _llh, condGP = self.condition(y)
             return condGP.predict(
                 X_test,
                 return_full_state=return_full_state,
@@ -718,6 +723,9 @@ class GaussianProcess(eqx.Module):
                 observation_model=observation_model,
             )
         else:
+            if y is None:
+                # Recall the data this GP was conditioned on
+                y = self.states.y
             if X_test is None:
                 # If no X_test given, predict at the data points
                 if return_full_state:
@@ -741,7 +749,15 @@ class GaussianProcess(eqx.Module):
                     if observation_model is None
                     else observation_model
                 )
-                mean, variance = self.solver.predict(X_test, self.states())
+                if isinstance(
+                    self.solver,
+                    (IntegratedStateSpaceSolver, ParallelIntegratedStateSpaceSolver),
+                ):
+                    # Pass `y` along to predict for integrated solvers.
+                    # Needed if X_test includes predictions with exposure lengths.
+                    mean, variance = self.solver.predict(X_test, self.states(), y=y)
+                else:
+                    mean, variance = self.solver.predict(X_test, self.states())
                 if return_full_state:
                     mu = mean
                     var = variance

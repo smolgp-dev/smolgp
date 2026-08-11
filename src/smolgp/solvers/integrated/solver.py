@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-
 from tinygp.helpers import JAXArray
 from tinygp.solvers.quasisep.solver import QuasisepSolver
-from smolgp.kernels.base import StateSpaceModel
+
 from smolgp.helpers import get_smoothing_gain
+from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.integrated.kalman import IntegratedKalmanFilter
+from smolgp.solvers.integrated.predict_exposure import predict_exposure
 from smolgp.solvers.integrated.rts import IntegratedRTSSmoother
 
 
@@ -136,22 +137,31 @@ class IntegratedStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         )
+
         return self.state_coords, conditioned_states, v_S
 
     @jax.jit
-    def predict(self, X_test, conditioned_results) -> JAXArray:
+    def predict(self, X_test, conditioned_results, y=None) -> JAXArray:
         """
         Algorithm for making predictions at arbitrary coordinates X_test
 
         Args:
-            X_test              : The test coordinates.
+            X_test              : The test coordinates. If a tuple
+                                   ``(t, delta, instid)`` with any ``delta > 0``
+                                   *and* ``y`` is also given, those test points
+                                   are predicted as exposure-integrated
+                                   averages (see
+                                   :func:`~smolgp.solvers.integrated.predict_exposure.predict_exposure`)
+                                   rather than instantaneous values.
             conditioned_results : The output of self.condition()
+            y                   : The training data used to condition this
+                                   solver. Only needed for ``delta>0`` test points.
 
         Returns:
             pred_mean : Predicted means of the states at X_test
             pred_var  : Predicted variances of the states at X_test
 
-        There are three cases:
+        There are three cases for each test point:
             1. Retrodiction  : smoothing from the first data point
                                using the prior as the prediction
             2. Interpolation : filtering from most recent data point
@@ -166,10 +176,14 @@ class IntegratedStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         ) = conditioned_states
-        t_states, instid, obsid, stateid = state_coords
+        t_states, _instid, _obsid, _stateid = state_coords
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)
+        if isinstance(X_test, tuple):
+            _, delta_test, instid_test = X_test
+        else:
+            delta_test, instid_test = None, None
 
         # Array shapes
         # N = len(self.X)  # number of data points
@@ -261,14 +275,38 @@ class IntegratedStateSpaceSolver(eqx.Module):
             m_star, P_star = kalman(-1, ktest)
             return m_star, P_star
 
-        def predict_point(ktest):
+        def predict_instantaneous(ktest):
             """
             Switch between retrodiction, interpolation, and extrapolation
-            for a single test point ktest
+            for a single instantaneous test point ktest
             """
             return jax.lax.switch(
                 cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
             )
+
+        if delta_test is not None and y is not None:
+            # Exposure-integrated prediction requires a non-zero exposure time (delta),
+            # an instrument id (instid), and the training data (y).
+            # If any of these are missing, fall back to instantaneous prediction.
+            def predict_point(ktest):
+                return jax.lax.cond(
+                    delta_test[ktest] > 0,
+                    lambda kt: predict_exposure(
+                        self.kernel,
+                        self.X,
+                        y,
+                        self.noise,
+                        state_coords,
+                        conditioned_states,
+                        t_test[kt],
+                        delta_test[kt],
+                        instid_test[kt],
+                    ),
+                    predict_instantaneous,
+                    ktest,
+                )
+        else:
+            predict_point = predict_instantaneous
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
