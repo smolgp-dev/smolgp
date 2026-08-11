@@ -22,14 +22,14 @@ def ParallelIntegratedRTSSmoother(
         stateid: exposure start/end indicators
         instid: instrument IDs
         kalman_results: output from Kalman filter:
-            m_pred, P_pred, m_filter, P_filter
+            m_filter, P_filter, m_pred, P_pred
 
     Returns:
         E:
         g: smoothed means
         L: smoothed covariances
     """
-    m_pred, P_pred, m_filter, P_filter = kalman_results
+    m_filter, P_filter, m_pred, P_pred = kalman_results
     Phi_aug = kernel.transition_matrix
     Q_aug = kernel.process_noise
     RESET = kernel.reset_matrix
