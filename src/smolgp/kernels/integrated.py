@@ -23,22 +23,23 @@ pull requests <https://github.com/smolgp-dev/smolgp/issues>`_ as you find gaps.
 from __future__ import annotations
 
 __all__ = [
-    "IntegratedSHO",
+    "IntegratedCosine",
     "IntegratedExp",
     "IntegratedMatern32",
     "IntegratedMatern52",
-    "IntegratedCosine",
+    "IntegratedSHO",
 ]
+
+import dataclasses
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-
 from tinygp.helpers import JAXArray
 
 import smolgp.kernels
-from smolgp.kernels import StateSpaceModel
 from smolgp.helpers import Phibar_from_VanLoan
+from smolgp.kernels import StateSpaceModel
 
 
 class IntegratedStateSpaceModel(StateSpaceModel):
@@ -253,6 +254,146 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         diag = jnp.ones(self.dimension)
         diag = jax.lax.dynamic_update_slice(diag, jnp.array([0.0]), (self.d + instid,))
         return jnp.diag(diag)
+
+    def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        r"""
+        The exposure-integrated covariance function :math:`\mathrm{Cov}(y_1, y_2)`,
+        where :math:`y_i` is the instantaneous value of the base process at
+        :math:`t_i` if :math:`\delta_i = 0`, or its average over
+        :math:`[t_i - \delta_i/2,\ t_i + \delta_i/2]` if :math:`\delta_i > 0`.
+
+        Parameters
+        ----------
+        X1 : array-like or tuple of array-like
+            The first set of coordinates.
+        X2 : array-like or tuple of array-like
+            The second set of coordinates.
+
+        To include exposure times, pass a tuple for X1 and X2 like ``(t, delta)``
+        or ``(t, delta, instid)``. If ``delta`` is omitted, it defaults to 0.
+        If ``instid`` is omitted, it defaults to 0 (instid is unused here anyway).
+
+        The base class's :meth:`StateSpaceModel.evaluate` computes
+        :math:`H_2\, \mathbf{P}_\infty\, \Phi(X_1, X_2)^T H_1^T`, which if used for
+        exposure-integrated covariance would assume the *augmented* state (:math:`z`)
+        is stationary. To correct this, we must always treat :math:`z`'s distribution
+        with respect to its own reset point (exposure start). This method builds a
+        throwaway augmentation of just the base (non-integrated) state,
+        :math:`[x;\ \text{z}_1;\ \text{z}_2;\ \text{read}_1;\ \text{read}_2]`,
+        local to this single evaluation between :math:`X_1` and :math:`X_2`. Then,
+        - ``z_i`` accumulates :math:`\int x_0\, ds` over window :math:`i`,
+          reset to :math:`0` at :math:`a_i = t_i - \delta_i/2`
+        - ``read_i`` is a linear copy of whichever exposure-end readout
+          represents window :math:`i` (e.g. :math:`z_i/\delta_i` if
+          :math:`\delta_i>0`, or :math:`x_0` directly if :math:`\delta_i=0`,
+          exact details depend on the observation model).
+
+        The algorithm walks the base state forward through the chronologically
+        sorted events :math:`\{a_1, a_2, b_1, b_2\}`, where :math:`X_1 \in [a_1, b_1)`
+        and :math:`X_2 \in [a_2, b_2)` in the Kalman filter (without the innovation step),
+        starting from :math:`\mathbf{P}_\infty`. :math:`\mathrm{Cov}(y_1, y_2)` is exactly
+        the final  :math:`(\text{read}_1, \text{read}_2)` entry of the resulting covariance.
+
+        Returns
+        -------
+        cov : array-like
+            The exposure-integrated covariance between the two sets of coordinates.
+        """
+
+        def unpack(X):
+            if isinstance(X, (tuple, list)):
+                if len(X) == 3:
+                    t, delta, _instid = X
+                elif len(X) == 2:
+                    t, delta = X
+                else:
+                    raise ValueError(
+                        f"X must be a tuple of length 2 or 3, got {len(X)}"
+                    )
+            else:
+                t, delta = X, 0.0
+            return t, delta
+
+        t1, delta1 = unpack(X1)
+        t2, delta2 = unpack(X2)
+
+        d = self.d
+        kernel_ext = dataclasses.replace(self, num_insts=2)
+        n_base_probes = d + 2  # [x; z1; z2]
+        n = n_base_probes + 2  # + [read1; read2]
+        Z1, Z2, READ1, READ2 = d, d + 1, d + 2, d + 3
+
+        a1, b1 = t1 - delta1 / 2, t1 + delta1 / 2
+        a2, b2 = t2 - delta2 / 2, t2 + delta2 / 2
+
+        def make_H(delta, probe_idx):
+            H_integral = (
+                jnp.zeros(n).at[probe_idx].set(1.0 / jnp.where(delta > 0, delta, 1.0))
+            )
+            H_latent = jnp.zeros(n).at[0].set(1.0)
+            return jnp.where(delta > 0, H_integral, H_latent)
+
+        H1 = make_H(delta1, Z1)
+        H2 = make_H(delta2, Z2)
+
+        # Sorted events: 0=reset z1, 1=reset z2, 2=read read1, 3=read read2
+        times = jnp.array([a1, a2, b1, b2])
+        order = jnp.argsort(times)
+        times_sorted = times[order]
+        kinds_sorted = jnp.array([0, 1, 2, 3])[order]
+
+        Pinf_base = self.stationary_covariance()[:d, :d]
+        P0 = jnp.zeros((n, n)).at[:d, :d].set(Pinf_base)
+        m0 = jnp.zeros(n)
+
+        def step(carry, i):
+            m, P, t_ref = carry
+            t_i = times_sorted[i]
+            dt = t_i - t_ref
+
+            A = kernel_ext.transition_matrix(0, dt)
+            Q = kernel_ext.process_noise(0, dt)
+            A_full = jnp.eye(n).at[:n_base_probes, :n_base_probes].set(A)
+            Q_full = jnp.zeros((n, n)).at[:n_base_probes, :n_base_probes].set(Q)
+
+            m_pred = A_full @ m
+            P_pred = A_full @ P @ A_full.T + Q_full
+
+            def do_reset(idx):
+                def _op(_):
+                    R = jnp.eye(n).at[idx, idx].set(0.0)
+                    return R @ m_pred, R @ P_pred @ R.T
+
+                return _op
+
+            def do_read(idx, H):
+                def _op(_):
+                    F = jnp.eye(n).at[idx, :].set(H)
+                    return F @ m_pred, F @ P_pred @ F.T
+
+                return _op
+
+            m_new, P_new = jax.lax.switch(
+                kinds_sorted[i],
+                [
+                    do_reset(Z1),
+                    do_reset(Z2),
+                    do_read(READ1, H1),
+                    do_read(READ2, H2),
+                ],
+                None,
+            )
+            return (m_new, P_new, t_i), None
+
+        (_m_final, P_final, _t_final), _ = jax.lax.scan(
+            step, (m0, P0, times_sorted[0]), jnp.arange(4)
+        )
+
+        return P_final[READ1, READ2]
+
+    def evaluate_diag(self, X: JAXArray) -> JAXArray:
+        """The exposure-integrated variance :math:`\\mathrm{Cov}(y, y)` -- see :meth:`evaluate`."""
+        return self.evaluate(X, X)
 
 
 class IntegratedSHO(IntegratedStateSpaceModel):

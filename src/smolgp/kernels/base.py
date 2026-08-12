@@ -349,6 +349,23 @@ class Sum(StateSpaceModel):
         r""":math:`Q_c = \mathrm{BlockDiag}(Q_{c,1},\, Q_{c,2})`"""
         return Block(self.kernel1.noise(), self.kernel2.noise()).to_dense()
 
+    def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        r"""
+        :math:`k_{\mathrm{sum}}(X_1, X_2) = k_1(X_1, X_2) + k_2(X_1, X_2)`.
+
+        Delegates to each child's own :meth:`evaluate` rather than
+        evaluating the :class:`Sum`'s block-diagonal matrices directly.
+        Needed to handle mixtures of :class:`StateSpaceModel` and
+        :class:`IntegratedStateSpaceModel` kernels, which have different
+        :meth:`evaluate` implementations. The covariance of a sum of kernels
+        is the sum of the covariances of the individual kernels.
+        """
+        return self.kernel1.evaluate(X1, X2) + self.kernel2.evaluate(X1, X2)
+
+    def evaluate_diag(self, X: JAXArray) -> JAXArray:
+        r""":math:`\mathrm{Cov}(y, y) = \mathrm{Cov}(y_1, y_1) + \mathrm{Cov}(y_2, y_2)` -- see :meth:`evaluate`."""
+        return self.kernel1.evaluate_diag(X) + self.kernel2.evaluate_diag(X)
+
 
 class Product(StateSpaceModel):
     r"""The product of two :class:`StateSpaceModel` kernels.
@@ -447,9 +464,33 @@ class Product(StateSpaceModel):
         B = jnp.kron(B1, Pinf2) + jnp.kron(Pinf1, B2)
         return B
 
+    def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        r"""
+        :math:`k_{\mathrm{product}}(X_1, X_2) = k_1(X_1, X_2) \cdot k_2(X_1, X_2)`.
+
+        Delegates to each child's own :meth:`evaluate` rather than
+        evaluating the :class:`Sum`'s block-diagonal matrices directly.
+        Needed to handle mixtures of :class:`StateSpaceModel` and
+        :class:`IntegratedStateSpaceModel` kernels, which have different
+        :meth:`evaluate` implementations. The covariance of a product of
+        kernels is the product of the covariances of the individual kernels,
+        hence the covariance matrix is the elementwise product of the
+        individual covariance matrices.
+        """
+        return self.kernel1.evaluate(X1, X2) * self.kernel2.evaluate(X1, X2)
+
+    def evaluate_diag(self, X: JAXArray) -> JAXArray:
+        r""":math:`\mathrm{Cov}(y, y) = \mathrm{Cov}(y_1, y_1) \cdot \mathrm{Cov}(y_2, y_2)` -- see :meth:`evaluate`."""
+        return self.kernel1.evaluate_diag(X) * self.kernel2.evaluate_diag(X)
+
 
 class Wrapper(StateSpaceModel):
-    """A base class for wrapping kernels with some custom implementations"""
+    """A base class for wrapping kernels with some custom implementations.
+
+    Note if a Wrapper implementation overrides any of the methods in
+    :class:`StateSpaceModel`, it must ensure that the generic formulae
+    themselves are still valid.
+    """
 
     kernel: StateSpaceModel
 
@@ -507,6 +548,15 @@ class Scale(Wrapper):
     def noise(self) -> JAXArray:
         return self.scale * self.kernel.noise()
 
+    def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        r""":math:`k_{\mathrm{scale}}(X_1, X_2) = c \cdot k(X_1, X_2)` -- delegates
+        to the wrapped kernel's own :meth:`evaluate`, scaled linearly (matching
+        :meth:`stationary_covariance`'s linear scaling of :math:`\mathbf{P}_\infty`."""
+        return self.scale * self.kernel.evaluate(X1, X2)
+
+    def evaluate_diag(self, X: JAXArray) -> JAXArray:
+        return self.scale * self.kernel.evaluate_diag(X)
+
 
 ################ GP KERNEL DEFINITIONS ################
 ## TODO: tinygp base kernels not yet implemented
@@ -514,10 +564,7 @@ class Scale(Wrapper):
 # Polynomial
 # ExpSquared (RBF), will need approx. via Taylor expannsion
 #     see Hartikainen and Särkkä, 2010; Särkkä et al., 2013
-# ExpSineSquared (will need approx)
 # RationalQuadratic
-# Quasiperiodic (not explicitly in tinygp, but is: ExpSquared * ExpSineSquared
-##    some also define ExpSquared * ExpSineSquared * ExpCosineSquared for P/2 term
 ## RotationTerm (sum of SHO as in celerite)
 
 

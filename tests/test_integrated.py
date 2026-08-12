@@ -81,6 +81,68 @@ def test_integrated():
     # TODO: test predict with exposure times
 
 
+def test_integrated_evaluate():
+    """
+    kernel.evaluate(X1, X2) must match the dense implementation with tinygp
+
+    Ensures the algorithm implemented to solve (H2 @ Pinf @ Phi.T @ H1.T)
+    for the integral state (IntegratedStateSpaceModel.evaluate) is correct.
+    """
+    w0 = 2.0 * jnp.pi / 300
+    Q = 2.0
+    sigma = 1.0
+    S0 = sigma**2 / (w0 * Q)
+
+    kernel_smol = smolgp.kernels.IntegratedSHO(sigma=sigma, omega=w0, quality=Q)
+    kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S0, w=w0, Q=Q)
+
+    # Grid check: fixed (matching) exposure widths on both sides, varying separation.
+    dts = jnp.linspace(0, 1000, 50)
+    zeros = jnp.zeros_like(dts)
+    instids = jnp.zeros_like(dts, dtype=int)
+    for exptime in [0.0, 10.0, 30.0, 100.0, 300.0, 1000.0]:
+        texp = jnp.full_like(dts, exptime)
+        X0 = (zeros, texp, instids)
+        X1 = (dts, texp, instids)
+        cov_smol = kernel_smol(X0, X1)[0, :]
+        cov_tiny = kernel_tiny(X0, X1)[0, :]
+        diff = float(jnp.max(jnp.abs(cov_smol - cov_tiny)))
+        assert diff < 1e-9, f"exptime={exptime}: max|diff|={diff:.3e}"
+    print(
+        "    ...evaluate() grid (matching widths, varying separation): matches dense kernel"
+    )
+
+    # Pairwise edge cases: asymmetric widths, mixed zero/nonzero, overlap,
+    # nesting, reversed order, exact ties, and self-variance (X1==X2).
+    cases = {
+        "asymmetric widths, overlapping": (0.0, 50.0, 20.0, 30.0),
+        "asymmetric widths, non-overlapping": (0.0, 20.0, 100.0, 80.0),
+        "mixed: window1 point, window2 wide": (0.0, 0.0, 50.0, 200.0),
+        "mixed: window1 wide, window2 point": (0.0, 200.0, 300.0, 0.0),
+        "one nested inside other": (0.0, 100.0, 10.0, 20.0),
+        "reverse order (t2 < t1)": (100.0, 40.0, 20.0, 60.0),
+        "identical windows (X1==X2)": (50.0, 30.0, 50.0, 30.0),
+        "exact tie: b1==a2 (touching)": (0.0, 40.0, 40.0, 40.0),
+    }
+    for label, (t1, d1, t2, d2) in cases.items():
+        X1 = (jnp.array([t1]), jnp.array([d1]), jnp.array([0]))
+        X2 = (jnp.array([t2]), jnp.array([d2]), jnp.array([0]))
+        cov_smol = kernel_smol(X1, X2)[0, 0]
+        cov_tiny = kernel_tiny(X1, X2)[0, 0]
+        diff = float(jnp.abs(cov_smol - cov_tiny))
+        assert diff < 1e-9, f"[{label}] max|diff|={diff:.3e}"
+    print("    ...evaluate() pairwise edge cases: matches dense kernel")
+
+    # evaluate_diag (the variance, X1==X2) must also match.
+    for exptime in [0.0, 10.0, 100.0, 1000.0]:
+        X = (jnp.array([0.0]), jnp.array([exptime]), jnp.array([0]))
+        var_smol = kernel_smol(X)[0]
+        var_tiny = kernel_tiny(X)[0]
+        diff = float(jnp.abs(var_smol - var_tiny))
+        assert diff < 1e-9, f"[variance, exptime={exptime}] diff={diff:.3e}"
+    print("    ...evaluate_diag(): matches dense kernel")
+
+
 def _make_instid_data(insts):
     """A minimal X = (t, texp, instid) tuple with a given instid array."""
     t = jnp.arange(len(insts), dtype=float)
@@ -462,6 +524,7 @@ def test_smol_matches_tiny_all_tie_types():
 
 if __name__ == "__main__":
     test_integrated()
+    test_integrated_evaluate()
     test_num_insts_mismatch_reinit()
     test_num_insts_wrapped_kernel()
     test_instid_validation()
