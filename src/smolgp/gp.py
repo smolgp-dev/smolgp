@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable, Sequence
 from functools import partial
@@ -15,6 +16,11 @@ import jax.numpy as jnp
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
+from smolgp.helpers import (
+    assign_min_instids,
+    check_no_overlap_within_instid,
+    robust_sqrt,
+)
 from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
 from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
@@ -23,6 +29,16 @@ from smolgp.solvers.integrated import (
     IntegratedStateSpaceSolver,
     ParallelIntegratedStateSpaceSolver,
 )
+from smolgp.solvers.sample import (
+    data_order_indices,
+    merge_exposure_test_coords,
+    merge_test_coords,
+    project_exposure_test_points,
+    project_trajectory_at_data,
+    project_trajectory_at_positions,
+    sample_prior_trajectory,
+)
+from smolgp.solvers.state_coords import StateCoords
 
 if TYPE_CHECKING:
     from tinygp.numpyro_support import TinyDistribution
@@ -169,7 +185,12 @@ class ConditionedStates(eqx.Module):
         self.smoothed_cov = P_smooth
 
     def __call__(self):
-        state_coords = (self.t_states, self.instid, self.obsid, self.stateid)
+        state_coords = StateCoords(
+            t_states=self.t_states,
+            instid=self.instid,
+            obsid=self.obsid,
+            stateid=self.stateid,
+        )
         packaged_results = (
             (self.predicted_mean, self.predicted_cov),
             (self.filtered_mean, self.filtered_cov),
@@ -326,10 +347,14 @@ class GaussianProcess(eqx.Module):
         ``(N, D, D)``, where ``N`` is the number of data points and ``D`` is
         the observation dimension (usually 1). Each slice ``noise[k]`` is the
         :math:`D \times D` noise covariance for the ``k``-th observation.
-        A 1-D array of shape ``(N,)`` is interpreted as scalar per-observation
-        variances. Defaults to :math:`\sqrt{\varepsilon_{\mathrm{machine}}}
-        \cdot I` for all observations.
-    :type noise: JAXArray, optional
+        Two shorthands are accepted and broadcast up to ``(N, 1, 1)``: a 1-D
+        array of shape ``(N,)`` is interpreted as scalar per-observation
+        variances, and a scalar as a single homoscedastic variance shared by
+        every observation (i.e. ``noise=0.01`` is equivalent to
+        ``noise=jnp.full(N, 0.01)``). Defaults to
+        :math:`\sqrt{\varepsilon_{\mathrm{machine}}} \cdot I` for all
+        observations.
+    :type noise: JAXArray | float, optional
     :param mean: A callable or constant mean function evaluated as
         ``mean(X)``.
     :type mean: Callable, optional
@@ -353,7 +378,7 @@ class GaussianProcess(eqx.Module):
         kernel: kernels.Kernel,
         X: JAXArray,
         *,
-        noise: JAXArray | None = None,
+        noise: JAXArray | float | None = None,
         mean: means.MeanBase | Callable[[JAXArray], JAXArray] | JAXArray | None = None,
         solver: Any | None = None,
         mean_value: JAXArray | None = None,
@@ -444,10 +469,14 @@ class GaussianProcess(eqx.Module):
             )
 
         # Observation noise: shape (N, D, D)
-        # A 1-D array of shape (N,) is treated as scalar per-obs variance -> (N, 1, 1)
+        # A 0-D scalar is treated as one homoscedastic variance shared by every
+        # observation, and a 1-D array of shape (N,) as per-observation scalar
+        # variances; both are broadcast up to (N, 1, 1).
         if noise is None:
             jitter = _default_jitter(self.mean)
             noise = jnp.full((self.num_data, 1, 1), jitter, dtype=self.dtype)
+        elif jnp.ndim(noise) == 0:
+            noise = jnp.full((self.num_data, 1, 1), noise, dtype=self.dtype)
         elif jnp.ndim(noise) == 1:
             noise = jnp.asarray(noise)[:, None, None]
         self.noise = noise
@@ -527,6 +556,25 @@ class GaussianProcess(eqx.Module):
         _, _, _, _, v, S = self.solver.Kalman(y, return_v_S=True)
         return self._compute_log_prob(v, S)
 
+    @property
+    def state_coords(self) -> StateCoords:
+        """The :class:`~smolgp.solvers.state_coords.StateCoords` for this GP's
+        states, shared by :meth:`condition` and :meth:`sample`.
+
+        If already conditioned, rebuilds it from the cached ``self.states``
+        fields. Otherwise reuses ``self.solver.state_coords``, which every
+        solver builds once in its own ``__init__`` (the instantaneous solvers
+        via :meth:`StateCoords.instantaneous`).
+        """
+        if self.states is not None:
+            return StateCoords(
+                t_states=self.states.t_states,
+                instid=self.states.instid,
+                obsid=self.states.obsid,
+                stateid=self.states.stateid,
+            )
+        return self.solver.state_coords
+
     def condition(
         self,
         y: JAXArray,
@@ -577,28 +625,20 @@ class GaussianProcess(eqx.Module):
                     "and all but the leading dimension must have matching sizes"
                 )
 
-        ## Condition on the data and return likelihood ingredients
+        # Condition on the data and return likelihood ingredients
         conditioned_results = self.solver.condition(y, return_v_S=True)
 
-        ## unpack into prediction at the states
-        state_coords, conditioned_states, (v, S) = conditioned_results
+        # unpack conditioned_results, but discard the solver's own
+        # state_coords in favor of self.state_coords, which is the
+        # same StateCoords but also handles the already-conditioned case)
+        _, conditioned_states, (v, S) = conditioned_results
         (
             (m_predicted, P_predicted),
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         ) = conditioned_states
 
-        if isinstance(
-            self.solver,
-            (IntegratedStateSpaceSolver, ParallelIntegratedStateSpaceSolver),
-        ):
-            t_states, instid, obsid, stateid = state_coords
-        else:
-            # If not integrated, t_states = X and id arrays are 'defaulted'
-            t_states = self.kernel.coord_to_sortable(state_coords)
-            instid = jnp.zeros_like(t_states, dtype=int)
-            obsid = jnp.arange(len(t_states), dtype=int)
-            stateid = jnp.ones_like(t_states, dtype=int)  # all "have data"
+        sc = self.state_coords
 
         # Save the conditioned state values to a new GP object
         # so we can use them to make quick predictions at test
@@ -606,10 +646,10 @@ class GaussianProcess(eqx.Module):
         states = ConditionedStates(
             self.X,
             y,
-            t_states,
-            instid,
-            obsid,
-            stateid,
+            sc.t_states,
+            sc.instid,
+            sc.obsid,
+            sc.stateid,
             m_predicted,
             P_predicted,
             m_filtered,
@@ -634,8 +674,17 @@ class GaussianProcess(eqx.Module):
             )
 
         if X_test is not None:
-            # If X_test was given, also predit at those points
-            mu, var = self.solver.predict(X_test, conditioned_results)
+            # If X_test was given, also predict at those points.
+            if isinstance(
+                self.solver,
+                (IntegratedStateSpaceSolver, ParallelIntegratedStateSpaceSolver),
+            ):
+                mean, variance = self.solver.predict(X_test, states(), y=y)
+            else:
+                mean, variance = self.solver.predict(X_test, states())
+            H = jax.vmap(observation_model)(X_test)
+            mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
+            var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(H, variance).squeeze()
         else:
             # Otherwise, project the conditioned states
             # (at the data points) to observation space
@@ -782,25 +831,83 @@ class GaussianProcess(eqx.Module):
         #     return mu, var
         return mu
 
-    ## TODO: how to define the sample function?
     def sample(
         self,
         key: jax.random.KeyArray,
         shape: Sequence[int] | None = None,
+        X_test: JAXArray | None = None,
     ) -> JAXArray:
-        """Generate samples from the prior process
+        """Generate samples from the process.
+
+        If this ``GaussianProcess`` has not been conditioned, samples are drawn
+        from the prior. If it was returned by :meth:`condition`, samples are drawn
+        from the posterior using Matheron's rule
+        (see :meth:`~smolgp.gp.GaussianProcess._sample` and the references therein).
+
+        By default (``X_test=None``), samples are drawn at the training coordinates.
+        Passing ``X_test`` draws samples at any, possibly out-of-sample, coordinates.
+        If the GP is conditioned on exposure-integrated data (``delta>0``), then
+        ``X_test`` needs to be either ``(t, delta)`` or ``(t, delta, instid)``;
+        ``instid`` is only needed if the kernel is instrument-specific. If the
+        kernel is instrument-agnostic, then ``instid`` can be omitted and will be
+        auto-assigned internally for book-keeping purposes.
 
         Args:
-            key: A ``jax`` random number key array. shape (tuple, optional): The
-            number and shape of samples to
-                generate.
+            key: A ``JAX`` random number key array.
+            shape (tuple, optional): The number/shape of independent *draws*
+                to generate. Each single draw is a complete joint sample across
+                every coordinate in ``X_test`` (or the training coordinates),
+                with the correct correlations between them. Defaults to a single draw.
+            X_test (JAXArray, optional): New coordinates to sample at,
+                instead of the training coordinates. For integrated samples with an
+                integrated kernel, this should be either ``(t, delta)`` or ``(t, delta, instid)``
+                where ``t`` is the array of exposure midpoints, ``delta`` is the array of
+                exposure durations, and ``instid`` is the array of instrument IDs for each exposure.
 
         Returns:
-            The sampled realizations from the process with shape ``(N_data,) +
-            shape`` where ``N_data`` is the zeroth dimension of the ``X``
-            coordinates provided when instantiating this process.
+            The sampled realizations from the process with shape ``(N_samples,) +
+            shape`` (or plain ``(N_samples,)`` if ``shape`` is not given) where
+            ``N_samples`` is the zeroth dimension of ``X_test`` or of self.X
+            if ``X_test`` is not given). E.g. ``shape=(M,)`` returns ``M``
+            independent draws with shape ``(N_data, M)``.
         """
-        return self._sample(key, shape)
+        # An exposure-integrated test point's instid plays two distinct roles:
+        #
+        #   1. the "probe group" it accumulates into during the forward
+        #      simulation (bookkeeping only -- windows sharing a group must
+        #      not overlap, or one window's reset clobbers the other's
+        #      in-progress integral), and
+        #   2. the *real instrument* whose observation model projects the
+        #      result, which must be a genuine instrument of this kernel.
+        #
+        # They coincide only when every id is a valid instrument of the
+        # kernel, so they are tracked separately: X_test carries the group
+        # labels, and instid_proj the real instrument per test point.
+        #
+        # num_test_insts must also be concrete here (outside the jit), since
+        # it determines kernel_ext's dimension inside _sample.
+        num_test_insts = 0
+        instid_proj = None
+        if isinstance(X_test, tuple) and len(X_test) > 1:
+            t_test, delta_test = X_test[0], X_test[1]
+            if len(X_test) == 2:
+                # No instid given: auto-assign the minimum number of
+                # non-overlapping groups. These are pure bookkeeping labels
+                # and may exceed this kernel's real instrument count, so the
+                # projection falls back to instrument 0 -- correct for any
+                # kernel whose observation model does not vary by instrument
+                # (all built-ins). Pass an explicit instid otherwise.
+                instid_test, num_test_insts = assign_min_instids(t_test, delta_test)
+                instid_proj = jnp.zeros_like(instid_test)
+                X_test = (t_test, delta_test, instid_test)
+            else:
+                # Explicit instid: taken as the real instrument, so it both
+                # groups the windows and selects the observation model.
+                instid_test = jnp.asarray(X_test[2])
+                check_no_overlap_within_instid(t_test, delta_test, instid_test)
+                instid_proj = instid_test
+                num_test_insts = int(jnp.max(instid_test)) + 1
+        return self._sample(key, shape, X_test, num_test_insts, instid_proj)
 
     def numpyro_dist(self, **kwargs: Any) -> TinyDistribution:
         """Get the numpyro MultivariateNormal distribution for this process"""
@@ -808,25 +915,350 @@ class GaussianProcess(eqx.Module):
 
         return TinyDistribution(self, **kwargs)
 
-    @partial(jax.jit, static_argnums=(2,))
+    @partial(jax.jit, static_argnums=(2, 4))
     def _sample(
         self,
         key: jax.random.KeyArray,
         shape: Sequence[int] | None,
+        X_test: JAXArray | None,
+        num_test_insts: int,
+        instid_proj: JAXArray | None = None,
     ) -> JAXArray:
-        raise NotImplementedError
-        ## TODO: implement sampling for state space model
-        ## fast method to try: https://www.stats.ox.ac.uk/~doucet/doucet_simulationconditionalgaussian.pdf
-        ##
-        ## or alternatively call the tinygp version? copied below:
-        # if shape is None:
-        #     shape = (self.num_data,)
-        # else:
-        #     shape = (self.num_data,) + tuple(shape)
-        # normal_samples = jax.random.normal(key, shape=shape, dtype=self.dtype)
-        # return self.mean + jnp.moveaxis(
-        #     self.solver.dot_triangular(normal_samples), 0, -1
-        # )
+        r"""Draw samples via the residual/Matheron's-rule/Durbin-Koopman method:
+
+        See the following references for details:
+        - Doucet, "A Note on Efficient Conditional Simulation of Gaussian
+          Distributions" (https://www.stats.ox.ac.uk/~doucet/doucet_simulationconditionalgaussian.pdf).
+        - Durbin & Koopman (2002), "A simple and efficient simulation smoother
+          for state space time series analysis," Biometrika 89(3):603-616.
+        - Wilson et al. (2020/2021), "Efficiently sampling functions from
+          Gaussian process posteriors" / "Pathwise Conditioning of Gaussian
+          Processes."
+
+        A prior sample is a plain forward SDE simulation projected to
+        observation space. A posterior sample corrects that draw toward the
+        data via Matheron's rule:
+
+            x_prior_traj  ~ forward SDE simulation of the full latent trajectory
+            prior_obs     = x_prior_traj projected to observation space
+            noise_sample  ~ N(0, self.noise)
+            residual      = y_obs - (prior_obs + noise_sample)
+            posterior_sample = prior_obs + project(condition(residual).smoothed_mean)
+
+        That is, an ordinary conditioning pass (the same Kalman filter + RTS smoother
+        :meth:`condition` uses) run on the residual instead of on the data.
+
+        Implementation notes:
+        - The covariance/gain recursion does not depend on the residual's
+          *values*, so :class:`StateSpaceSolver`/:class:`IntegratedStateSpaceSolver`
+          compute it once and share it across all ``shape`` samples
+          (``solver.condition_batched_mean``). The parallel solvers instead
+          call ``solver.condition`` once per sample: their associative-scan
+          operator fuses the covariance and mean paths at every node, so the
+          same split is possible but not yet implemented (TODO: if needed).
+        - With ``X_test``, the prior trajectory covers the training states
+          *and* the test points in one joint pass
+          (:func:`~smolgp.solvers.sample.merge_test_coords`), and the residual
+          correction is propagated out to those points by the ordinary
+          ``solver.predict``. Not yet batched as above (TODO: if needed).
+
+        """
+        num_samples = 1 if shape is None else math.prod(shape)
+        keys = jax.random.split(key, num_samples)
+
+        if X_test is None:
+            # Sample at the training coordinates:
+            state_coords = self.state_coords
+            X_at_states = self.X if self.states is None else self.states.X
+            N_out = self.num_data if self.states is None else self.states.y.shape[0]
+
+            def _prior_obs_and_noise(sample_key: jax.random.KeyArray) -> JAXArray:
+                key_prior, key_noise = jax.random.split(sample_key)
+                x_traj = sample_prior_trajectory(self.kernel, state_coords, key_prior)
+                prior_obs = project_trajectory_at_data(
+                    X_at_states,
+                    state_coords,
+                    x_traj,
+                    self.kernel.observation_model,
+                    N_out,
+                )
+                # Independent observation-noise draw, N(0, self.noise) per point.
+                # Let's us sample the GP with observation noise, e.g. y = f(X) + noise.
+                # Matches tinygp's convention since there the covariance is K+noise directly.
+                keys_noise = jax.random.split(key_noise, N_out)
+                noise_sample = jax.vmap(
+                    lambda R, k: robust_sqrt(R) @ jax.random.normal(k, (R.shape[0],))
+                )(self.noise, keys_noise).squeeze()
+                return prior_obs, noise_sample
+
+            prior_obs_batch, noise_batch = jax.vmap(_prior_obs_and_noise)(keys)
+
+            if self.states is None:
+                samples_T = self.mean + prior_obs_batch + noise_batch
+            else:
+                # Conditioned GP: posterior samples of the latent function,
+                # i.e. no extra observation noise on top, to match tinygp, whose
+                #   conditioned .sample() reproduces condGP.variance (no +noise)
+                residual_batch = self.states.y[None, :] - (
+                    prior_obs_batch + noise_batch
+                )
+
+                # The batched-mean conditioning path is only implemented for the non-parallel solvers
+                if type(self.solver) in (StateSpaceSolver, IntegratedStateSpaceSolver):
+                    m_smoothed_batch = self.solver.condition_batched_mean(
+                        residual_batch
+                    )
+                    resid_mean_obs_batch = jax.vmap(
+                        lambda m: project_trajectory_at_data(
+                            X_at_states,
+                            state_coords,
+                            m,
+                            self.kernel.observation_model,
+                            N_out,
+                        )
+                    )(m_smoothed_batch)
+                else:
+                    # Parallel solvers fall back to the unoptimized per-sample conditioning
+                    def _one_condition(residual_i: JAXArray) -> JAXArray:
+                        _, resid_conditioned_states, _ = self.solver.condition(
+                            residual_i
+                        )
+                        _, _, (m_smoothed_resid, _P_smoothed_resid) = (
+                            resid_conditioned_states
+                        )
+                        return project_trajectory_at_data(
+                            X_at_states,
+                            state_coords,
+                            m_smoothed_resid,
+                            self.kernel.observation_model,
+                            N_out,
+                        )
+
+                    resid_mean_obs_batch = jax.vmap(_one_condition)(residual_batch)
+
+                samples_T = prior_obs_batch + resid_mean_obs_batch
+
+        elif self.states is None:
+            # Sampling at X_test, but the GP has not been conditioned yet.
+            # Still draw from the prior, but at the new test points.
+            # self.noise doesn't apply to arbitrary new coordinates
+            # (only defined at self.X), so this is the latent GP only
+            if (
+                isinstance(X_test, tuple)
+                and len(X_test) > 1
+                and isinstance(self.solver, IntegratedStateSpaceSolver)
+            ):
+                # Exposure-aware (delta=0/delta>0 possibly mixed) prior
+                # sample: same merge_exposure_test_coords machinery as the
+                # conditioned case, just with an empty "training" timeline
+                t_test = self.kernel.coord_to_sortable(X_test)
+                delta_test = X_test[1]
+                instid_test = X_test[2]
+                N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
+                empty_state_coords = StateCoords(
+                    t_states=jnp.zeros((0,), dtype=t_test.dtype),
+                    instid=jnp.zeros((0,), dtype=int),
+                    obsid=jnp.zeros((0,), dtype=int),
+                    stateid=jnp.zeros((0,), dtype=int),
+                )
+                kernel_ext, merged_coords, _train_positions, b_positions, probe_dims = (
+                    merge_exposure_test_coords(
+                        self.kernel,
+                        empty_state_coords,
+                        t_test,
+                        delta_test,
+                        instid_test,
+                        num_test_insts,
+                    )
+                )
+
+                # delta==0 points read out via the observation model, so they
+                # need the *real* instrument, not the probe-group label.
+                X_test_proj = (t_test, delta_test, instid_proj)
+
+                def _one_sample(sample_key: jax.random.KeyArray) -> JAXArray:
+                    x_traj = sample_prior_trajectory(
+                        kernel_ext, merged_coords, sample_key
+                    )
+                    return project_exposure_test_points(
+                        X_test_proj,
+                        kernel_ext,
+                        x_traj,
+                        b_positions,
+                        probe_dims,
+                        delta_test,
+                    )
+
+                samples_T = jax.vmap(_one_sample)(keys)
+            else:
+                # delta=0-only prior sample at new test points:
+                t_test = self.kernel.coord_to_sortable(X_test)
+                N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
+                state_coords_test = StateCoords.instantaneous(t_test)
+                positions = jnp.arange(N_out)
+
+                def _one_sample(sample_key: jax.random.KeyArray) -> JAXArray:
+                    x_traj = sample_prior_trajectory(
+                        self.kernel, state_coords_test, sample_key
+                    )
+                    return project_trajectory_at_positions(
+                        X_test, positions, x_traj, self.kernel.observation_model
+                    )
+
+                samples_T = jax.vmap(_one_sample)(keys)
+
+        elif (
+            isinstance(X_test, tuple)
+            and len(X_test) > 1
+            and isinstance(self.solver, IntegratedStateSpaceSolver)
+        ):
+            # Conditioned GP at new exposure-integrated test points.
+            state_coords = self.state_coords
+            # Conditioned GP may have been predicted at an X_test
+            # different from X, in which case num_data would no
+            # longer be be the number of training data points.
+            # But we can reconstruct since we cache the data in states.y
+            N_train = self.states.y.shape[0]
+            t_test = self.kernel.coord_to_sortable(X_test)
+            delta_test = X_test[1]
+            instid_test = X_test[2]
+            N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
+            kernel_ext, merged_coords, train_positions, b_positions, probe_dims = (
+                merge_exposure_test_coords(
+                    self.kernel,
+                    state_coords,
+                    t_test,
+                    delta_test,
+                    instid_test,
+                    num_test_insts,
+                )
+            )
+            train_idx = data_order_indices(state_coords, N_train)
+            merged_train_idx = train_positions[train_idx]
+            # Coordinates carrying the *real* instrument rather than the
+            # probe-group label, for every observation-model projection --
+            # see sample()'s note on the two roles instid plays here.
+            X_test_proj = (t_test, delta_test, instid_proj)
+
+            def _prior_obs_and_noise(sample_key: jax.random.KeyArray) -> JAXArray:
+                key_prior, key_noise = jax.random.split(sample_key)
+                x_traj = sample_prior_trajectory(kernel_ext, merged_coords, key_prior)
+                prior_obs_train = project_trajectory_at_positions(
+                    self.states.X,
+                    merged_train_idx,
+                    x_traj,
+                    kernel_ext.observation_model,
+                )
+                prior_obs_test = project_exposure_test_points(
+                    X_test_proj, kernel_ext, x_traj, b_positions, probe_dims, delta_test
+                )
+                keys_noise = jax.random.split(key_noise, N_train)
+                noise_sample = jax.vmap(
+                    lambda R, k: robust_sqrt(R) @ jax.random.normal(k, (R.shape[0],))
+                )(self.noise, keys_noise).squeeze()
+                return prior_obs_train, prior_obs_test, noise_sample
+
+            prior_obs_train_batch, prior_obs_test_batch, noise_batch = jax.vmap(
+                _prior_obs_and_noise
+            )(keys)
+            residual_batch = self.states.y[None, :] - (
+                prior_obs_train_batch + noise_batch
+            )
+
+            H_test = jax.vmap(self.kernel.observation_model)(X_test_proj)
+
+            def _resid_mean_at_test(residual_i: JAXArray) -> JAXArray:
+                _, resid_conditioned_states, v_S = self.solver.condition(
+                    residual_i, return_v_S=True
+                )
+                resid_conditioned_results = (
+                    state_coords,
+                    resid_conditioned_states,
+                    v_S,
+                )
+                resid_mean, _resid_var = self.solver.predict(
+                    X_test_proj, resid_conditioned_results, y=residual_i
+                )
+                # Squeeze only the trailing D axis, not a blanket .squeeze()
+                # otherwise a single test point (N_test==1) would also
+                # collapse the N_test axis, breaking the shape needed to
+                # add against prior_obs_test_batch (N_test, not scalar).
+                return jax.vmap(lambda h, m: h @ m)(H_test, resid_mean).squeeze(-1)
+
+            resid_mean_obs_test_batch = jax.vmap(_resid_mean_at_test)(residual_batch)
+            samples_T = prior_obs_test_batch + resid_mean_obs_test_batch
+
+        else:
+            # Conditioned GP at new delta=0-only test points
+            state_coords = self.state_coords
+            # Conditioned GP may have been predicted at an X_test
+            # different from X, in which case num_data would no
+            # longer be be the number of training data points.
+            # But we can reconstruct since we cache the data in states.y
+            N_train = self.states.y.shape[0]
+            t_test = self.kernel.coord_to_sortable(X_test)
+            N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
+            merged_coords, train_positions, test_positions = merge_test_coords(
+                state_coords, t_test
+            )
+            train_idx = data_order_indices(state_coords, N_train)
+            merged_train_idx = train_positions[train_idx]
+
+            def _prior_obs_and_noise(sample_key: jax.random.KeyArray) -> JAXArray:
+                key_prior, key_noise = jax.random.split(sample_key)
+                x_traj = sample_prior_trajectory(self.kernel, merged_coords, key_prior)
+                prior_obs_train = project_trajectory_at_positions(
+                    self.states.X,
+                    merged_train_idx,
+                    x_traj,
+                    self.kernel.observation_model,
+                )
+                prior_obs_test = project_trajectory_at_positions(
+                    X_test, test_positions, x_traj, self.kernel.observation_model
+                )
+                keys_noise = jax.random.split(key_noise, N_train)
+                noise_sample = jax.vmap(
+                    lambda R, k: robust_sqrt(R) @ jax.random.normal(k, (R.shape[0],))
+                )(self.noise, keys_noise).squeeze()
+                return prior_obs_train, prior_obs_test, noise_sample
+
+            prior_obs_train_batch, prior_obs_test_batch, noise_batch = jax.vmap(
+                _prior_obs_and_noise
+            )(keys)
+            residual_batch = self.states.y[None, :] - (
+                prior_obs_train_batch + noise_batch
+            )
+
+            H_test = jax.vmap(self.kernel.observation_model)(X_test)
+
+            def _resid_mean_at_test(residual_i: JAXArray) -> JAXArray:
+                # Reuse this GP's own state_coords rather than the solver's
+                # (identical, but this GP may be a conditioned one whose
+                # states were cached from a different solver instance).
+                _, resid_conditioned_states, v_S = self.solver.condition(
+                    residual_i, return_v_S=True
+                )
+                resid_conditioned_results = (
+                    state_coords,
+                    resid_conditioned_states,
+                    v_S,
+                )
+                resid_mean, _resid_var = self.solver.predict(
+                    X_test, resid_conditioned_results
+                )
+                # Squeeze only the trailing D axis, not a blanket .squeeze()
+                # otherwise a single test point (N_test==1) would also
+                # collapse the N_test axis, breaking the shape needed to
+                # add against prior_obs_test_batch (N_test, not scalar).
+                return jax.vmap(lambda h, m: h @ m)(H_test, resid_mean).squeeze(-1)
+
+            resid_mean_obs_test_batch = jax.vmap(_resid_mean_at_test)(residual_batch)
+            samples_T = prior_obs_test_batch + resid_mean_obs_test_batch
+
+        samples = jnp.moveaxis(samples_T, 0, -1)
+        if shape is None:
+            return samples[..., 0]
+        return samples.reshape((N_out,) + tuple(shape))
 
     @jax.jit
     def _compute_log_prob(self, v: JAXArray, S: JAXArray) -> JAXArray:
