@@ -1,7 +1,58 @@
+import heapq
+
 import jax
 import jax.numpy as jnp
 from jax.scipy.linalg import expm
 from tinygp.helpers import JAXArray
+
+
+def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
+    r"""Compute the minimum number of non-overlapping ``instid`` groups for a
+    set of ``M`` exposure windows :math:`(t_i - \delta_i/2,\; t_i + \delta_i/2)`
+    with arbitrary overlap.
+
+    Main use is in :func:`~smolgp.solvers.sample.merge_exposure_test_coords`,
+    to optimally reduce the dimensionality of the augmented state. Because
+    sample draws are from a joint multivariate Gaussian, they cannot be
+    drawn independently for overlapping exposures, so we must track them
+    with separate instrument indices. The sampling algorithm scales with
+    O(n^3), n the number of instruments, so we want to minimize that number.
+
+    This is the "minimum number of meeting rooms" problem, which is optimally
+    solved with the standard "reuse whichever group's window finished earliest,
+    if it's  already finished" greedy sweep, via a min-heap keyed by end time.
+    Cost is :math:`O(M \log M)`.
+
+    Written in plain Python/``heapq`` as it is a one-time preprocessing step
+    and defines the shape of the augmented state, two things that are not jittable.
+
+    Args:
+        t: Exposure midpoints, length ``M``.
+        delta: Exposure widths, length ``M`` (must be >= 0).
+
+    Returns:
+        instid: Length ``M`` integer array of group assignments,
+            ``0 <= instid[i] < num_insts``.
+        num_insts: The minimum number of "instruments" i.e. ``int(jnp.max(instid)) + 1``.
+    """
+    a = [float(x) for x in (t - delta / 2)]
+    b = [float(x) for x in (t + delta / 2)]
+    M = len(a)
+    order = sorted(range(M), key=lambda i: a[i])
+
+    heap: list[tuple[float, int]] = []  # (end_time, group id), min-heap by end_time
+    instid = [0] * M
+    next_id = 0
+    for i in order:
+        if heap and heap[0][0] <= a[i]:
+            _end_time, gid = heapq.heappop(heap)
+        else:
+            gid = next_id
+            next_id += 1
+        instid[i] = gid
+        heapq.heappush(heap, (b[i], gid))
+
+    return jnp.array(instid, dtype=int), next_id
 
 
 def block_view(A, b):
@@ -71,15 +122,26 @@ def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
     return G3
 
 
+def robust_sqrt(M: JAXArray) -> JAXArray:
+    r"""Symmetric-PSD matrix square root via eigendecomposition.
+
+    Returns :math:`S` such that :math:`S S^T = M`, via
+    :math:`M = V \mathrm{diag}(w) V^T`, :math:`S = V \mathrm{diag}(\sqrt{\max(w,0)})`.
+
+    In cases where :math:`M` is numerically singular, :func:`jnp.linalg.cholesky` will fail.
+    This method, while slightly slower, is robust to singularity and returns a valid square root.
+    Needed for sampling (which uses a square root of the covariance) when either
+    1. Q_k is exactly zero, either from a zero-length transition (such as the first step,
+       or two states at the same instant), or for kernels with Q_k=0 everwhere (e.g. Cosine)
+    2. Q_k is numerically singular due to multiple instruments resetting at the same instant,
+       which produces perfectly correlated integral states (see docstring of :func:`get_smoothing_gain`).
+    """
+    w, V = jnp.linalg.eigh(M)
+    return V * jnp.sqrt(jnp.clip(w, min=0.0))[None, :]
+
+
 def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
-    r"""
-
-    TLDR; usage converts
-        ``G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T``
-    to
-        ``G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)``
-
-    Computes the RTS smoothing gain :math:`G_k` from
+    r"""Computes the RTS smoothing gain :math:`G_k` from
 
     .. math::
 
@@ -109,6 +171,11 @@ def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
     Both branches compute the correct smoothing gain by inverting the predicted covariance, but with different methods:
     - The common (non-singular) case uses :func:`jnp.linalg.solve` (LU-based, cheap), which assumes invertibility.
     - The degenerate case uses :func:`jnp.linalg.lstsq` (SVD-based), which is more expensive but handles singular matrices correctly.
+
+    TLDR; usage converts
+        ``G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T``
+    to
+        ``G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)``
     """
     n = P_pred_next.shape[0]
     scale = jnp.trace(P_pred_next) / n
