@@ -27,7 +27,8 @@ source_suffix = {
     ".ipynb": "myst-nb",
 }
 templates_path = ["_templates"]
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = ["_build", "jupyter_execute", "Thumbs.db", ".DS_Store"]
+
 
 # -- Jupyter -------------------------------------------------
 # nb_execution_mode = "auto" # TODO: turn this back on for CI
