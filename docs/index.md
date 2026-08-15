@@ -60,7 +60,6 @@ page](https://github.com/smolgp-dev/smolgp/issues).
 
 guide
 tutorials
-apidocs/index
 GitHub Repository <https://github.com/smolgp-dev/smolgp>
 ```
 

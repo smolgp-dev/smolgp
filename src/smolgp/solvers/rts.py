@@ -3,6 +3,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from smolgp.helpers import get_smoothing_gain
+
 
 def RTSSmoother(kernel, X, kalman_results):
     """
@@ -84,3 +86,68 @@ def rts_smoother(A, t, m_filtered, P_filtered, m_predicted, P_predicted):
     m_smooth = jnp.vstack([m_smooth_reversed[::-1], m_filtered[-1][None, :]])
     P_smooth = jnp.vstack([P_smooth_reversed[::-1], P_filtered[-1][None, :, :]])
     return m_smooth, P_smooth
+
+
+@jax.jit
+def rts_gains(A, t, P_filtered, P_predicted):
+    """
+    The `y`-independent smoothing gains G_k, k=0..N-2, derived from
+    P_filtered/P_predicted (from ONE prior kalman_filter call). Pointwise in
+    k (jax.vmap, no scan needed).
+
+    Uses helpers.get_smoothing_gain (rather than the raw jnp.linalg.solve
+    rts_smoother inlines) so a degenerate/near-singular P_predicted[k+1] is
+    handled the same robust way the integrated smoother already relies on --
+    a strict superset of rts_smoother's own solve, since get_smoothing_gain
+    falls back to its generic (plain solve) branch whenever P_predicted[k+1]
+    is well-conditioned.
+
+    Returns:
+        G_all: shape (N-1, dim, dim)
+    """
+    N = len(t)
+
+    def gain_at_k(k):
+        P_k = P_filtered[k]
+        P_pred_next = P_predicted[k + 1]
+        Delta_k = t[k + 1] - t[k]
+        A_k = A(0, Delta_k)
+        return get_smoothing_gain(P_pred_next, P_k @ A_k.T)
+
+    return jax.vmap(gain_at_k)(jnp.arange(N - 1))
+
+
+@jax.jit
+def rts_smoother_batched_mean(G_all, m_filtered_batch, m_predicted_batch):
+    """
+    Batched-mean-path replay of rts_smoother, given precomputed G_all
+    (rts_gains) and the BATCHED filtered/predicted means
+    (kalman_filter_batched_mean).
+
+    Parameters:
+        G_all: (N-1, dim, dim)
+        m_filtered_batch, m_predicted_batch: (M, N, dim)
+
+    Returns:
+        m_smoothed_batch: (M, N, dim)
+    """
+    N = m_filtered_batch.shape[1]
+    m_filtered_T = jnp.moveaxis(m_filtered_batch, 0, 1)  # (N, M, dim)
+    m_predicted_T = jnp.moveaxis(m_predicted_batch, 0, 1)  # (N, M, dim)
+
+    def step(carry, k):
+        m_hat_next_batch = carry
+        m_k_batch = m_filtered_T[k]
+        m_pred_next_batch = m_predicted_T[k + 1]
+        G_k = G_all[k]
+        m_hat_k_batch = m_k_batch + jnp.einsum(
+            "ij,mj->mi", G_k, m_hat_next_batch - m_pred_next_batch
+        )
+        return m_hat_k_batch, m_hat_k_batch
+
+    init_carry = m_filtered_T[-1]  # (M, dim)
+    _, m_smooth_reversed_T = jax.lax.scan(step, init_carry, jnp.arange(N - 2, -1, -1))
+    m_smooth_T = jnp.concatenate(
+        [m_smooth_reversed_T[::-1], m_filtered_T[-1][None, :, :]], axis=0
+    )
+    return jnp.moveaxis(m_smooth_T, 0, 1)  # (M, N, dim)

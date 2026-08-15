@@ -20,12 +20,16 @@ subpackage (see :mod:`smolgp.kernels`), and then passing that to a
 :ref:`tutorials` for a more complete introduction.
 """
 
+from importlib.metadata import PackageNotFoundError as _PackageNotFoundError
+from importlib.metadata import version as _version
+
 from smolgp import (
     kernels as kernels,
+)
+from smolgp import (
     solvers as solvers,
 )
 from smolgp.gp import GaussianProcess as GaussianProcess
-from importlib.metadata import version as _version, PackageNotFoundError as _PackageNotFoundError
 
 try:
     __version__ = _version("smolgp")

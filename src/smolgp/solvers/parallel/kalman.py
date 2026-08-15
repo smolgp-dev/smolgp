@@ -28,8 +28,11 @@ def ParallelKalmanFilter(kernel, X, y, R, return_v_S=False):
     P0 = kernel.stationary_covariance()
     t = kernel.coord_to_sortable(X)
 
-    asso_params = make_associative_params(Phi, H, Q, R, t, y, m0, P0)
-    A, b, C, eta, J = parallel_kalman_filter(asso_params)
+    # Evaluate H over the FULL X (possibly a tuple), not the sortable scalar
+    # timeline -- see the note in smolgp.solvers.kalman.KalmanFilter.
+    H_all = jax.vmap(H)(X)
+    asso_params = make_associative_params(Phi, H_all, Q, R, t, y, m0, P0)
+    _A, b, C, _eta, _J = parallel_kalman_filter(asso_params)
     m_pred, P_pred, v, S = postprocess(Phi, H, Q, R, X, t, y, b, C, m0, P0)
     # return (A, b, C, eta, J), (m_pred, P_pred, v, S)
     m_filt, P_filt = b, C
@@ -40,7 +43,7 @@ def ParallelKalmanFilter(kernel, X, y, R, return_v_S=False):
 
 
 @jax.jit
-def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
+def make_associative_params(Phi, H_all, Q, R, t, y, m0, P0):
     """Generate the associative parameters needed for parallel Kalman
 
     See Eqns. 10, 11, 12 from Sarkka & Garcia-Fernandez (2020)
@@ -49,14 +52,13 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
 
     def make_first_params(
         Phi,
-        H,
+        H0,
         m0,
         P0,
         y0,
         r0,
     ):
         Phi0 = Phi(0, 0)
-        H0 = H(0)  # this is sort of unnecessary but we'll keep it for now
 
         m = Phi0 @ m0
         P = Phi0 @ P0 @ Phi0.T  # Q(0,0) = 0
@@ -75,7 +77,7 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
 
     def make_generic_params(
         Phi,
-        H,
+        Hk,
         Q,
         t_delta,
         y,
@@ -84,7 +86,6 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
         Phi_dt = Phi(0, t_delta)
         I = jnp.eye(Phi_dt.shape[-1])
 
-        Hk = H(t_delta)  # TODO: this is wrong, pass data coordinate here
         Q_dt = Q(0, t_delta)
 
         S = Hk @ Q_dt @ Hk.T + r
@@ -100,12 +101,12 @@ def make_associative_params(Phi, H, Q, R, t, y, m0, P0):
 
         return (A, b, C, eta, J)
 
-    A0, b0, C0, eta0, J0 = make_first_params(Phi, H, m0, P0, y[0], R[0])
+    A0, b0, C0, eta0, J0 = make_first_params(Phi, H_all[0], m0, P0, y[0], R[0])
     t_delta = jnp.diff(t)
     A, b, C, eta, J = jax.vmap(
         make_generic_params,
-        in_axes=(None, None, None, 0, 0, 0),
-    )(Phi, H, Q, t_delta, y[1:], R[1:])
+        in_axes=(None, 0, None, 0, 0, 0),
+    )(Phi, H_all[1:], Q, t_delta, y[1:], R[1:])
 
     A_all = jnp.concatenate([A0[jnp.newaxis, ...], A], axis=0)
     b_all = jnp.concatenate([b0[jnp.newaxis, ...], b], axis=0)

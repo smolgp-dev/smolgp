@@ -30,7 +30,14 @@ def KalmanFilter(kernel, X, y, R, return_v_S=False):
         P0 = P0.to_dense()  # needed for carry in jax.lax.scan
 
     t = kernel.coord_to_sortable(X)
-    output = kalman_filter(A, Q, H, R, t, y, m0, P0)
+    # Evaluate the observation model over the FULL X (which may be a tuple
+    # like (t, texp, instid)), not the sortable-scalar timeline -- a kernel's
+    # H is allowed to depend on any part of its coordinate, e.g. a per-output
+    # amplitude selected by an id channel. Mirrors the integrated filter,
+    # which has always done this. Passing t[k] here instead would silently
+    # strip every non-sortable channel.
+    H_all = jax.vmap(H)(X)
+    output = kalman_filter(A, Q, H_all, R, t, y, m0, P0)
     if return_v_S:
         return output
     else:
@@ -39,7 +46,7 @@ def KalmanFilter(kernel, X, y, R, return_v_S=False):
 
 
 @jax.jit
-def kalman_filter(A, Q, H, R, t, y, m0, P0):
+def kalman_filter(A, Q, H_all, R, t, y, m0, P0):
     """
     Jax implementation of the Kalman filter algorithm
 
@@ -89,9 +96,7 @@ def kalman_filter(A, Q, H, R, t, y, m0, P0):
         P_pred = A_prev @ P_prev @ A_prev.T + Q_prev
 
         # Update (Eq. 4.21)
-        ## TODO: let t be a tuple and use coord_to_sortable to get time axis out
-        ##       That way we can pass the full t into H and it can use e.g. instid etc.
-        H_k = H(t[k])  # observation model for this time step
+        H_k = H_all[k]  # observation model for this time step
         y_pred = H_k @ m_pred  # predicted observation
         v_k = y[k] - y_pred  # "innovation" or "surprise" term
         S_k = H_k @ P_pred @ H_k.T + R[k]  # uncertainy in predicted observation
@@ -109,3 +114,76 @@ def kalman_filter(A, Q, H, R, t, y, m0, P0):
     # Run the filter over all time steps, unpack, and return results
     _, outputs = jax.lax.scan(step, init_carry, jnp.arange(N))
     return outputs
+
+
+@jax.jit
+def kalman_gains(A, H_all, R, t, P_predicted):
+    """
+    The `y`-independent per-step quantities needed to replay kalman_filter's
+    mean-path recursion for many different observation vectors, given
+    P_predicted from ONE prior call to kalman_filter (any `y` -- P_predicted
+    never depends on it).
+
+    Pointwise in k (jax.vmap, no scan needed): A_k, H_k, and the Kalman gain
+    K_k (given P_predicted[k]) don't depend on any other step.
+
+    Args:
+        H_all: shape (N, D, dim) -- the observation model already evaluated
+            over the full coordinates (``jax.vmap(kernel.observation_model)(X)``),
+            NOT the bare function; see KalmanFilter's own note on why.
+
+    Returns:
+        A_all: shape (N, dim, dim) -- A(0, Delta_k)
+        H_all: shape (N, D, dim)   -- passed through unchanged
+        K_all: shape (N, dim, D)   -- Kalman gain at step k
+    """
+    N = len(t)
+
+    def gains_at_k(k, P_pred_k):
+        Delta = jax.lax.cond(k > 0, lambda i: t[i] - t[i - 1], lambda _: 0.0, k)
+        A_k = A(0, Delta)
+        H_k = H_all[k]
+        S_k = H_k @ P_pred_k @ H_k.T + R[k]
+        K_k = jnp.linalg.solve(S_k.T, (P_pred_k @ H_k.T).T).T
+        return A_k, H_k, K_k
+
+    return jax.vmap(gains_at_k)(jnp.arange(N), P_predicted)
+
+
+@jax.jit
+def kalman_filter_batched_mean(A_all, H_all, K_all, y_batch, m0):
+    """
+    Batched-mean-path replay of kalman_filter's forward recursion, given
+    PRECOMPUTED, `y`-independent gains (kalman_gains). Processes M
+    observation/residual batches in a single jax.lax.scan.
+
+    Runtime: O(N * M * dim * D), vs. O(M * N * dim^3) for M independent
+    calls to kalman_filter.
+
+    Parameters:
+        A_all: (N, dim, dim), H_all: (N, D, dim), K_all: (N, dim, D) -- from kalman_gains
+        y_batch: (M, N, D) -- batch of M observation/residual arrays
+        m0: (dim,) -- prior mean, shared/broadcast across the batch
+
+    Returns:
+        m_filtered_batch: (M, N, dim)
+        m_predicted_batch: (M, N, dim)
+    """
+    N = A_all.shape[0]
+    M = y_batch.shape[0]
+    dim = m0.shape[0]
+
+    def step(carry, k):
+        m_prev_batch = carry  # (M, dim)
+        A_k, H_k, K_k = A_all[k], H_all[k], K_all[k]
+
+        m_pred_batch = jnp.einsum("ij,mj->mi", A_k, m_prev_batch)
+        y_pred_batch = jnp.einsum("di,mi->md", H_k, m_pred_batch)
+        v_batch = y_batch[:, k, :] - y_pred_batch
+        m_k_batch = m_pred_batch + jnp.einsum("id,md->mi", K_k, v_batch)
+
+        return m_k_batch, (m_k_batch, m_pred_batch)
+
+    init_carry = jnp.broadcast_to(m0, (M, dim))
+    _, (m_filtered_T, m_predicted_T) = jax.lax.scan(step, init_carry, jnp.arange(N))
+    return jnp.moveaxis(m_filtered_T, 0, 1), jnp.moveaxis(m_predicted_T, 0, 1)

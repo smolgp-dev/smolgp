@@ -113,7 +113,72 @@ def test_instantaneous_tied_timestamps():
         print(f"    ...tie='{tie}': finite and matches tinygp exactly")
 
 
+def test_scalar_noise_matches_explicit_array():
+    """``noise=<scalar>`` is shorthand for a homoscedastic ``jnp.full(N, ...)``
+    and must produce a bit-identical model, for every kernel/solver type.
+
+    A scalar is 0-D, so before this was supported it fell through the
+    ndim-based normalization untouched and reached the solvers as a bare
+    scalar instead of the expected ``(N, D, D)`` covariance stack.
+    """
+    S, w, Q = 2.5, 0.2, 2.0
+    sigma = jnp.sqrt(S * w * Q)
+    var = 0.037
+
+    # --- instantaneous kernel, both solvers ---
+    kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
+    N = 8
+    t = jnp.sort(jax.random.uniform(jax.random.PRNGKey(0), (N,), maxval=50.0))
+    y = jax.random.normal(jax.random.PRNGKey(1), (N,))
+    t_test = jnp.linspace(-5.0, 55.0, 9)
+
+    for solver in [None, smolgp.solvers.ParallelStateSpaceSolver]:
+        kw = {} if solver is None else {"solver": solver}
+        gp_scalar = smolgp.GaussianProcess(kernel, X=t, noise=var, **kw)
+        gp_array = smolgp.GaussianProcess(kernel, X=t, noise=jnp.full(N, var), **kw)
+        label = "StateSpaceSolver" if solver is None else solver.__name__
+
+        assert gp_scalar.noise.shape == (N, 1, 1), (
+            f"[{label}] scalar noise must broadcast to (N, 1, 1), "
+            f"got {gp_scalar.noise.shape}"
+        )
+        assert jnp.array_equal(gp_scalar.noise, gp_array.noise), f"[{label}] noise"
+
+        llh_s, cond_s = gp_scalar.condition(y)
+        llh_a, cond_a = gp_array.condition(y)
+        assert jnp.array_equal(llh_s, llh_a), f"[{label}] log probability"
+        mu_s, var_s = cond_s.predict(t_test, return_var=True)
+        mu_a, var_a = cond_a.predict(t_test, return_var=True)
+        assert jnp.array_equal(mu_s, mu_a), f"[{label}] predicted mean"
+        assert jnp.array_equal(var_s, var_a), f"[{label}] predicted variance"
+
+    # --- integrated kernel (noise still applies per observation, not per state) ---
+    kernel_i = smolgp.kernels.IntegratedSHO(
+        omega=w, quality=Q, sigma=sigma, num_insts=1
+    )
+    ti = jnp.linspace(0.0, 100.0, 6)
+    Xi = (ti, jnp.full(6, 3.0), jnp.zeros(6, dtype=int))
+    yi = jax.random.normal(jax.random.PRNGKey(2), (6,))
+    gp_i_scalar = smolgp.GaussianProcess(kernel_i, X=Xi, noise=var)
+    gp_i_array = smolgp.GaussianProcess(kernel_i, X=Xi, noise=jnp.full(6, var))
+    assert gp_i_scalar.noise.shape == (6, 1, 1), (
+        f"integrated scalar noise shape {gp_i_scalar.noise.shape}"
+    )
+    llh_s, _ = gp_i_scalar.condition(yi)
+    llh_a, _ = gp_i_array.condition(yi)
+    assert jnp.array_equal(llh_s, llh_a), "integrated log probability"
+
+    # A Python float and a 0-D jnp scalar must behave identically
+    gp_pyfloat = smolgp.GaussianProcess(kernel, X=t, noise=float(var))
+    gp_jaxscalar = smolgp.GaussianProcess(kernel, X=t, noise=jnp.asarray(var))
+    assert jnp.array_equal(gp_pyfloat.noise, gp_jaxscalar.noise), (
+        "python float vs 0-D jnp scalar"
+    )
+    print("    ...scalar noise matches the explicit per-observation array exactly")
+
+
 if __name__ == "__main__":
     test_instantaneous()
     test_instantaneous_tied_timestamps()
+    test_scalar_noise_matches_explicit_array()
     print("All instantaneous kernel tests passed.")

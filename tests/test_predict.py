@@ -348,6 +348,87 @@ def test_predict_exposure_is_integral():
     )
 
 
+def test_condition_with_X_test_matches_condition_then_predict():
+    """``gp.condition(y, X_test)`` must agree exactly with the two-step
+    ``gp.condition(y)`` then ``condgp.predict(X_test)``.
+
+    These are two spellings of the same computation -- the inline form just
+    fuses the predict into the condition call -- so they should agree to
+    machine precision, for every solver type.
+
+    Regression test for a shape mismatch in the inline path: the plain
+    (non-integrated) solvers' ``condition()`` returned a bare ``t_states``
+    array as ``conditioned_results[0]``, while ``predict()`` unpacks that
+    slot as a 4-field ``state_coords``. Every other call site rebuilt the
+    proper value via ``GaussianProcess.state_coords`` first, so only the
+    inline ``condition(y, X_test=...)`` path (gp.py) hit it -- raising
+    ``ValueError: too many values to unpack`` for N != 4 training points,
+    and (worse) silently unpacking 4 scalar times as the four fields when
+    N == 4. The N == 4 case is covered explicitly below.
+    """
+    S, w, Q = 2.5, 0.2, 2.0
+    sigma = jnp.sqrt(S * w * Q)
+
+    # --- plain / instantaneous kernel, both solver types ---
+    kernel_plain = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
+    for solver, sname in [
+        (None, "StateSpaceSolver"),
+        (smolgp.solvers.ParallelStateSpaceSolver, "ParallelStateSpaceSolver"),
+    ]:
+        # N=4 is the silent-corruption case (a bare length-4 t_states array
+        # unpacks "successfully" into the four state_coords fields); the
+        # others raise outright. Cover both failure modes.
+        for N in [4, 7]:
+            k1, k2 = jax.random.split(jax.random.PRNGKey(N))
+            t = jnp.sort(jax.random.uniform(k1, (N,), minval=0.0, maxval=50.0))
+            y = jax.random.normal(k2, (N,))
+            kwargs = {} if solver is None else {"solver": solver}
+            gp = smolgp.GaussianProcess(
+                kernel_plain, X=t, noise=jnp.full(N, 0.01), **kwargs
+            )
+            t_test = jnp.linspace(-10.0, 60.0, 13)
+
+            _, condgp_two_step = gp.condition(y)
+            mu_two, var_two = condgp_two_step.predict(t_test, return_var=True)
+
+            _, condgp_inline = gp.condition(y, X_test=t_test)
+            mu_in, var_in = condgp_inline.loc, condgp_inline.variance
+
+            dm = float(jnp.max(jnp.abs(mu_in - mu_two)))
+            dv = float(jnp.max(jnp.abs(var_in - var_two)))
+            print(f"    ...[{sname}, N={N}] max|dmean|={dm:.2e}, max|dvar|={dv:.2e}")
+            assert dm < 1e-10, f"[{sname}, N={N}] inline vs two-step mean: {dm:.3e}"
+            assert dv < 1e-10, f"[{sname}, N={N}] inline vs two-step var: {dv:.3e}"
+
+    # --- integrated kernel, both solver types (already consistent today) ---
+    for solver, sname in [
+        (None, "IntegratedStateSpaceSolver"),
+        (
+            smolgp.solvers.ParallelIntegratedStateSpaceSolver,
+            "ParallelIntegratedStateSpaceSolver",
+        ),
+    ]:
+        d = _build_dataset(Ninst=2, key=jax.random.PRNGKey(21), solver=solver)
+        gp_smol, y = d["gp_smol"], d["y"]
+        X_test = (
+            jnp.array([5.0, 10.0, -10.0, 115.0]),
+            jnp.array([1.0, 8.0, 4.0, 0.0]),
+            jnp.array([0, 1, 0, 1], dtype=int),
+        )
+
+        _, condgp_two_step = gp_smol.condition(y)
+        mu_two, var_two = condgp_two_step.predict(X_test, y=y, return_var=True)
+
+        _, condgp_inline = gp_smol.condition(y, X_test=X_test)
+        mu_in, var_in = condgp_inline.loc, condgp_inline.variance
+
+        dm = float(jnp.max(jnp.abs(mu_in - mu_two)))
+        dv = float(jnp.max(jnp.abs(var_in - var_two)))
+        print(f"    ...[{sname}] max|dmean|={dm:.2e}, max|dvar|={dv:.2e}")
+        assert dm < 1e-10, f"[{sname}] inline vs two-step mean: {dm:.3e}"
+        assert dv < 1e-10, f"[{sname}] inline vs two-step var: {dv:.3e}"
+
+
 if __name__ == "__main__":
     test_predict_exposure_within_one_gap()
     test_predict_exposure_spans_multiple_states()
@@ -360,4 +441,5 @@ if __name__ == "__main__":
     test_predict_exposure_matches_tiny()
     test_predict_exposure_parallel_solver()
     test_predict_exposure_is_integral()
+    test_condition_with_X_test_matches_condition_then_predict()
     print("All predict() exposure tests passed.")

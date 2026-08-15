@@ -16,7 +16,7 @@ class ParallelIntegratedStateSpaceSolver(IntegratedStateSpaceSolver):
     parallel Kalman filtering and RTS smoothing for integrated measurements
     """
 
-    _state_coords: JAXArray
+    _instid_per_state: JAXArray
 
     def __init__(
         self,
@@ -35,43 +35,40 @@ class ParallelIntegratedStateSpaceSolver(IntegratedStateSpaceSolver):
                 and `instid` is an index encoding which instrument the measurement corresponds to.
             noise: Observation noise covariance array of shape ``(D, D, N)``.
         """
-        # Sets self.kernel, self.X, self.noise, and self.state_coords
-        # (= (t_states, instid, obsid, stateid), with instid indexed
-        # per-observation -- see class docstring below for why the parallel
-        # Kalman/RTS functions additionally need a per-*state* instid array).
+        # Sets self.kernel, self.X, self.noise, and self.state_coords (whose
+        # instid is indexed per-observation, length N).
         super().__init__(kernel, X, noise)
 
-        t_states, instid, obsid, stateid = self.state_coords
-        # instid[obsid[k]] gathered once here (rather than inside every
-        # per-state vmapped call in parallel/kalman.py and parallel/rts.py,
-        # which index a per-state array directly instead of doing this
-        # gather themselves).
-        self._state_coords = (t_states, instid[obsid], obsid, stateid)
+        # Unlike the sequential integrated Kalman/RTS functions, the parallel
+        # ones index a per-*state* instid array (length K) directly rather
+        # than doing the instid[obsid[k]] gather themselves, so hoist that
+        # gather here (once) instead of into every per-state vmapped call.
+        self._instid_per_state = self.state_coords.instid_per_state()
 
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        t_states, instid, obsid, stateid = self._state_coords
+        sc = self.state_coords
         # noise (D, D, N) → R (N, D, D); y (..., N) → (N, D)
         y_nd = y[:, None] if y.ndim == 1 else y
         return ParallelIntegratedKalmanFilter(
             self.kernel,
             self.X,
             y_nd,
-            t_states,
-            obsid,
-            instid,
-            stateid,
+            sc.t_states,
+            sc.obsid,
+            self._instid_per_state,
+            sc.stateid,
             self.noise,
             return_v_S=return_v_S,
         )
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        t_states, instid, _obsid, stateid = self._state_coords
+        sc = self.state_coords
         return ParallelIntegratedRTSSmoother(
             self.kernel,
-            t_states,
-            stateid,
-            instid,
+            sc.t_states,
+            sc.stateid,
+            self._instid_per_state,
             kalman_results,
         )
