@@ -1,16 +1,17 @@
 from __future__ import annotations
+
 from typing import Any
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-
 from tinygp.helpers import JAXArray
 from tinygp.solvers.quasisep.solver import QuasisepSolver
-from smolgp.kernels.base import StateSpaceModel
 
+from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.parallel.kalman import ParallelKalmanFilter
 from smolgp.solvers.parallel.rts import ParallelRTSSmoother
+from smolgp.solvers.state_coords import StateCoords
 
 
 class ParallelStateSpaceSolver(eqx.Module):
@@ -22,6 +23,7 @@ class ParallelStateSpaceSolver(eqx.Module):
     X: JAXArray
     kernel: StateSpaceModel
     noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
+    state_coords: StateCoords
 
     def __init__(
         self,
@@ -39,6 +41,7 @@ class ParallelStateSpaceSolver(eqx.Module):
         self.kernel = kernel
         self.X = X
         self.noise = noise
+        self.state_coords = StateCoords.instantaneous(kernel.coord_to_sortable(X))
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
@@ -72,7 +75,7 @@ class ParallelStateSpaceSolver(eqx.Module):
         """
 
         # Kalman filtering
-        kalman_results = self.Kalman(y, return_v_S=True)
+        kalman_results = self.Kalman(y, return_v_S=return_v_S)
         if return_v_S:
             m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
             v_S = (v, S)
@@ -85,13 +88,12 @@ class ParallelStateSpaceSolver(eqx.Module):
         _, m_smoothed, P_smoothed = rts_results
 
         # Pack-up results and return
-        t_states = self.kernel.coord_to_sortable(self.X)
         conditioned_states = (
             (m_predicted, P_predicted),
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         )
-        return t_states, conditioned_states, v_S
+        return self.state_coords, conditioned_states, v_S
 
     @jax.jit
     def predict(self, X_test, conditioned_results) -> JAXArray:
@@ -121,7 +123,7 @@ class ParallelStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         ) = conditioned_states
-        t_states, instid, obsid, stateid = state_coords
+        t_states = state_coords.t_states
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)
@@ -159,7 +161,9 @@ class ParallelStateSpaceSolver(eqx.Module):
             Kalman prediction from most recent
             filtered (not smoothed) state
             """
-            dt = X_test[ktest] - self.X[k]
+            # Use the sortable timelines, not raw X/X_test -- those may be
+            # tuples like (t, texp, id), where [k] would index the tuple.
+            dt = t_test[ktest] - t_states[k]
             m_k = m_filtered[k]
             P_k = P_filtered[k]
             A_star = A(0, dt)  # transition matrix from t_k to t_star
@@ -188,8 +192,8 @@ class ParallelStateSpaceSolver(eqx.Module):
                 k_next
             ]  # RTS smoothed covariance at next data point
 
-            # Time-lag between states
-            dt = self.X[k_next] - X_test[ktest]
+            # Time-lag between states (sortable timelines, see predict())
+            dt = t_states[k_next] - t_test[ktest]
 
             # Transition matrix for this step
             A_k = A(0, dt)
