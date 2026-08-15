@@ -6,16 +6,19 @@ import matplotlib.pyplot as plt
 colors = {"SSM" : "#1f77b4",
           "QSM" : "#ff7f0e", 
           "GP"  : "#2ca02c", 
+          "pQSM": "#d62728",
           "pSSM": "#6A0E95"
           }
 markers = {"SSM" : "o",
            "QSM" : "s", 
            "GP"  : "D", 
+           "pQSM": "v",
            "pSSM": "*"
           }
 markersize = {"SSM" : 8,
               "QSM" : 6, 
               "GP"  : 6, 
+              "pQSM": 8,
               "pSSM": 10,
           }
 
@@ -47,7 +50,7 @@ def plot_benchmark(
     ax=None,
     savefig=None,
     scale=True,
-    powers={"SSM": 1, "QSM": 1, "GP": 3, "pSSM": 1},
+    powers={"SSM": 1, "QSM": 1, "GP": 3, "pQSM": 1, "pSSM": 1},
     labels=None,
 ):
     """
@@ -59,7 +62,7 @@ def plot_benchmark(
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(6, 6), sharex=True)
 
-    for name in runtimes:
+    for name in sorted(runtimes):
         runtime_array = jnp.array(runtimes[name])
         mean_runtime = runtime_array[:, 0]
         std_runtime = runtime_array[:, 1]
