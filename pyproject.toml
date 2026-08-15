@@ -43,20 +43,7 @@ docs = [
 #    "numpyro",
 #    "jaxopt",
 ]
-cuda = ["jax[cuda12]"] # for benchmarking on GPU
-
-# Optional dependencies are for extra functionality users may want
-[project.optional-dependencies]
-cuda12 = ["jax[cuda12]"]
-cuda13 = ["jax[cuda13]"]
-
-[tool.uv]
-conflicts = [
-    [
-    {group = "cuda12"}, 
-    {group = "cuda13"}
-    ]
-]
+cuda = ["jax[cuda13]"] # for benchmarking on GPU
 
 [build-system]
 requires = ["hatchling >= 1.26"]
