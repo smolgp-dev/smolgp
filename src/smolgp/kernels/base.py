@@ -1396,6 +1396,12 @@ class Matern(StateSpaceModel):
 
         Q_c = \sigma^2 \frac{[(d-1)!]^2}{(2d-2)!} (2\lambda)^{2d-1}.
 
+    For :math:`\nu = 1/2, 3/2,` and :math:`5/2`, the dedicated :class:`Exp`,
+    :class:`Matern32`, and :class:`Matern52` classes are defined explicitly
+    in this module and should be preferred. This generic class is intended
+    for higher half-integer orders (:math:`\nu = 7/2, 9/2,` etc.) for which
+    no dedicated class exists.
+
     Args:
         nu: The smoothness parameter :math:`\nu` (must be half-integer).
         scale: The parameter :math:`\ell`.
