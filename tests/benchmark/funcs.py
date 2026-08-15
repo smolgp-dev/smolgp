@@ -5,6 +5,9 @@ import jax.numpy as jnp
 
 SAMPLE_KEY = jax.random.PRNGKey(0)
 SAMPLE_SHAPE = (10,)
+# Prior draws have no measurement error; a small shared jitter keeps the
+# dense Cholesky well conditioned and is applied identically to all three.
+PRIOR_JITTER = 1e-6
 
 def unpack_idata(data):
     t_train = data[0, :]
@@ -100,31 +103,37 @@ def gp_pred(t_test, gp_gp, y_train):
     return jnp.array([mu, var])
 
 #################### SAMPLE ####################
-def ss_sample(data, kernel):
-    t_train, y_train, yerr = unpack_data(data)
-    gp_ss = smolgp.GaussianProcess(kernel, t_train, noise=yerr**2)
-    _llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+#################### SAMPLE (PRIOR) ####################
+# A prior draw has no training data, so the only size parameter is M, the
+# number of coordinates the realization is drawn at. These take the sample
+# coordinates directly rather than a (t, y, yerr) dataset.
+def ss_sample_prior(t_sample, kernel):
+    gp_ss = smolgp.GaussianProcess(kernel, t_sample, noise=PRIOR_JITTER)
+    return gp_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
 
-def qs_sample(data, kernel):
-    t_train, y_train, yerr = unpack_data(data)
-    gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
-    _llh, condGP_qs = gp_qs.condition(y_train)
+def qs_sample_prior(t_sample, kernel):
+    gp_qs = tinygp.GaussianProcess(kernel, t_sample, diag=PRIOR_JITTER)
+    return gp_qs.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def gp_sample_prior(t_sample, kernel):
+    gp_gp = tinygp.GaussianProcess(kernel, t_sample, diag=PRIOR_JITTER)
+    return gp_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+#################### SAMPLE (POSTERIOR) ####################
+# Mirrors the predict benchmark exactly: condition on N training points, then
+# draw at M = 100N test coordinates. Same signature as the *_pred funcs so
+# run_pred_benchmark can drive these unchanged.
+def ss_sample_post(t_test, gp_ss, y_train):
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE, X_test=t_test)
+
+def qs_sample_post(t_test, gp_qs, y_train):
+    _llh, condGP_qs = gp_qs.condition(y_train, t_test)
     return condGP_qs.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
 
-def gp_sample(data, kernel):
-    t_train, y_train, yerr = unpack_data(data)
-    gp_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
-    _llh, condGP_gp = gp_gp.condition(y_train)
+def gp_sample_post(t_test, gp_gp, y_train):
+    _llh, condGP_gp = gp_gp.condition(y_train, t_test)
     return condGP_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
-
-def pss_sample(data, kernel):
-    t_train, y_train, yerr = unpack_data(data)
-    gp_ss = smolgp.GaussianProcess(
-        kernel, t_train, noise=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
-    )
-    _llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
 
 
 
@@ -180,22 +189,24 @@ def igp_pred(t_test, gp_gp, y_train):
     return jnp.array([mu, var])
 
 #################### SAMPLE ####################
-def iss_sample(data, kernel):
-    X_train, y_train, yerr = unpack_idata(data)
-    gp_ss = smolgp.GaussianProcess(kernel, X_train, noise=yerr**2)
-    _llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+#################### SAMPLE (PRIOR), INTEGRATED ####################
+# The sample coordinates arrive as a full (t, texp, instid) tuple, so the draw
+# represents what an exposure-integrating instrument would have recorded.
+def iss_sample_prior(X_sample, kernel):
+    gp_ss = smolgp.GaussianProcess(kernel, X_sample, noise=PRIOR_JITTER)
+    return gp_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
 
-def igp_sample(data, kernel):
-    X_train, y_train, yerr = unpack_idata(data)
-    gp_gp = tinygp.GaussianProcess(kernel, X_train, diag=yerr**2)
-    _llh, condGP_gp = gp_gp.condition(y_train)
+def igp_sample_prior(X_sample, kernel):
+    gp_gp = tinygp.GaussianProcess(kernel, X_sample, diag=PRIOR_JITTER)
+    return gp_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+#################### SAMPLE (POSTERIOR), INTEGRATED ####################
+def iss_sample_post(t_test, gp_ss, y_train):
+    X_test = (t_test, jnp.zeros_like(t_test), jnp.zeros_like(t_test).astype(int))
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE, X_test=X_test)
+
+def igp_sample_post(t_test, gp_gp, y_train):
+    X_test = (t_test, jnp.zeros_like(t_test), jnp.zeros_like(t_test).astype(int))
+    _llh, condGP_gp = gp_gp.condition(y_train, X_test)
     return condGP_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
-
-def ipss_sample(data, kernel):
-    X_train, y_train, yerr = unpack_idata(data)
-    gp_ss = smolgp.GaussianProcess(
-        kernel, X_train, noise=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
-    )
-    _llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
