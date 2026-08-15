@@ -56,17 +56,27 @@ class ParallelStateSpaceSolver(eqx.Module):
             self.kernel, self.X, _NoiseAdapter(self.noise)
         ).normalization()
 
+    def _to_state_order(self, *arrays: JAXArray) -> tuple[JAXArray, ...]:
+        """Gather per-observation arrays into the solver's (sorted) state
+        order; see :meth:`smolgp.solvers.solver.StateSpaceSolver._to_state_order`."""
+        obsid = self.state_coords.obsid
+        return tuple(
+            jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays
+        )
+
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
         y_nd = y[:, None] if y.ndim == 1 else y
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
         return ParallelKalmanFilter(
-            self.kernel, self.X, y_nd, self.noise, return_v_S=return_v_S
+            self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        return ParallelRTSSmoother(self.kernel, self.X, kalman_results)
+        (X_sorted,) = self._to_state_order(self.X)
+        return ParallelRTSSmoother(self.kernel, X_sorted, kalman_results)
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """

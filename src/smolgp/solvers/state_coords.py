@@ -48,14 +48,37 @@ class StateCoords(eqx.Module):
     stateid: JAXArray
 
     @classmethod
-    def instantaneous(cls, t_states: JAXArray) -> StateCoords:
+    def instantaneous(cls, t_states: JAXArray, *, sort: bool = True) -> StateCoords:
         """The degenerate ``StateCoords`` for an instantaneous kernel: one
-        state per observation, all carrying data, all on one instrument."""
+        state per observation, all carrying data, all on one instrument.
+
+        The state timeline is sorted (every solver steps forward in time, and
+        :meth:`predict`'s ``searchsorted`` bracketing assumes it), with
+        ``obsid`` recording which observation each state came from -- the same
+        role it plays for an integrated kernel, so the usual
+        ``sort-by-obsid`` machinery (:meth:`instid_per_state`,
+        :meth:`~smolgp.gp.ConditionedStates.project_at_data`,
+        :func:`~smolgp.solvers.sample.data_order_indices`) maps results back
+        to input order unchanged. Already-sorted input yields the identity
+        permutation, so this is a no-op in the common case.
+
+        The sort is *stable*, so observations sharing a timestamp keep their
+        input order relative to each other.
+
+        Args:
+            t_states: the sortable coordinate of each observation, in input
+                order (not necessarily sorted).
+            sort: set ``False`` only if ``t_states`` is known to be sorted and
+                the identity ``obsid`` is wanted verbatim.
+        """
         K = t_states.shape[0]
+        order = (
+            jnp.argsort(t_states, stable=True) if sort else jnp.arange(K, dtype=int)
+        )
         return cls(
-            t_states=t_states,
+            t_states=t_states[order],
             instid=jnp.zeros(K, dtype=int),
-            obsid=jnp.arange(K, dtype=int),
+            obsid=order,
             stateid=jnp.ones(K, dtype=int),
         )
 

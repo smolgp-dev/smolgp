@@ -86,15 +86,31 @@ class StateSpaceSolver(eqx.Module):
             self.kernel, self.X, _NoiseAdapter(self.noise)
         ).normalization()
 
+    def _to_state_order(self, *arrays: JAXArray) -> tuple[JAXArray, ...]:
+        """Gather per-observation arrays into the solver's (sorted) state order.
+
+        ``self.X`` and everything derived from it (``y``, ``noise``) are kept
+        in the caller's input order; the filter/smoother step through time, so
+        they need the sorted order instead. ``state_coords.obsid`` is exactly
+        that permutation. Results come back in state order and are mapped
+        back by the usual sort-by-``obsid`` machinery.
+        """
+        obsid = self.state_coords.obsid
+        return tuple(
+            jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays
+        )
+
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         y_nd = y[:, None] if y.ndim == 1 else y
-        # Pass the FULL self.X (not self.t_states): the filter derives its own
+        # Pass the FULL X (not just t_states): the filter derives its own
         # sortable timeline via coord_to_sortable, but also needs the
         # unreduced coordinates to evaluate an observation model that depends
-        # on more than the sort key (e.g. a per-output id channel).
+        # on more than the sort key (e.g. a per-output id channel). Sorting X
+        # here is what makes that derived timeline monotonic.
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
         return KalmanFilter(
-            self.kernel, self.X, y_nd, self.noise, return_v_S=return_v_S
+            self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )
 
     def RTS(self, kalman_results) -> Any:
@@ -151,11 +167,13 @@ class StateSpaceSolver(eqx.Module):
         y_dummy = jnp.zeros((N, D))
         _m_f, P_filtered, _m_p, P_predicted = self.Kalman(y_dummy)
 
-        # 2. y-independent gains, ONCE.
+        # 2. y-independent gains, ONCE. Everything here is indexed by state,
+        #    so the per-observation arrays are gathered into state order too.
+        X_sorted, noise_sorted = self._to_state_order(self.X, self.noise)
         A_all, H_all, K_all = kalman_gains(
             self.kernel.transition_matrix,
-            jax.vmap(self.kernel.observation_model)(self.X),
-            self.noise,
+            jax.vmap(self.kernel.observation_model)(X_sorted),
+            noise_sorted,
             self.t_states,
             P_predicted,
         )
@@ -165,8 +183,11 @@ class StateSpaceSolver(eqx.Module):
 
         # 3. Batched mean-path recursion, O(M) cheap.
         m0 = jnp.zeros(self.kernel.dimension)
+        (y_batch_sorted,) = self._to_state_order(
+            jnp.swapaxes(y_batch_nd, 0, 1)
+        )  # (M, N, D) -> gather on N -> back to (M, N, D)
         m_filtered_batch, m_predicted_batch = kalman_filter_batched_mean(
-            A_all, H_all, K_all, y_batch_nd, m0
+            A_all, H_all, K_all, jnp.swapaxes(y_batch_sorted, 0, 1), m0
         )
         return rts_smoother_batched_mean(G_all, m_filtered_batch, m_predicted_batch)
 

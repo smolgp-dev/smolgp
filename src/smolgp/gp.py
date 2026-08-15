@@ -1079,7 +1079,7 @@ class GaussianProcess(eqx.Module):
                 t_test = self.kernel.coord_to_sortable(X_test)
                 N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
                 state_coords_test = StateCoords.instantaneous(t_test)
-                positions = jnp.arange(N_out)
+                positions = jnp.argsort(state_coords_test.obsid)
 
                 def _one_sample(sample_key: jax.random.KeyArray) -> JAXArray:
                     x_traj = sample_prior_trajectory(
