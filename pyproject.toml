@@ -16,11 +16,15 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
+
 dependencies = [
     "equinox>=0.13.1",
     "jax>=0.6.2",
-    "tinygp>=0.3.1",
+    "tinygp>=0.3.2.dev0",
 ]
+
+[tool.uv.sources]
+tinygp = { git = "https://github.com/dfm/tinygp.git", branch = "main" }
 
 # Dependency groups are for development, testing, documentation, etc.
 [dependency-groups]
