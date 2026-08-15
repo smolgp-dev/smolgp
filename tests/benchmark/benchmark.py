@@ -8,7 +8,10 @@ import jax.numpy as jnp
 import tinygp
 import smolgp
 from funcs import unpack_data, unpack_idata
-from .. import utils
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import utils
 
 import re
 import psutil

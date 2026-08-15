@@ -45,6 +45,12 @@ def pss_llh(data, kernel):
     )
     return gp_ss.log_probability(y_train)
 
+def pqs_llh(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2, 
+                                   solver=tinygp.solvers.QuasisepSolver, parallel=True)
+    return gp_qs.log_probability(y_train)
+
 #################### CONDITION ####################
 def ss_cond(data, kernel):
     t_train, y_train, yerr = unpack_data(data)
@@ -71,6 +77,13 @@ def pss_cond(data, kernel):
     )
     llh, condGP_ss = gp_ss.condition(y_train)
     return jnp.array([condGP_ss.loc, condGP_ss.variance])
+
+def pqs_cond(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2, 
+                                   solver=tinygp.solvers.QuasisepSolver, parallel=True)
+    llh, condGP_qs = gp_qs.condition(y_train)
+    return jnp.array([condGP_qs.loc, condGP_qs.variance])
 
 #################### PREDICTION ####################
 ## TODO?: Only time the actual prediction part (use condGP here)

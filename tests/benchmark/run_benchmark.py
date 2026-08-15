@@ -64,22 +64,28 @@ if __name__ == "__main__":
         print("Running benchmark on GPU")
         machine = "gpu"
         if args.int:
-            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e6}
+            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pQSM": 0, "pSSM": 1e6}
         else:
-            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pSSM": 1e7}
+            cutoffs = {"GP": 0, "SSM": 0, "QSM": 0, "pQSM": 1e7, "pSSM": 1e7}
     else:
         # jax.config.update("jax_platform_name", "cpu")
         print("Running benchmark on CPU")
         machine = "cpu"
-        cutoffs = {"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pSSM": 0}
+        cutoffs = {"GP": 6e4, "SSM": 1e7, "QSM": 1e7, "pQSM": 0, "pSSM": 0}
 
     ## Setup function dictionaries
     llh_funcs = [
-        {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pSSM": pss_llh},
+        {"SSM": ss_llh, "QSM": qs_llh, "GP": gp_llh, "pQSM": pqs_llh, "pSSM": pss_llh},
         {"SSM": iss_llh, "GP": igp_llh, "pSSM": ipss_llh},
     ]
     cond_funcs = [
-        {"SSM": ss_cond, "QSM": qs_cond, "GP": gp_cond, "pSSM": pss_cond},
+        {
+            "SSM": ss_cond,
+            "QSM": qs_cond,
+            "GP": gp_cond,
+            "pQSM": pqs_cond,
+            "pSSM": pss_cond,
+        },
         {"SSM": iss_cond, "GP": igp_cond, "pSSM": ipss_cond},
     ]
     pred_funcs = [
@@ -116,6 +122,7 @@ if __name__ == "__main__":
             "QSM": qsm_kernel,
             "GP": gp_kernel,
             "pSSM": ssm_kernel,
+            "pQSM": qsm_kernel,
         }
     ################ Data properties ####################
     yerr = 0.3
@@ -166,9 +173,9 @@ if __name__ == "__main__":
         funcs = pred_funcs[int(args.int)]
         if args.gpu:
             # cutoffs={"GP": 3e5, "SSM": 3e5, "QSM": 3e5, "pSSM": 3e5} # these are now cutoffs in M
-            cutoffs = {"GP": 0, "SSM": 1e6, "QSM": 0}  # these are now cutoffs in M
+            cutoffs = {"GP": 0, "SSM": 1e7, "QSM": 0}  # these are now cutoffs in M
         else:
-            cutoffs = {"GP": 1e6, "SSM": 1e6, "QSM": 1e6}  # these are now cutoffs in M
+            cutoffs = {"GP": 1e6, "SSM": 1e7, "QSM": 1e6}  # these are now cutoffs in M
 
         # M is set to be 100x N inside run_pred_benchmark
         Ns, runtime, memory, outputs = run_pred_benchmark(
