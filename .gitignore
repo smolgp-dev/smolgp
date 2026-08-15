@@ -10,6 +10,7 @@ __pycache__
 *.egg-info
 uv.lock
 docs/_build
+tests/benchmark/results/
 
 .python-version
 .DS_Store
