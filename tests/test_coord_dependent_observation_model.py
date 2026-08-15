@@ -143,11 +143,19 @@ def test_coord_dependent_H_serial_and_parallel_agree():
         assert dv < 1e-8, f"[outputid={oid}] var mismatch: {dv:.3e}"
 
 
-def test_coord_dependent_H_sample_matches_predict():
+@pytest.mark.parametrize("solver,name", PLAIN_SOLVERS)
+def test_coord_dependent_H_sample_matches_predict(solver, name):
     """sample() drives the same observation model through a different code
-    path (sample_prior_trajectory + condition_batched_mean), so check its
-    empirical moments against predict()'s analytic ones."""
-    gp, y = _build(None, noise_var=0.01)
+    path again, so check its empirical moments against predict()'s analytic
+    ones -- for both solvers, which do *not* share that path: the sequential
+    one uses ``condition_batched_mean``, while the parallel one falls back to
+    a per-sample ``vmap(solver.condition)`` (see ``_sample``'s docstring).
+
+    This also pins the tuple-``X_test`` passthrough: for a non-integrated
+    kernel the third channel is a real coordinate the observation model
+    reads, not a probe-group label, so ``sample()`` must leave it alone.
+    """
+    gp, y = _build(solver, noise_var=0.01)
     _, condgp = gp.condition(y)
 
     ts = jnp.linspace(2.0, 18.0, 12)
@@ -160,15 +168,33 @@ def test_coord_dependent_H_sample_matches_predict():
     scale = float(jnp.sqrt(jnp.max(var_pred)))
     dmean = float(jnp.max(jnp.abs(jnp.mean(samples, axis=-1) - mu_pred)))
     dvar = float(jnp.max(jnp.abs(jnp.var(samples, axis=-1) - var_pred)))
-    assert dmean < 0.15 * scale, f"sample mean vs predict mean: {dmean:.3e}"
+    assert dmean < 0.15 * scale, f"[{name}] sample mean vs predict mean: {dmean:.3e}"
     assert dvar < 0.25 * float(jnp.max(var_pred)), (
-        f"sample var vs predict var: {dvar:.3e}"
+        f"[{name}] sample var vs predict var: {dvar:.3e}"
+    )
+
+    # The id channel must still be respected in the sampled output: asking for
+    # the amp1 output instead must scale the whole draw by amp1/amp2.
+    X_other = (ts, zeros, jnp.zeros_like(ts, dtype=int))
+    samples_other = condgp.sample(
+        jax.random.PRNGKey(0), shape=(4000,), X_test=X_other
+    )
+    ratio_err = float(
+        jnp.max(
+            jnp.abs(
+                jnp.mean(samples_other, axis=-1) * (AMP2 / AMP1)
+                - jnp.mean(samples, axis=-1)
+            )
+        )
+    )
+    assert ratio_err < 0.15 * scale, (
+        f"[{name}] sampled outputs must differ by amp2/amp1: {ratio_err:.3e}"
     )
 
 
 if __name__ == "__main__":
     for s, n in PLAIN_SOLVERS:
         test_coord_dependent_H_conditions_and_predicts(s, n)
+        test_coord_dependent_H_sample_matches_predict(s, n)
     test_coord_dependent_H_serial_and_parallel_agree()
-    test_coord_dependent_H_sample_matches_predict()
     print("All coordinate-dependent observation model tests passed.")
