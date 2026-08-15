@@ -1,6 +1,6 @@
 [project]
 name = "smolgp"
-version = "0.2.0"
+version = "0.3.0"
 description = "Gaussian Process State Space Models in Python/JAX"
 authors = [{ name = "Ryan Rubenzahl", email = "rrubenzahl@gmail.com" },
            { name = "Soichiro Hattori", email = "soichiro.hattori@gmail.com"}]
@@ -28,6 +28,7 @@ dev = [
     "astropy>=6.1.7",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.6",
+    "sphinx-autobuild>=2025.8.25",
 ]
 test = ["pytest", "pytest-xdist", "pytest-cov"]
 docs = [
