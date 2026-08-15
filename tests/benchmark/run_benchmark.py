@@ -1,19 +1,40 @@
-import logging
 import argparse
+import logging
+
 import jax
 import jax.numpy as jnp
-
 import tinygp
-import smolgp
-from benchmark import run_benchmark, run_pred_benchmark
-from benchmark import save_benchmark_data
+from benchmark import run_benchmark, run_pred_benchmark, save_benchmark_data
+from funcs import (
+    gp_cond,
+    gp_llh,
+    gp_pred,
+    gp_sample,
+    igp_cond,
+    igp_llh,
+    igp_pred,
+    igp_sample,
+    ipss_cond,
+    ipss_llh,
+    ipss_sample,
+    iss_cond,
+    iss_llh,
+    iss_pred,
+    iss_sample,
+    pss_cond,
+    pss_llh,
+    pss_sample,
+    qs_cond,
+    qs_llh,
+    qs_pred,
+    qs_sample,
+    ss_cond,
+    ss_llh,
+    ss_pred,
+    ss_sample,
+)
 
-from funcs import ss_llh, qs_llh, gp_llh, pss_llh
-from funcs import ss_cond, qs_cond, gp_cond, pss_cond
-from funcs import ss_pred, qs_pred, gp_pred
-from funcs import iss_llh, igp_llh, ipss_llh
-from funcs import iss_cond, igp_cond, ipss_cond
-from funcs import iss_pred, igp_pred
+import smolgp
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -25,7 +46,9 @@ logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark smolgp/tinygp")
     parser.add_argument(
-        "func", type=str, help="Function to benchmark: 'llh' or 'cond'."
+        "func",
+        type=str,
+        help="Function to benchmark: 'llh', 'cond', 'sample', or 'pred'.",
     )
     parser.add_argument("--gpu", action="store_true", help="Run on GPU (default: CPU).")
     parser.add_argument(
@@ -63,6 +86,10 @@ if __name__ == "__main__":
         {"SSM": ss_pred, "QSM": qs_pred, "GP": gp_pred},
         {"SSM": iss_pred, "GP": igp_pred},
     ]
+    sample_funcs = [
+        {"SSM": ss_sample, "QSM": qs_sample, "GP": gp_sample, "pSSM": pss_sample},
+        {"SSM": iss_sample, "GP": igp_sample, "pSSM": ipss_sample},
+    ]
     ################### True GP parameters ######################
     S = 2.36
     w = 0.0195
@@ -97,7 +124,7 @@ if __name__ == "__main__":
     if args.int:
         print("Using integrated data with texp =", texp, "and readout =", readout)
     ############################################################
-    if args.func in ["llh", "cond"]:
+    if args.func in ["llh", "cond", "sample"]:
         if args.func == "llh":
             print("Benchmarking likelihood...")
             funcs = llh_funcs[int(args.int)]
@@ -108,6 +135,13 @@ if __name__ == "__main__":
         elif args.func == "cond":
             print("Benchmarking condition...")
             funcs = cond_funcs[int(args.int)]
+            n_repeat = 7
+            N_N = 17
+            logN_min = 1
+            logN_max = 7
+        elif args.func == "sample":
+            print("Benchmarking sample (fixed shape=(10,) draws)...")
+            funcs = sample_funcs[int(args.int)]
             n_repeat = 7
             N_N = 17
             logN_min = 1
@@ -152,7 +186,7 @@ if __name__ == "__main__":
             exposure_quantities=(texp, readout) if args.int else None,
         )
     else:
-        raise ValueError("Argument must be one of 'llh', 'cond', or 'pred'.")
+        raise ValueError("Argument must be one of 'llh', 'cond', 'sample', or 'pred'.")
 
     isinst = "_int" if args.int else ""
     out_filename = f"results/{machine}_{args.func}{isinst}_benchmark.pkl"

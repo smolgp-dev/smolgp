@@ -1,6 +1,10 @@
 import tinygp
 import smolgp
+import jax
 import jax.numpy as jnp
+
+SAMPLE_KEY = jax.random.PRNGKey(0)
+SAMPLE_SHAPE = (10,)
 
 def unpack_idata(data):
     t_train = data[0, :]
@@ -82,6 +86,33 @@ def gp_pred(t_test, gp_gp, y_train):
     mu, var = gp_gp.predict(y_train, t_test, return_var=True)
     return jnp.array([mu, var])
 
+#################### SAMPLE ####################
+def ss_sample(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_ss = smolgp.GaussianProcess(kernel, t_train, noise=yerr**2)
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def qs_sample(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_qs = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    _llh, condGP_qs = gp_qs.condition(y_train)
+    return condGP_qs.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def gp_sample(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    _llh, condGP_gp = gp_gp.condition(y_train)
+    return condGP_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def pss_sample(data, kernel):
+    t_train, y_train, yerr = unpack_data(data)
+    gp_ss = smolgp.GaussianProcess(
+        kernel, t_train, noise=yerr**2, solver=smolgp.solvers.ParallelStateSpaceSolver
+    )
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
 
 
 ######################################## INTEGRATED DATA FUNCTIONS ########################################
@@ -134,3 +165,24 @@ def igp_pred(t_test, gp_gp, y_train):
     X_test = (t_test, jnp.zeros_like(t_test), jnp.zeros_like(t_test).astype(int))
     mu, var = gp_gp.predict(y_train, X_test, return_var=True)
     return jnp.array([mu, var])
+
+#################### SAMPLE ####################
+def iss_sample(data, kernel):
+    X_train, y_train, yerr = unpack_idata(data)
+    gp_ss = smolgp.GaussianProcess(kernel, X_train, noise=yerr**2)
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def igp_sample(data, kernel):
+    X_train, y_train, yerr = unpack_idata(data)
+    gp_gp = tinygp.GaussianProcess(kernel, X_train, diag=yerr**2)
+    _llh, condGP_gp = gp_gp.condition(y_train)
+    return condGP_gp.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
+
+def ipss_sample(data, kernel):
+    X_train, y_train, yerr = unpack_idata(data)
+    gp_ss = smolgp.GaussianProcess(
+        kernel, X_train, noise=yerr**2, solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
+    )
+    _llh, condGP_ss = gp_ss.condition(y_train)
+    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE)
