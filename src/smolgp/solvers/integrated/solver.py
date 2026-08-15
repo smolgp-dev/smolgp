@@ -10,9 +10,18 @@ from tinygp.solvers.quasisep.solver import QuasisepSolver
 
 from smolgp.helpers import get_smoothing_gain
 from smolgp.kernels.base import StateSpaceModel
-from smolgp.solvers.integrated.kalman import IntegratedKalmanFilter
+from smolgp.solvers.integrated.kalman import (
+    IntegratedKalmanFilter,
+    integrated_kalman_filter_batched_mean,
+    integrated_kalman_gains,
+)
 from smolgp.solvers.integrated.predict_exposure import predict_exposure
-from smolgp.solvers.integrated.rts import IntegratedRTSSmoother
+from smolgp.solvers.integrated.rts import (
+    IntegratedRTSSmoother,
+    integrated_rts_gains,
+    integrated_rts_smoother_batched_mean,
+)
+from smolgp.solvers.state_coords import StateCoords
 
 
 class IntegratedStateSpaceSolver(eqx.Module):
@@ -24,7 +33,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
     X: JAXArray
     kernel: StateSpaceModel
     noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
-    state_coords: JAXArray
+    state_coords: StateCoords
 
     def __init__(
         self,
@@ -73,8 +82,12 @@ class IntegratedStateSpaceSolver(eqx.Module):
         obsid = obsid[sortidx]
         stateid = stateid[sortidx]  # 0 for t_s, 1 for t_e
 
-        # Pack-up state_coords for Kalman and RTS functions
-        self.state_coords = (t_states, instid, obsid, stateid)
+        # Pack-up state_coords for Kalman and RTS functions. Note instid stays
+        # per-*observation* (length N) while the others are per-*state*
+        # (length K=2N) -- see StateCoords' own docstring.
+        self.state_coords = StateCoords(
+            t_states=t_states, instid=instid, obsid=obsid, stateid=stateid
+        )
 
     def normalization(self) -> JAXArray:
         # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
@@ -91,26 +104,26 @@ class IntegratedStateSpaceSolver(eqx.Module):
 
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
-        t_states, instid, obsid, stateid = self.state_coords
+        sc = self.state_coords
         # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
         y_nd = y[:, None] if y.ndim == 1 else y
         return IntegratedKalmanFilter(
             self.kernel,
             self.X,
             y_nd,
-            t_states,
-            obsid,
-            instid,
-            stateid,
+            sc.t_states,
+            sc.obsid,
+            sc.instid,
+            sc.stateid,
             self.noise,
             return_v_S=return_v_S,
         )
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
-        t_states, instid, obsid, stateid = self.state_coords
+        sc = self.state_coords
         return IntegratedRTSSmoother(
-            self.kernel, t_states, obsid, instid, stateid, kalman_results
+            self.kernel, sc.t_states, sc.obsid, sc.instid, sc.stateid, kalman_results
         )
 
     def condition(self, y, return_v_S=False) -> JAXArray:
@@ -139,6 +152,63 @@ class IntegratedStateSpaceSolver(eqx.Module):
         )
 
         return self.state_coords, conditioned_states, v_S
+
+    def condition_batched_mean(self, y_batch: JAXArray) -> JAXArray:
+        """
+        Batched-mean-path variant of condition() for M residual/observation
+        arrays sharing this solver's (kernel, X, noise). See
+        StateSpaceSolver.condition_batched_mean for the general idea; this
+        additionally threads the reset-matrix bookkeeping through
+        integrated_kalman_gains/integrated_kalman_filter_batched_mean.
+
+        Args:
+            y_batch: shape (M, N) or (M, N, D)
+
+        Returns:
+            m_smoothed_batch: shape (M, K, dim)
+        """
+        y_batch_nd = y_batch[:, :, None] if y_batch.ndim == 2 else y_batch
+        _M, N, D = y_batch_nd.shape
+        sc = self.state_coords
+        t_states, instid, obsid, stateid = (
+            sc.t_states,
+            sc.instid,
+            sc.obsid,
+            sc.stateid,
+        )
+
+        # 1. Covariance path, ONCE (dummy y; only P_filtered/P_predicted are used).
+        y_dummy = jnp.zeros((N, D))
+        _m_f, P_filtered, _m_p, P_predicted = self.Kalman(y_dummy)
+
+        # 2. y-independent gains, ONCE.
+        A_aug = self.kernel.transition_matrix
+        H_aug = self.kernel.observation_model
+        RESET = self.kernel.reset_matrix
+        A_all, H_all, K_all, Reset_all = integrated_kalman_gains(
+            A_aug,
+            H_aug,
+            RESET,
+            self.noise,
+            self.X,
+            t_states,
+            obsid,
+            instid,
+            stateid,
+            P_predicted,
+        )
+        G_all = integrated_rts_gains(
+            A_aug, RESET, t_states, obsid, instid, stateid, P_filtered, P_predicted
+        )
+
+        # 3. Batched mean-path recursion, O(M) cheap.
+        m0 = jnp.zeros(self.kernel.dimension)
+        m_filtered_batch, m_predicted_batch = integrated_kalman_filter_batched_mean(
+            A_all, H_all, K_all, Reset_all, obsid, stateid, y_batch_nd, m0
+        )
+        return integrated_rts_smoother_batched_mean(
+            G_all, m_filtered_batch, m_predicted_batch, stateid
+        )
 
     @jax.jit
     def predict(self, X_test, conditioned_results, y=None) -> JAXArray:
@@ -176,7 +246,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
             (m_filtered, P_filtered),
             (m_smoothed, P_smoothed),
         ) = conditioned_states
-        t_states, _instid, _obsid, _stateid = state_coords
+        t_states = state_coords.t_states
 
         # Unpack test coordinates
         t_test = self.kernel.coord_to_sortable(X_test)

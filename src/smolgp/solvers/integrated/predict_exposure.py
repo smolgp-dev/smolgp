@@ -58,7 +58,12 @@ def predict_exposure(
     arrays to stage the final probe mean/variance, so that the GP applies the
     observation model for the correct instrument.
     """
-    t_states, instid, obsid, stateid = state_coords
+    t_states, instid, obsid, stateid = (
+        state_coords.t_states,
+        state_coords.instid,
+        state_coords.obsid,
+        state_coords.stateid,
+    )
     (m_predicted, P_predicted), (m_filtered, P_filtered), (m_smoothed, P_smoothed) = (
         conditioned_states
     )
