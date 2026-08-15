@@ -27,6 +27,7 @@ tutorials/integrated
 tutorials/kernels
 tutorials/optimizing
 tutorials/parallel
+tutorials/sample
 ```
 
 ## Advanced Topics

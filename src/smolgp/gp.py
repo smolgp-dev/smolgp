@@ -16,11 +16,7 @@ import jax.numpy as jnp
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.helpers import (
-    assign_min_instids,
-    check_no_overlap_within_instid,
-    robust_sqrt,
-)
+from smolgp.helpers import assign_min_instids, robust_sqrt
 from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
 from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
@@ -847,10 +843,15 @@ class GaussianProcess(eqx.Module):
         By default (``X_test=None``), samples are drawn at the training coordinates.
         Passing ``X_test`` draws samples at any, possibly out-of-sample, coordinates.
         If the GP is conditioned on exposure-integrated data (``delta>0``), then
-        ``X_test`` needs to be either ``(t, delta)`` or ``(t, delta, instid)``;
-        ``instid`` is only needed if the kernel is instrument-specific. If the
-        kernel is instrument-agnostic, then ``instid`` can be omitted and will be
-        auto-assigned internally for book-keeping purposes.
+        ``X_test`` needs to be either ``(t, delta)`` or ``(t, delta, instid)``.
+
+        For exposure-integrated sample points, ``instid`` says only which
+        instrument project the result as (if the observation model depends on
+        the instrument). As such, overlapping sample points are allowed to have
+        the same ``instid``. Internally, where overlap would not be allowed, we
+        use a separate "probe group" ID to auto-assign each exposure to a
+        non-overlapping integral accumulator. If samples are requested with no
+        ``instid`` given, the default is to project the result as instrument ``0``.
 
         Args:
             key: A ``JAX`` random number key array.
@@ -871,42 +872,25 @@ class GaussianProcess(eqx.Module):
             if ``X_test`` is not given). E.g. ``shape=(M,)`` returns ``M``
             independent draws with shape ``(N_data, M)``.
         """
-        # An exposure-integrated test point's instid plays two distinct roles:
-        #
-        #   1. the "probe group" it accumulates into during the forward
-        #      simulation (bookkeeping only -- windows sharing a group must
-        #      not overlap, or one window's reset clobbers the other's
-        #      in-progress integral), and
-        #   2. the *real instrument* whose observation model projects the
-        #      result, which must be a genuine instrument of this kernel.
-        #
-        # They coincide only when every id is a valid instrument of the
-        # kernel, so they are tracked separately: X_test carries the group
-        # labels, and instid_proj the real instrument per test point.
-        #
-        # num_test_insts must also be concrete here (outside the jit), since
-        # it determines kernel_ext's dimension inside _sample.
+        # Probe-group instid (for non-overlapping integral accumulators) is
+        # always auto-assigned here; the real instrument instid (for the
+        # observation model) defaults to 0 if not given. num_test_insts must
+        # be concrete here since it sizes kernel_ext inside _sample.
         num_test_insts = 0
         instid_proj = None
-        if isinstance(X_test, tuple) and len(X_test) > 1:
+        if (
+            isinstance(X_test, tuple)
+            and len(X_test) > 1
+            and isinstance(self.solver, IntegratedStateSpaceSolver)
+        ):
             t_test, delta_test = X_test[0], X_test[1]
-            if len(X_test) == 2:
-                # No instid given: auto-assign the minimum number of
-                # non-overlapping groups. These are pure bookkeeping labels
-                # and may exceed this kernel's real instrument count, so the
-                # projection falls back to instrument 0 -- correct for any
-                # kernel whose observation model does not vary by instrument
-                # (all built-ins). Pass an explicit instid otherwise.
-                instid_test, num_test_insts = assign_min_instids(t_test, delta_test)
-                instid_proj = jnp.zeros_like(instid_test)
-                X_test = (t_test, delta_test, instid_test)
-            else:
-                # Explicit instid: taken as the real instrument, so it both
-                # groups the windows and selects the observation model.
-                instid_test = jnp.asarray(X_test[2])
-                check_no_overlap_within_instid(t_test, delta_test, instid_test)
-                instid_proj = instid_test
-                num_test_insts = int(jnp.max(instid_test)) + 1
+            instid_group, num_test_insts = assign_min_instids(t_test, delta_test)
+            instid_proj = (
+                jnp.asarray(X_test[2])
+                if len(X_test) > 2
+                else jnp.zeros_like(instid_group)
+            )
+            X_test = (t_test, delta_test, instid_group)
         return self._sample(key, shape, X_test, num_test_insts, instid_proj)
 
     def numpyro_dist(self, **kwargs: Any) -> TinyDistribution:

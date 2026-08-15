@@ -55,64 +55,6 @@ def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
     return jnp.array(instid, dtype=int), next_id
 
 
-def check_no_overlap_within_instid(
-    t: JAXArray, delta: JAXArray, instid: JAXArray
-) -> None:
-    r"""Raise if any two exposure windows sharing an ``instid`` overlap.
-
-    One physical instrument cannot be mid-exposure twice at once, so this is
-    already an implicit fact about real data. It becomes a *checkable*
-    precondition when a user supplies ``instid`` for exposure-integrated
-    **test** points (see :meth:`smolgp.gp.GaussianProcess.sample`), where the
-    id both selects the observation model and picks which augmented "probe"
-    dimension the window accumulates into. Two overlapping windows sharing a
-    dimension would have the second window's reset silently clobber the
-    first's in-progress integral, so this fails loudly instead.
-
-    Uses the same convention as :func:`assign_min_instids`: windows that
-    merely touch (one ends exactly where the next begins) do **not** overlap.
-
-    Zero-width (``delta == 0``, i.e. instantaneous) points are exempt and
-    ignored entirely: they are read out through the ordinary observation
-    model, and their reset is redirected to a shared "trash" dimension by
-    :func:`~smolgp.solvers.sample.merge_exposure_test_coords`, so they can
-    neither clobber nor be clobbered by a genuine exposure sharing their id.
-
-    Args:
-        t: Exposure midpoints, length ``M``.
-        delta: Exposure widths, length ``M``.
-        instid: Instrument id per exposure, length ``M``.
-
-    Raises:
-        ValueError: if two windows sharing an ``instid`` overlap, naming the
-            offending pair.
-    """
-    a = [float(x) for x in (t - delta / 2)]
-    b = [float(x) for x in (t + delta / 2)]
-    ids = [int(x) for x in instid]
-    widths = [float(x) for x in delta]
-
-    by_inst: dict[int, list[int]] = {}
-    for i, g in enumerate(ids):
-        if widths[i] > 0:  # delta == 0 points are exempt (see above)
-            by_inst.setdefault(g, []).append(i)
-
-    for g, idxs in sorted(by_inst.items()):
-        # Within one instrument, sort by start time; only adjacent pairs can
-        # be the first overlap, so one linear sweep suffices.
-        idxs.sort(key=lambda i: a[i])
-        for prev, cur in zip(idxs, idxs[1:]):
-            if a[cur] < b[prev]:
-                raise ValueError(
-                    f"Exposure windows {prev} and {cur} both have instid={g} but "
-                    f"overlap: [{a[prev]:g}, {b[prev]:g}] and [{a[cur]:g}, {b[cur]:g}]. "
-                    "One instrument cannot record two overlapping exposures. Give "
-                    "them distinct instid values, or omit instid entirely (pass "
-                    "X_test=(t, delta)) to have non-overlapping groups assigned "
-                    "automatically."
-                )
-
-
 def block_view(A, b):
     Nb, Mb = A.shape
     assert Nb % b == 0 and Mb % b == 0
