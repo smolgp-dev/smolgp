@@ -19,3 +19,4 @@ docs/_build
 docs/jupyter_execute/
 tests/benchmark/results/
 tests/benchmark/data/
+tests/benchmark/logs/
