@@ -34,6 +34,8 @@ from smolgp.solvers.sample import (
     project_trajectory_at_positions,
     sample_prior_trajectory,
 )
+from smolgp.solvers.integrated.rts import integrated_rts_gains
+from smolgp.solvers.rts import rts_gains
 from smolgp.solvers.state_coords import StateCoords
 
 if TYPE_CHECKING:
@@ -523,19 +525,145 @@ class GaussianProcess(eqx.Module):
 
     @property
     def variance(self) -> JAXArray:
+        r"""The marginal variance at each coordinate, i.e.
+        :math:`\mathrm{diag}(\texttt{covariance})`.
+
+        If conditioned, this is the posterior variance at this GP's coordinates.
+        Otherwise it is the prior variance plus the observation noise.
+
+        Computed directly rather than constructing the full covariance
+        matrix and taking its diagonal (more expensive).
         """
-        If conditioned, this will be the variance at the data points
-        Otherwise, it is just the prior variance.
-        """
-        return self.var
+        if self.var is not None:
+            return self.var
+        prior_var = jax.vmap(self.kernel.evaluate)(self.X, self.X)
+        return prior_var + self._noise_diagonal()
+
+    def _noise_diagonal(self) -> JAXArray:
+        """Per-observation noise variance, as a length-``N`` vector."""
+        return jnp.diagonal(self.noise, axis1=-2, axis2=-1).squeeze(-1)
 
     @property
     def covariance(self) -> JAXArray:
-        # TODO: Eq. 12.55 in Sarkka & Solin 2019
-        #   if G = states.smoothing_gains exists, otherwise
-        #   I guess we raise an error that its not conditioned?
-        # return self.covariance_value
-        raise NotImplementedError
+        r"""The full covariance matrix at this GP's coordinates.
+        For just the diagonal, use :attr:`variance`.
+
+        .. warning::
+            This materializes an :math:`N \times N` matrix, which is exactly
+            the cost ``smolgp`` exists to avoid: :math:`O(N^2)` memory and,
+            for the conditioned case, :math:`O(N^2 d^3)` time. It is provided
+            for small problems, for validation against dense references, and
+            for cases genuinely needing the joint distribution. Prefer
+            :attr:`variance` (:math:`O(N)`) when the marginals suffice.
+
+        The unconditioned case is just the prior covariance plus measurement
+        noise :math:`k(X, X) + \Sigma_n`
+
+        The conditioned case returns the posterior covariance at the data using
+        the smoother cross-covariance identity (Eq. 12.55 of Särkkä & Solin 2019).
+        The diagonal is the observed smoothed variances,
+
+        .. math::
+            \Sigma_{k,k} = H_k P_k^s H_k^T,
+
+        and the lower triangle of the symmetric covariance matrix is
+
+        .. math::
+            \Sigma_{i,j}
+                = H_i \left(\prod_{m=i}^{j-1} G_m\right) P^s_j H_j^T, \quad i < j,
+
+        with :math:`G_k` the RTS smoothing gains. The gains are recomputed on
+        demand from the cached filtered/predicted covariances in :math:`O(N d^3)`,
+        negligible compared to forming the matrix itself.
+
+        Raises:
+            NotImplementedError: for a GP returned by
+                ``condition(y, X_test=...)``, whose coordinates are the test
+                points rather than the training states. The cross-covariance
+                *between* two arbitrary test points is not produced by the
+                current predict machinery.
+        """
+        if self.states is None:
+            return self.kernel(self.X, self.X) + jnp.diag(self._noise_diagonal())
+
+        n_train = self.states.y.shape[0]
+        if self.num_data != n_train:
+            raise NotImplementedError(
+                "covariance is only available at the training coordinates; this "
+                "GP was built by condition(y, X_test=...), so its coordinates are "
+                f"{self.num_data} test points rather than the {n_train} training "
+                "points. Condition without X_test to get the joint posterior "
+                "covariance at the data."
+            )
+        return self._posterior_covariance()
+
+    def _posterior_covariance(self) -> JAXArray:
+        r"""The joint posterior covariance at the data points, via the RTS
+        smoother cross-covariance recursion (see :attr:`covariance`).
+
+        See Eq. 12.55 of Särkkä & Solin 2019. We expand this definition to
+        include integrated SSMs by first building the ``(K, K, d, d)``
+        state-space cross-covariance, then selecting and projecting the
+        ``N`` data-carrying states into observation space in data order.
+        """
+        sc = self.state_coords
+        t_states, stateid = sc.t_states, sc.stateid
+        K = t_states.shape[0]
+        N = self.states.y.shape[0]
+
+        P_filt = self.states.filtered_cov
+        P_pred = self.states.predicted_cov
+        P_smooth = self.states.smoothed_cov
+
+        # recompute smoothing gains from the cached covariances.
+        if isinstance(
+            self.solver,
+            (IntegratedStateSpaceSolver, ParallelIntegratedStateSpaceSolver),
+        ):
+            G = integrated_rts_gains(
+                self.kernel.transition_matrix,
+                self.kernel.reset_matrix,
+                t_states,
+                sc.obsid,
+                sc.instid,
+                stateid,
+                P_filt,
+                P_pred,
+            )
+        else:
+            G = rts_gains(self.kernel.transition_matrix, t_states, P_filt, P_pred)
+
+        # Row i of the block matrix: running product G_i G_{i+1} ... G_{j-1},
+        # right-multiplied by P^s_j. Scanning forward from each i keeps this at
+        # one (d, d) matmul per block rather than re-deriving the product.
+        eye = jnp.eye(self.kernel.dimension, dtype=P_smooth.dtype)
+
+        def row(i):
+            def step(prod, j):
+                # prod holds G_i...G_{j-1}; advance it with G_{j-1} for j > i.
+                prod_next = jnp.where(j > i, prod @ G[jnp.clip(j - 1, 0, K - 2)], prod)
+                block = jnp.where(j >= i, prod_next @ P_smooth[j], jnp.zeros_like(eye))
+                return prod_next, block
+
+            _, blocks = jax.lax.scan(step, eye, jnp.arange(K))
+            return blocks  # (K, d, d), valid for j >= i
+
+        upper = jax.lax.map(row, jnp.arange(K))  # (K, K, d, d), upper triangle
+
+        # Mirror the upper triangle into the lower one: Cov(j, i) = Cov(i, j)^T.
+        lower = jnp.swapaxes(jnp.transpose(upper, (1, 0, 2, 3)), -1, -2)
+        iu = jnp.arange(K)[:, None] <= jnp.arange(K)[None, :]
+        C = jnp.where(iu[..., None, None], upper, lower)
+
+        # Select the data-carrying states, in data order, and project.
+        idx = data_order_indices(sc, N)
+        C_data = jnp.take(jnp.take(C, idx, axis=0), idx, axis=1)
+        H = jax.vmap(self.kernel.observation_model)(self.X)  # (N, D, dim)
+
+        def project(H_a, row_blocks):
+            return jax.vmap(lambda H_b, blk: (H_a @ blk @ H_b.T)[0, 0])(H, row_blocks)
+
+        return jax.vmap(project)(H, C_data)
 
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
