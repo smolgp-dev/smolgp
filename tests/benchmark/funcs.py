@@ -204,7 +204,14 @@ def igp_sample_prior(X_sample, kernel):
 def iss_sample_post(t_test, gp_ss, y_train):
     X_test = (t_test, jnp.zeros_like(t_test), jnp.zeros_like(t_test).astype(int))
     _llh, condGP_ss = gp_ss.condition(y_train)
-    return condGP_ss.sample(SAMPLE_KEY, shape=SAMPLE_SHAPE, X_test=X_test)
+    # These test points are instantaneous (delta = 0), so they never overlap
+    # and one probe group covers all of them. Saying so keeps the call
+    # jittable: deriving the count reads the coordinate values, which cannot
+    # happen under a trace, and this is the one profiled function that would
+    # otherwise hit that.
+    return condGP_ss.sample(
+        SAMPLE_KEY, shape=SAMPLE_SHAPE, X_test=X_test, num_test_insts=1
+    )
 
 def igp_sample_post(t_test, gp_gp, y_train):
     X_test = (t_test, jnp.zeros_like(t_test), jnp.zeros_like(t_test).astype(int))

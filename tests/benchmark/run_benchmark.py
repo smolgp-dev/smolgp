@@ -5,11 +5,17 @@ import os
 
 import jax
 import jax.numpy as jnp
+import psutil
 import tinygp
 from benchmark import (
     MACHINE_RAM_GB,
-    RAM_HEADROOM,
+    make_data_files,
+    rebuild_from_points,
+    RESERVE_FRAC,
+    RESERVE_GB,
+    format_bytes,
     load_benchmark_data,
+    ram_budget,
     run_benchmark,
     run_pred_benchmark,
     run_prior_sample_benchmark,
@@ -79,11 +85,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--machine",
         choices=sorted(MACHINE_RAM_GB),
-        default="workstation",
+        default=None,
         help=(
-            "Which machine this is running on; selects the memory budget used "
-            "to derive the size cutoffs (combined with --gpu). Defaults to the "
-            "workstation, where the production figures are generated. "
+            "Derive the memory budget from a preset instead of measuring this "
+            "machine. Use it to preview the cutoffs for a box you are not "
+            "sitting at. "
             + ", ".join(
                 f"{name}: {d['cpu']} GB CPU / {d['gpu']} GB GPU"
                 for name, d in sorted(MACHINE_RAM_GB.items())
@@ -95,8 +101,9 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help=(
-            "Memory budget in GB, overriding --machine. Taken literally, "
-            f"without the {RAM_HEADROOM:.0%} headroom applied to the presets."
+            "Memory budget in GB, overriding both the detected RAM and "
+            f"--machine. Taken literally: no {RESERVE_GB:g} GB reserve and no "
+            "safety factor on the cost constants, so use it deliberately."
         ),
     )
     parser.add_argument(
@@ -104,10 +111,79 @@ if __name__ == "__main__":
         type=float,
         default=None,
         help=(
-            "Per-measurement runtime budget in seconds. A curve that exceeds it "
-            "is retired for all larger sizes (runtime is monotonic in size), "
-            "which bounds the total wall clock. Useful for a quick local pass; "
-            "leave unset for production runs."
+            "Per-measurement runtime budget in sec (default: 600, or 5 if --quick)."
+            "Used twice: up front, to derive size cutoffs from the runtime cost "
+            "model, and during the run, to retire a curve for all larger sizes "
+            "once it blows the budget (runtime is monotonic in size). Pass inf "
+            "to disable both -- note the dense curves are memory-feasible well "
+            "past the point where one call would take days."
+        ),
+    )
+    parser.add_argument(
+        "--gpu-serial",
+        action="store_true",
+        help=(
+            "Also run the serial solvers (SSM/QSM/GP) on the GPU. Off by "
+            "default: those curves are measured on the CPU, and a GPU run's "
+            "copies of them are never plotted, so they cost hours for nothing. "
+            "Use only for a deliberate one-off CPU-vs-GPU comparison."
+        ),
+    )
+    parser.add_argument(
+        "--sizes",
+        type=str,
+        default=None,
+        help=(
+            "Re-run only these grid sizes, comma separated, e.g. --sizes 56234 "
+            "or --sizes 23713,56234. Matched to the nearest grid point. The "
+            "aggregate is NOT rewritten by a partial run -- the measurements "
+            "land in results/individual/, then --rebuild folds them in."
+        ),
+    )
+    parser.add_argument(
+        "--indices",
+        type=str,
+        default=None,
+        help=(
+            "Re-run only these 1-based grid positions, comma separated, e.g. "
+            "--indices 11 for the point the sweep logs as (11/17). Same "
+            "partial-run rules as --sizes."
+        ),
+    )
+    parser.add_argument(
+        "--make-data",
+        action="store_true",
+        help=(
+            "Only build the data/*.npz inputs for this kind's grid, then stop. "
+            "Combine with --sizes/--indices to repair individual files, and "
+            "--overwrite-data to rebuild ones that already exist. Sizes that "
+            "cannot be built are reported and skipped rather than aborting."
+        ),
+    )
+    parser.add_argument(
+        "--overwrite-data",
+        action="store_true",
+        help="With --make-data, rewrite datasets that already exist.",
+    )
+    parser.add_argument(
+        "--max-n",
+        type=float,
+        default=None,
+        help=(
+            "Refuse sizes above this. Integrated data has a hard ceiling near "
+            "N = 9.9e6: generate_integrated_data samples the truth on a 1 s "
+            "grid across the whole baseline, so it needs N * cadence * 1.2 "
+            "points, which overflows int32 dimensions above that."
+        ),
+    )
+    parser.add_argument(
+        "--rebuild",
+        action="store_true",
+        help=(
+            "Skip profiling and rebuild the aggregate result file from the "
+            "per-point checkpoints in results/individual/. Use after a "
+            "--sizes/--indices run to fold the new points in, or to recover an "
+            "aggregate that was lost. Combine with --plot to redraw."
         ),
     )
     parser.add_argument(
@@ -145,6 +221,13 @@ if __name__ == "__main__":
     # times *larger* than the M-scaled kinds).
     M_PER_N = 100
     SCALES_WITH_M = ("pred", "sample-post")
+    # Production default. Clears every point in the currently deployed figures
+    # (the slowest are --int cond GP at 392 s and --int pred GP at 442 s) while
+    # still bounding the dense O(N^3) curves, which are memory-feasible far
+    # past the point where one call would run for days. Note this is per call
+    # and each point is measured n_repeat times, so it bounds a *point* at
+    # ~600*n_repeat seconds, not the sweep.
+    DEFAULT_MAX_SECONDS = 600.0
     n_sizes = 17
     logmax = 7
     max_seconds = args.max_seconds
@@ -153,6 +236,8 @@ if __name__ == "__main__":
         logmax = 5
         if max_seconds is None:
             max_seconds = 5.0
+    if max_seconds is None:
+        max_seconds = DEFAULT_MAX_SECONDS
     if args.func in SCALES_WITH_M:
         logmax -= round(math.log10(M_PER_N))
     if args.quick:
@@ -170,16 +255,73 @@ if __name__ == "__main__":
         print("Running benchmark on CPU")
         device = machine = "cpu"
 
-    # Cutoffs follow from the memory budget rather than being hardcoded per
-    # machine, so the same command works on either box (see size_cutoffs).
-    max_ram = args.max_ram
-    if max_ram is None:
-        # Leave headroom for the OS; see RAM_HEADROOM.
-        max_ram = MACHINE_RAM_GB[args.machine][device] * RAM_HEADROOM
-    cutoffs = size_cutoffs(max_ram, args.func, gpu=args.gpu)
-    print(f"Size cutoffs for {args.machine} {device.upper()} ({max_ram:g} GB):")
+    # Cutoffs follow from the memory and time budgets rather than being
+    # hardcoded per machine, so the same command works on either box. Each
+    # curve stops at whichever bound binds first (see size_cutoffs).
+    # Exposure geometry, needed here as well as for data generation: it sets the
+    # ceiling on how large an integrated dataset can be built at all, and hence
+    # how far any integrated curve can be measured.
+    texp = 140.0 if args.int else 0.0
+    readout = 40.0 if args.int else 0.0
+
+    budget = ram_budget(machine=args.machine, device=device, max_ram_gb=args.max_ram)
+    cutoffs, bounds = size_cutoffs(
+        budget,
+        args.func,
+        max_seconds=max_seconds,
+        gpu=args.gpu,
+        gpu_serial=args.gpu_serial,
+        integrated=args.int,
+        # Only an explicit --max-n caps the grid now. The old automatic ceiling
+        # existed because integrated data generation was O(N * cadence) and blew
+        # past 2**31 elements at N = 1e7; it now draws straight from the
+        # integrated kernel in O(N), so every grid size is buildable and nothing
+        # needs to be retired on the data generator's behalf.
+        data_ceiling=args.max_n,
+        # An explicit --max-ram is a deliberate, hand-picked budget: honour it
+        # literally rather than shaving it again with the calibration margin.
+        safety=1.0 if args.max_ram is not None else None,
+        detail=True,
+    )
+    if args.max_ram is not None:
+        source = f"--max-ram {args.max_ram:g} GB, taken literally"
+    elif args.machine is not None:
+        source = f"{args.machine} preset, less reserve"
+    else:
+        source = (
+            f"detected on {os.uname().nodename.split('.')[0]}, less "
+            f"{min(RESERVE_GB, RESERVE_FRAC * psutil.virtual_memory().total / 1e9):g} GB reserve"
+        )
+    budget_s = "unbounded" if max_seconds == float("inf") else f"{max_seconds:g}s"
+    print(
+        f"Size cutoffs for {device.upper()} "
+        f"({format_bytes(budget)} / {budget_s} per call; {source}):"
+    )
     for name, c in sorted(cutoffs.items()):
-        print(f"    {name:5s} {c:.3g}")
+        print(f"    {name:5s} {c:9.3g}   ({bounds[name]}-bound)")
+
+    # Pre-flight sanity check. The budget is a promise about a specific device,
+    # and the two ways to get it wrong are both silent and both fatal: a CPU
+    # budget handed to a --gpu run (490 GB targeted at a 48 GB card), or a
+    # budget above what this machine can actually hand out. There is no swap
+    # here, so overshooting is a hard kill, not a slowdown.
+    if device == "gpu":
+        capacity = MACHINE_RAM_GB[args.machine or "workstation"]["gpu"] * 1e9
+        what = "this GPU's capacity"
+    else:
+        capacity = psutil.virtual_memory().available
+        what = "the RAM currently available"
+    if budget > capacity:
+        print(
+            f"  WARNING: budget {format_bytes(budget)} exceeds {what} "
+            f"({format_bytes(capacity)}). Largest points may be OOM-killed."
+        )
+    elif budget > 0.95 * capacity:
+        print(
+            f"  NOTE: budget is {budget / capacity:.0%} of {what} "
+            f"({format_bytes(capacity)}) -- only {format_bytes(capacity - budget)} "
+            "of slack, and swap is off. Run this on an otherwise idle box."
+        )
 
     ## Setup function dictionaries
     llh_funcs = [
@@ -215,11 +357,22 @@ if __name__ == "__main__":
     w = 0.0195
     Q = 7.63
     sigma = jnp.sqrt(S * w * Q)
-    true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
+    # The kernel the datasets are drawn from. Instantaneous data uses tinygp's
+    # quasiseparable SHO, which the benchmark itself shows is the fastest way to
+    # draw an instantaneous prior. Integrated data must come from an integrated
+    # state-space kernel instead, so the exposure averaging is done by the model
+    # (O(N)) rather than by quadrature over a dense realization (O(N * cadence),
+    # which overflowed at N = 1e7). true_kernel is used only for data generation.
+    if args.int:
+        true_kernel = smolgp.kernels.IntegratedSHO(
+            omega=w, quality=Q, sigma=sigma, num_insts=1
+        )
+    else:
+        true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
     ################# Which kernels to benchmark ##################
     if args.int:
         ssm_kernel = smolgp.kernels.integrated.IntegratedSHO(
-            omega=w, quality=Q, sigma=sigma, num_inst=1
+            omega=w, quality=Q, sigma=sigma, num_insts=1
         )
         gp_kernel = smolgp.kernels.dense.IntegratedSHOKernel(w=w, Q=Q, S=S)
         kernels = {
@@ -240,15 +393,43 @@ if __name__ == "__main__":
         }
     ################ Data properties ####################
     yerr = 0.3
-    texp = 140.0 if args.int else 0.0
-    readout = 40.0 if args.int else 0.0
     if args.int:
         print("Using integrated data with texp =", texp, "and readout =", readout)
     ############################################################
     isinst = "_int" if args.int else ""
-    out_filename = f"results/{device}_{args.func}{isinst}_benchmark.pkl"
+    # A --quick pass is an abridged grid with a 5 s budget -- not comparable to
+    # a production sweep, and it must never land on the production filename.
+    # (It used to: one `--quick` run would silently replace a multi-hour
+    # result with nine truncated points.)
+    isquick = "_quick" if args.quick else ""
+    out_filename = f"results/{device}_{args.func}{isinst}{isquick}_benchmark.pkl"
 
-    if args.plot_only:
+    def _int_list(v):
+        return [int(x) for x in v.split(",") if x.strip()] if v else None
+
+    only_sizes = _int_list(args.sizes)
+    only_indices = _int_list(args.indices)
+    partial = bool(only_sizes or only_indices)
+
+    if args.make_data:
+        print(f"Building data files for {args.func}{isinst or ''}...")
+        _w, _s, _f = make_data_files(
+            true_kernel, args.func, yerr=yerr,
+            exposure_quantities=(texp, readout) if args.int else None,
+            n_sizes=n_sizes, logmin=1,
+            logmax=logmax + (round(math.log10(M_PER_N)) if args.func in SCALES_WITH_M else 0),
+            m_per_n=M_PER_N, only_sizes=only_sizes, only_indices=only_indices,
+            overwrite=args.overwrite_data, max_n=args.max_n,
+        )
+        raise SystemExit(1 if _f else 0)
+
+    if args.rebuild:
+        Ns, runtime, memory, outputs = rebuild_from_points(
+            args.func, device, integrated=args.int, m_per_n=M_PER_N,
+            n_sizes=n_sizes, logmin=1,
+            logmax=logmax + (round(math.log10(M_PER_N)) if args.func in SCALES_WITH_M else 0),
+        )
+    elif args.plot_only:
         pass  # nothing to run; jump straight to plotting below
     elif args.func in ["llh", "cond"]:
         if args.func == "llh":
@@ -280,6 +461,9 @@ if __name__ == "__main__":
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
+            tag=isquick,
+            only_sizes=only_sizes,
+            only_indices=only_indices,
         )
     elif args.func == "pred":
         print("Benchmarking prediction...")
@@ -299,6 +483,9 @@ if __name__ == "__main__":
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
+            tag=isquick,
+            only_sizes=only_sizes,
+            only_indices=only_indices,
         )
     elif args.func == "sample-prior":
         # Prior draws are conditioned on nothing, so M (the number of sample
@@ -317,6 +504,9 @@ if __name__ == "__main__":
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
+            tag=isquick,
+            only_sizes=only_sizes,
+            only_indices=only_indices,
         )
     elif args.func == "sample-post":
         # Posterior draws mirror `pred`: N training points, M = 100N sample
@@ -337,6 +527,9 @@ if __name__ == "__main__":
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
+            tag=isquick,
+            only_sizes=only_sizes,
+            only_indices=only_indices,
         )
     else:
         raise ValueError(
@@ -344,7 +537,23 @@ if __name__ == "__main__":
             "or 'sample-post'."
         )
 
-    if not args.plot_only:
+    if args.rebuild:
+        print("Wrote results to", out_filename)
+        save_benchmark_data(out_filename, Ns, runtime, memory, outputs)
+    elif partial:
+        # A --sizes/--indices run measured a handful of points. Writing those
+        # to the aggregate would replace a full sweep with a two-point file,
+        # so it is deliberately not written. The measurements are safe in
+        # results/individual/; --rebuild merges them back.
+        print(
+            f"\n  Partial run: {out_filename} left untouched.\n"
+            f"  The new points are checkpointed in results/individual/. Fold "
+            f"them in with:\n"
+            f"      uv run run_benchmark.py {args.func}"
+            f"{' --int' if args.int else ''}{' --gpu' if args.gpu else ''}"
+            f" --rebuild --plot"
+        )
+    elif not args.plot_only:
         print("Wrote results to", out_filename)
         save_benchmark_data(out_filename, Ns, runtime, memory, outputs)
 
