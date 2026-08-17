@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.helpers import assign_min_instids, robust_sqrt
+from smolgp.helpers import assign_instids, count_min_instids, robust_sqrt
 from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
 from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
@@ -421,28 +421,30 @@ class GaussianProcess(eqx.Module):
                         "instid must have the same length as the data coordinates "
                         f"(got {instid.shape[0]} vs {jnp.shape(t_coord)[0]})"
                     )
-                unique_insts = jnp.unique(instid)
-                num_insts = int(unique_insts.shape[0])
-                if not jnp.array_equal(unique_insts, jnp.arange(num_insts)):
-                    raise ValueError(
-                        "instid must contain consecutive integer instrument ids "
-                        f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
-                    )
+                try:
+                    # cannot be jitted, so if this fails
+                    unique_insts = jnp.unique(instid)
+                except jax.errors.ConcretizationTypeError:
+                    # just retain the kernel's configured num_insts
+                    unique_insts = None
+                if unique_insts is not None:
+                    num_insts = int(unique_insts.shape[0])
+                    if not jnp.array_equal(unique_insts, jnp.arange(num_insts)):
+                        raise ValueError(
+                            "instid must contain consecutive integer instrument ids "
+                            f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
+                        )
 
-                # Only reinitialize when we're about to build a fresh solver from
-                # this kernel. When a pre-built solver instance is passed through
-                # (as GaussianProcess.condition() does when constructing the
-                # conditioned/prediction GP), the kernel must stay consistent with
-                # that already-built solver rather than be resized to match a
-                # possibly-partial test-time instid subset.
-                building_fresh_solver = solver is None or solver in [
-                    StateSpaceSolver,
-                    IntegratedStateSpaceSolver,
-                    ParallelStateSpaceSolver,
-                    ParallelIntegratedStateSpaceSolver,
-                ]
-                if building_fresh_solver:
-                    self.kernel = assign_num_insts(self.kernel, num_insts)
+                    # Only auto-resize for fresh solvers; preserve pre-built 
+                    # solver kernels for when test-time instid is a partial subset.
+                    building_fresh_solver = solver is None or solver in [
+                        StateSpaceSolver,
+                        IntegratedStateSpaceSolver,
+                        ParallelStateSpaceSolver,
+                        ParallelIntegratedStateSpaceSolver,
+                    ]
+                    if building_fresh_solver:
+                        self.kernel = assign_num_insts(self.kernel, num_insts)
 
         # Data coordinates (or tuple of coordinates)
         self.X = X
@@ -960,6 +962,7 @@ class GaussianProcess(eqx.Module):
         key: jax.random.KeyArray,
         shape: Sequence[int] | None = None,
         X_test: JAXArray | None = None,
+        num_test_insts: int | None = None,
     ) -> JAXArray:
         """Generate samples from the process.
 
@@ -992,6 +995,14 @@ class GaussianProcess(eqx.Module):
                 integrated kernel, this should be either ``(t, delta)`` or ``(t, delta, instid)``
                 where ``t`` is the array of exposure midpoints, ``delta`` is the array of
                 exposure durations, and ``instid`` is the array of instrument IDs for each exposure.
+            num_test_insts (int, optional): Number of probe groups to allocate
+                for exposure-integrated test points. Derived from the
+                coordinates when omitted, which reads their values and so
+                cannot run under ``jit``. Pass it explicitly -- it is ``1``
+                for instantaneous or non-overlapping test points -- to keep
+                this call jittable. Must be at least
+                :func:`~smolgp.helpers.count_min_instids`, or overlapping
+                windows will share a probe and the draw will be wrong.
 
         Returns:
             The sampled realizations from the process with shape ``(N_samples,) +
@@ -1004,7 +1015,7 @@ class GaussianProcess(eqx.Module):
         # always auto-assigned here; the real instrument instid (for the
         # observation model) defaults to 0 if not given. num_test_insts must
         # be concrete here since it sizes kernel_ext inside _sample.
-        num_test_insts = 0
+        n_probe = 0
         instid_proj = None
         if (
             isinstance(X_test, tuple)
@@ -1012,14 +1023,24 @@ class GaussianProcess(eqx.Module):
             and isinstance(self.solver, IntegratedStateSpaceSolver)
         ):
             t_test, delta_test = X_test[0], X_test[1]
-            instid_group, num_test_insts = assign_min_instids(t_test, delta_test)
+            # Deriving the probe count reads the coordinate *values*, so it
+            # cannot happen under a trace. A caller who already knows it --
+            # e.g. non-overlapping exposures, or instantaneous test points,
+            # both of which need exactly one probe -- can pass it in and keep
+            # this whole call jittable.
+            n_probe = (
+                count_min_instids(t_test, delta_test)
+                if num_test_insts is None
+                else int(num_test_insts)
+            )
+            instid_group = assign_instids(t_test, delta_test, n_probe)
             instid_proj = (
                 jnp.asarray(X_test[2])
                 if len(X_test) > 2
                 else jnp.zeros_like(instid_group)
             )
             X_test = (t_test, delta_test, instid_group)
-        return self._sample(key, shape, X_test, num_test_insts, instid_proj)
+        return self._sample(key, shape, X_test, n_probe, instid_proj)
 
     def numpyro_dist(self, **kwargs: Any) -> TinyDistribution:
         """Get the numpyro MultivariateNormal distribution for this process"""
