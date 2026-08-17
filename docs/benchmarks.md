@@ -16,7 +16,9 @@ Note that both predicting (#3) and sampling the posterior (#5) at test points sc
 :::{note}
 :name: a-tip-reference
 CPU benchmarks were run on an Intel&reg; Xeon&reg; w53435X with 512 GB RAM.
-GPU benchmarks were run on an NVIDIA RTX 6000 Ada with 48 GB of GPU memory, running CUDA v12.8. The functions used for timing and memory profiling are located in [`tests/benchmark`](https://github.com/smolgp-dev/smolgp/tree/main/tests/benchmark).
+GPU benchmarks were run on an NVIDIA RTX 6000 Ada with 48 GB of GPU memory, running CUDA v12.8. The functions used for timing and memory profiling are located in [`tests/benchmark`](https://github.com/smolgp-dev/smolgp/tree/main/tests/benchmark). 
+
+Runs where the peak memory usage was too low to be reliably measured above the baseline noise are drawn as open circles computed from the theoretical memory usage given the measured scaling. As such, these regions are likely overhead-limited.
 :::
 
 ## Instantaneous measurements
