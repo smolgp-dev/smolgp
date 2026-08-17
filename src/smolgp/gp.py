@@ -34,8 +34,6 @@ from smolgp.solvers.sample import (
     project_trajectory_at_positions,
     sample_prior_trajectory,
 )
-from smolgp.solvers.integrated.rts import integrated_rts_gains
-from smolgp.solvers.rts import rts_gains
 from smolgp.solvers.state_coords import StateCoords
 
 if TYPE_CHECKING:
@@ -435,7 +433,7 @@ class GaussianProcess(eqx.Module):
                             f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
                         )
 
-                    # Only auto-resize for fresh solvers; preserve pre-built 
+                    # Only auto-resize for fresh solvers; preserve pre-built
                     # solver kernels for when test-time instid is a partial subset.
                     building_fresh_solver = solver is None or solver in [
                         StateSpaceSolver,
@@ -609,7 +607,7 @@ class GaussianProcess(eqx.Module):
         ``N`` data-carrying states into observation space in data order.
         """
         sc = self.state_coords
-        t_states, stateid = sc.t_states, sc.stateid
+        t_states, _stateid = sc.t_states, sc.stateid
         K = t_states.shape[0]
         N = self.states.y.shape[0]
 
@@ -617,23 +615,8 @@ class GaussianProcess(eqx.Module):
         P_pred = self.states.predicted_cov
         P_smooth = self.states.smoothed_cov
 
-        # recompute smoothing gains from the cached covariances.
-        if isinstance(
-            self.solver,
-            (IntegratedStateSpaceSolver, ParallelIntegratedStateSpaceSolver),
-        ):
-            G = integrated_rts_gains(
-                self.kernel.transition_matrix,
-                self.kernel.reset_matrix,
-                t_states,
-                sc.obsid,
-                sc.instid,
-                stateid,
-                P_filt,
-                P_pred,
-            )
-        else:
-            G = rts_gains(self.kernel.transition_matrix, t_states, P_filt, P_pred)
+        # Recompute the y-independent smoothing gains from the cached covariances
+        G = self.solver.smoothing_gains(P_filt, P_pred)
 
         # Row i of the block matrix: running product G_i G_{i+1} ... G_{j-1},
         # right-multiplied by P^s_j. Scanning forward from each i keeps this at

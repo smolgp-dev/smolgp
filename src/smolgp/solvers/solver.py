@@ -96,9 +96,7 @@ class StateSpaceSolver(eqx.Module):
         back by the usual sort-by-``obsid`` machinery.
         """
         obsid = self.state_coords.obsid
-        return tuple(
-            jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays
-        )
+        return tuple(jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays)
 
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
@@ -108,7 +106,9 @@ class StateSpaceSolver(eqx.Module):
         # unreduced coordinates to evaluate an observation model that depends
         # on more than the sort key (e.g. a per-output id channel). Sorting X
         # here is what makes that derived timeline monotonic.
-        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(
+            self.X, y_nd, self.noise
+        )
         return KalmanFilter(
             self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )
@@ -116,6 +116,16 @@ class StateSpaceSolver(eqx.Module):
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
         return RTSSmoother(self.kernel, self.t_states, kalman_results)
+
+    def smoothing_gains(self, P_filtered, P_predicted) -> JAXArray:
+        """The RTS smoothing gains G_k for this solver's state timeline.
+
+        These are ``y``-independent, so they can be rebuilt on demand from the
+        covariances a previous :meth:`condition` already produced
+        """
+        return rts_gains(
+            self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted
+        )
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
