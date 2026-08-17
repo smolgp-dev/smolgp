@@ -53,6 +53,8 @@ For instantaneous measurements, and certain kernels[^1], optimized quasiseparabl
 ## Integrated measurements
 When the measurements individually span finite time intervals with variable length and/or overlap with other measurements, we cannot take advantage of any quasiseparable optimizations in `tinygp` and so are forced to use the $\mathcal{O}(N^3)$ solution there. This is the scenario in which `smolgp` has the most impactful advantage over previous methods.
 
+Note that sampling integrated exposures incurs an additional scaling penalty if the sample exposures overlap with one another, which goes cubically with the minimum number of "instrument" groups needed to describe the data with no self-overlaps.
+
 ::::{grid} 3
 :gutter: 1
 :align:bottom
