@@ -126,6 +126,25 @@ class IntegratedStateSpaceSolver(eqx.Module):
             self.kernel, sc.t_states, sc.obsid, sc.instid, sc.stateid, kalman_results
         )
 
+    def smoothing_gains(self, P_filtered, P_predicted) -> JAXArray:
+        """The RTS smoothing gains G_k; see
+        :meth:`smolgp.solvers.solver.StateSpaceSolver.smoothing_gains`.
+
+        Additionally threads the exposure reset bookkeeping, which the
+        integrated smoother applies at every ``stateid == 0`` state.
+        """
+        sc = self.state_coords
+        return integrated_rts_gains(
+            self.kernel.transition_matrix,
+            self.kernel.reset_matrix,
+            sc.t_states,
+            sc.obsid,
+            sc.instid,
+            sc.stateid,
+            P_filtered,
+            P_predicted,
+        )
+
     def condition(self, y, return_v_S=False) -> JAXArray:
         """
         Compute the Kalman predicted, filtered, and RTS smoothed

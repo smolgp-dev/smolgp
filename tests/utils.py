@@ -2,6 +2,8 @@ import jax
 import jax.numpy as jnp
 import tinygp
 
+import smolgp
+
 key = jax.random.PRNGKey(0)
 
 
@@ -34,40 +36,53 @@ def format_bytes(n):
 
 
 def generate_data(N, kernel, yerr=0.3, tmin=0, tmax=86400):
+    """Draw ``N`` instantaneous measurements from the process defined by ``kernel``.
+
+    ``kernel`` must be a tinygp.kernels.Kernel object. We use tinygp here over
+    smolgp as it is ~10x faster at sampling from the prior for instantaneous data.
+
+    Returns data on an evenly spaced grid between ``tmin`` and ``tmax``, sampled
+    with measurement noise `yerr``.
+    """
     t_train = jnp.linspace(tmin, tmax, N)
-    true_gp = tinygp.GaussianProcess(kernel, t_train)
-    y_true = true_gp.sample(key=key)
-    y_train = y_true + yerr * jax.random.normal(key, shape=(N,))
+    true_gp = tinygp.GaussianProcess(kernel, t_train, diag=yerr**2)
+    y_train = true_gp.sample(key=key)
     return t_train, y_train
 
 
 def generate_integrated_data(N, kernel, texp=180, yerr=0.3, readout=40):
-    # Generate true GP over baseline
+    """Draw ``N`` exposure-integrated observationsfrom the process defined by ``kernel``.
+
+    ``kernel`` must be a smolgp :class:`~smolgp.kernels.integrated.IntegratedStateSpaceModel`, 
+    e.g. ``smolgp.kernels.IntegratedSHO``. Draws exposure-averaged samples from
+    the process, replacing the old method of sampling a much higher resolution 
+    grid at instantaneous times and averaging within windows to create exposures,
+    which is prohibitively expensive for large simulated datasets.
+
+    The exposures are laid out back to back at ``texp + readout``, enusring
+    ``texp < cadence`` so they never overlap and a single instrument index suffices.
+
+    Args:
+        N: number of exposures.
+        kernel: integrated state-space kernel to draw from.
+        texp: exposure duration.
+        yerr: white measurement noise added to the draw.
+        readout: dead time between exposures.
+
+    Returns:
+        ``(t_train, y_train)`` -- exposure midpoints and noisy integrated observations.
+    """
     cadence = texp + readout
-    tmin = 0
-    tmax = N * cadence
-    buffer = 0.1 * (tmax - tmin)
-    t = jnp.arange(tmin - buffer, tmax + buffer, 1)
-    true_gp = tinygp.GaussianProcess(kernel, t)
-    y = true_gp.sample(key=key)
+    # arange(N) * cadence rather than arange(0, N * cadence, cadence): the
+    # latter can land on N +/- 1 elements depending on floating point.
+    t_train = jnp.arange(N) * float(cadence)
+    texp_train = jnp.full(N, float(texp))
+    instid = jnp.zeros(N, dtype=int)
 
-    # Generate synthetic observations
-    @jax.jit
-    def make_exposure(tmid, texp):
-        t_in_exp = jnp.linspace(tmid - texp / 2, tmid + texp / 2, 50)
-        # quickly slice region of interest
-        idx = jnp.searchsorted(t, t_in_exp, side="right")
-        idx = jnp.clip(idx, 0, t.size - 2)
-        # just interpolate that region
-        y_in_exp = jnp.interp(t_in_exp, t[idx], y[idx])
-        return jnp.mean(y_in_exp)
-
-    texp_train = jnp.full(N, texp)  # constant exposure time
-    t_train = jnp.arange(tmin, tmax, cadence)
-    y_true = jax.vmap(make_exposure)(t_train, texp_train)
-    y_train = y_true + yerr * jax.random.normal(key, shape=(len(t_train),))
+    # Sample with measurement noise
+    gp = smolgp.GaussianProcess(kernel, X=(t_train, texp_train, instid), noise=yerr**2)
+    y_train = gp.sample(key)
     return t_train, y_train
-
 
 def get_data(true_kernel, N, yerr=0.3, exposure_quantities=None, save=True):
     # Generate data of length N

@@ -25,7 +25,7 @@ def test_integrated():
     sigma = jnp.sqrt(S * w * Q)
 
     ## Instantaneous kernel for generating data
-    true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
+    true_kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma)
 
     ## Generate mock data
     Ninst = 2  # 3

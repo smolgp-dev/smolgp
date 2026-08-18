@@ -1,3 +1,6 @@
+import heapq
+import itertools
+
 import jax
 import jax.numpy as jnp
 import tinygp
@@ -929,21 +932,86 @@ def test_sample_exposure_matches_quadrature_of_dense_curve_same_draw():
 # ---------------------------------------------------------------------------
 
 
-def _max_overlap_depth(t, delta):
-    """Independent reference (a plain +1/-1 sweep, not sharing any code with
-    assign_min_instids's heap) for the true minimum number of groups: the
-    largest number of windows simultaneously active at any instant. A tied
-    (end, start) pair sorts end-first since (-1) < (+1) at equal times,
-    matching the "touching is not overlapping" convention."""
-    a = [float(x) for x in (t - delta / 2)]
-    b = [float(x) for x in (t + delta / 2)]
-    events = sorted([(ai, 1) for ai in a] + [(bi, -1) for bi in b])
-    depth = 0
-    max_depth = 0
-    for _time, step in events:
-        depth += step
-        max_depth = max(max_depth, depth)
-    return max_depth
+def _conflicts(a, b, i, j):
+    """Whether windows i and j must occupy different groups.
+
+    A window needs its integral accumulator reset at ``a`` and read out at
+    ``b``, so two windows can share one only if the earlier is read out before
+    the later is reset. For ``a_i <= a_j`` that is ``a_j >= b_i``; they
+    conflict when ``a_j < b_i``.
+
+    Note this is deliberately *not* interval intersection. A zero-width window
+    has an empty span but still needs an accumulator for an instant, so one
+    landing inside another window's span conflicts with it even though the
+    intersection of ``[x, x]`` with anything has measure zero. Getting this
+    wrong is the whole reason the previous reference was replaced.
+    """
+    lo, hi = (i, j) if a[i] <= a[j] else (j, i)
+    return a[hi] < b[lo]
+
+
+def _min_groups_greedy(t, delta):
+    """Reference minimum group count, by the sequential greedy sweep.
+
+    This is a plain-Python implementation of the heap algorithm before
+    we needed it to be jittable. Verifies the jit version is correct.
+
+    Sweeping windows in order of start time and reusing whichever group freed
+    earliest is optimal for interval graphs, so the count it returns is the
+    true minimum.
+    """
+    a = [float(x) for x in (jnp.asarray(t) - jnp.asarray(delta) / 2)]
+    b = [float(x) for x in (jnp.asarray(t) + jnp.asarray(delta) / 2)]
+    order = sorted(range(len(a)), key=lambda i: a[i])
+
+    heap = []  # (end_time, group id), min-heap on end time
+    instid = [0] * len(a)
+    next_id = 0
+    for i in order:
+        if heap and heap[0][0] <= a[i]:
+            _end, gid = heapq.heappop(heap)
+        else:
+            gid = next_id
+            next_id += 1
+        instid[i] = gid
+        heapq.heappush(heap, (b[i], gid))
+    return instid, next_id
+
+
+def _min_groups_bruteforce(t, delta, max_n=9):
+    """Exhaustive chromatic number of the conflict graph, for small inputs.
+
+    An independent check on :func:`_min_groups_greedy` itself -- it shares no
+    logic with either the greedy sweep or the implementation, it just tries
+    every colouring until one is valid.
+    """
+    a = [float(x) for x in (jnp.asarray(t) - jnp.asarray(delta) / 2)]
+    b = [float(x) for x in (jnp.asarray(t) + jnp.asarray(delta) / 2)]
+    n = len(a)
+    assert n <= max_n, f"brute force is exponential; {n} windows is too many"
+    pairs = [(i, j) for i, j in itertools.combinations(range(n), 2)
+             if _conflicts(a, b, i, j)]
+    for k in range(1, n + 1):
+        for colouring in itertools.product(range(k), repeat=n):
+            if all(colouring[i] != colouring[j] for i, j in pairs):
+                return k
+    return n
+
+
+def _assert_groups_valid(t, delta, instid, num_groups):
+    """No two conflicting windows share a group, and ids are in range."""
+    a = [float(x) for x in (jnp.asarray(t) - jnp.asarray(delta) / 2)]
+    b = [float(x) for x in (jnp.asarray(t) + jnp.asarray(delta) / 2)]
+    ids = [int(x) for x in jnp.asarray(instid)]
+    assert all(0 <= g < max(num_groups, 1) for g in ids), (
+        f"group ids {ids} outside 0..{num_groups - 1}"
+    )
+    for i, j in itertools.combinations(range(len(a)), 2):
+        if _conflicts(a, b, i, j):
+            assert ids[i] != ids[j], (
+                f"windows {i} [{a[i]},{b[i]}] and {j} [{a[j]},{b[j]}] conflict "
+                f"but both landed in group {ids[i]}"
+            )
 
 
 def _assert_no_within_group_overlap(t, delta, instid, num_groups):
@@ -979,11 +1047,11 @@ def test_assign_min_instids_is_minimal():
     delta = jax.random.uniform(k2, (80,), minval=0.5, maxval=15.0)
 
     instid, num_groups = assign_min_instids(t, delta)
-    _assert_no_within_group_overlap(t, delta, instid, num_groups)
-    expected = _max_overlap_depth(t, delta)
+    _assert_groups_valid(t, delta, instid, num_groups)
+    _ref_ids, expected = _min_groups_greedy(t, delta)
     assert num_groups == expected, (
-        f"assign_min_instids used {num_groups} groups, but the true minimum "
-        f"(max overlap depth) is {expected}"
+        f"assign_min_instids used {num_groups} groups, but the sequential "
+        f"greedy reference finds the true minimum to be {expected}"
     )
 
 
@@ -1024,6 +1092,87 @@ def test_assign_min_instids_all_zero_width_share_one_group():
 
     _instid, num_groups = assign_min_instids(t, delta)
     assert num_groups == 1
+
+
+def test_assign_min_instids_mixed_zero_and_positive_width():
+    """Zero-width windows mixed in with real exposures.
+
+    This is the case that distinguishes a correct implementation from two
+    plausible-looking wrong ones:
+
+    Windows: w0=[0,0], w1=[-1.5,3.5], w2=[2,2], w3=[0.5,5.5].
+
+    w1, w2 and w3 mutually conflict, but w2 is an instantaneous readout sitting
+    strictly inside both w1 and w3, and resetting a shared accumulator at t=2
+    would destroy whichever integral was mid-flight. Hence, three groups are
+    needed. w0 is free to share with w2, since t=0 lies outside [0.5, 5.5],
+    which is why the answer is exactly 3 rather than 4.
+    """
+    t = jnp.array([0.0, 1.0, 2.0, 3.0])
+    delta = jnp.array([0.0, 5.0, 0.0, 5.0])
+
+    instid, num_groups = assign_min_instids(t, delta)
+    _assert_groups_valid(t, delta, instid, num_groups)
+    assert num_groups == 3, (
+        f"expected 3 groups for the mixed zero/positive-width case, got "
+        f"{num_groups} (instid={[int(x) for x in instid]})"
+    )
+    # Two independent references must agree on that 3.
+    assert _min_groups_bruteforce(t, delta) == 3
+    assert _min_groups_greedy(t, delta)[1] == 3
+
+
+def test_assign_min_instids_zero_width_inside_one_exposure():
+    """The minimal version of the same trap: a single instantaneous readout
+    inside a single exposure needs its own accumulator, so 2 groups, not 1."""
+    t = jnp.array([5.0, 5.0])
+    delta = jnp.array([10.0, 0.0])  # [0,10] and [5,5]
+
+    instid, num_groups = assign_min_instids(t, delta)
+    _assert_groups_valid(t, delta, instid, num_groups)
+    assert num_groups == 2, f"expected 2 groups, got {num_groups}"
+    assert _min_groups_bruteforce(t, delta) == 2
+
+
+def test_assign_min_instids_matches_greedy_reference_on_mixed_widths():
+    """Fuzz the implementation against the sequential greedy reference, with a
+    healthy fraction of zero-width windows in the mix.
+
+    ``assign_min_instids`` was rewritten from that greedy heap into a numpy
+    max-clique count plus a jittable ``lax.scan`` assignment; this is the
+    regression test that the same number of groups is returned, though the
+    ids themselves can be different as long as they are valid.
+    """
+    key = jax.random.PRNGKey(20260817)
+    for trial in range(200):
+        key, k1, k2, k3 = jax.random.split(key, 4)
+        n = int(jax.random.randint(k1, (), 1, 12))
+        t = jax.random.uniform(k2, (n,), minval=0.0, maxval=50.0)
+        widths = jax.random.uniform(k3, (n,), minval=0.0, maxval=15.0)
+        # zero out ~35% of the widths, so degenerate and real windows mix
+        zero = jax.random.uniform(k3, (n,)) < 0.35
+        delta = jnp.where(zero, 0.0, widths)
+
+        instid, num_groups = assign_min_instids(t, delta)
+        _assert_groups_valid(t, delta, instid, num_groups)
+        _ref_ids, ref_groups = _min_groups_greedy(t, delta)
+        assert num_groups == ref_groups, (
+            f"trial {trial}: implementation used {num_groups} groups, greedy "
+            f"reference {ref_groups}; t={t}, delta={delta}"
+        )
+
+
+def test_min_groups_greedy_matches_bruteforce():
+    """The greedy reference is itself checked against exhaustive colouring, so
+    the fuzz test above is not resting on an unverified oracle."""
+    key = jax.random.PRNGKey(7)
+    for _ in range(40):
+        key, k1, k2, k3 = jax.random.split(key, 4)
+        n = int(jax.random.randint(k1, (), 1, 8))
+        t = jax.random.uniform(k2, (n,), minval=0.0, maxval=30.0)
+        widths = jax.random.uniform(k3, (n,), minval=0.0, maxval=12.0)
+        delta = jnp.where(jax.random.uniform(k3, (n,)) < 0.4, 0.0, widths)
+        assert _min_groups_greedy(t, delta)[1] == _min_groups_bruteforce(t, delta)
 
 
 # ---------------------------------------------------------------------------
@@ -1241,6 +1390,10 @@ if __name__ == "__main__":
     test_assign_min_instids_reuses_freed_group()
     test_assign_min_instids_touching_windows_share_a_group()
     test_assign_min_instids_all_zero_width_share_one_group()
+    test_assign_min_instids_mixed_zero_and_positive_width()
+    test_assign_min_instids_zero_width_inside_one_exposure()
+    test_assign_min_instids_matches_greedy_reference_on_mixed_widths()
+    test_min_groups_greedy_matches_bruteforce()
     test_sample_X_test_missing_instid_auto_assigns_prior()
     test_sample_X_test_missing_instid_auto_assigns_conditioned()
     test_exposure_sample_matches_predict_when_groups_exceed_num_insts()

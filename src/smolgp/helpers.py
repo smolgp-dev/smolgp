@@ -1,13 +1,105 @@
-import heapq
-
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax import lax
 from jax.scipy.linalg import expm
 from tinygp.helpers import JAXArray
 
 
+def count_min_instids(t: JAXArray, delta: JAXArray) -> int:
+    r"""Minimum number of ``instid`` groups needed for ``M`` exposure windows
+    :math:`(t_i - \delta_i/2,\; t_i + \delta_i/2)` with arbitrary overlap.
+
+    This is the chromatic number of an interval graph, which equals its maximum
+    clique. See https://en.wikipedia.org/wiki/Interval_graph.
+    
+    Note for exposure windows,
+    - :math:`b_i = a_j` is not an overlap and can use the same group id.
+    - A zero-width window (``delta == 0``) strictly inside another window's
+      span **must** conflict, since its readout would otherwise corrupt the
+      enclosing exposure's running integra. However, two *coincident* 
+      zero-width windows do not conflict with each other.
+
+    So instead of a sweep, count for each window ``j`` the windows still open
+    at :math:`a_j`, itself included, and take the largest.
+
+    Cost is :math:`O(M \log M)`, dominated by the sorts.
+
+    Deliberately numpy rather than ``jnp``: the result sizes the augmented
+    state (see :func:`~smolgp.solvers.sample.merge_exposure_test_coords`), so
+    it must be a concrete Python ``int`` and cannot be produced under ``jit``.
+
+    Args:
+        t: Exposure midpoints, length ``M``.
+        delta: Exposure widths, length ``M`` (must be >= 0).
+
+    Returns:
+        The minimum number of groups, i.e. ``int(jnp.max(instid)) + 1`` for the
+        assignment :func:`assign_instids` produces.
+    """
+    if isinstance(t, jax.core.Tracer) or isinstance(delta, jax.core.Tracer):
+        raise TypeError(
+            "count_min_instids needs concrete coordinates: it reads their values "
+            "to size the augmented state, which cannot happen inside jit. Compute "
+            "it outside the trace and pass it in (as GaussianProcess.sample's "
+            "num_test_insts argument) -- it is 1 for instantaneous or "
+            "non-overlapping test points."
+        )
+    a = np.asarray(t, dtype=float) - np.asarray(delta, dtype=float) / 2
+    b = np.asarray(t, dtype=float) + np.asarray(delta, dtype=float) / 2
+    if a.size == 0:
+        return 0
+    open_at_start = np.searchsorted(np.sort(a), a, side="right") - np.searchsorted(
+        np.sort(b), a, side="right"
+    )
+    # A zero-width window has b_j == a_j, so the subtraction just counted it as
+    # already closed; add it back so it still occupies a group of its own.
+    return int(np.max(open_at_start + (b == a)))
+
+
+def assign_instids(t: JAXArray, delta: JAXArray, num_insts: int) -> JAXArray:
+    r"""Assign each exposure window to one of ``num_insts`` groups such that no
+    two conflicting windows share a group.
+
+    Unlike :func:`count_min_instids` this is fully jittable, provided
+    ``num_insts`` is a static Python ``int``.
+
+    Since the count is already known, simply sweep the windows in order of start 
+    time and give each one *any* currently-free group. Optimal and vectorizes.
+
+    Cost is :math:`O(M \log M)` for the sort plus :math:`O(M \cdot n)`, and beats
+    the :math:`O(M \log M)` for an eager heap because the heap's cost is Python 
+    interpreter overhead rather than its asymptotics, except only for very large 
+    ``M``, and the heap is not jittable.
+
+    Args:
+        t: Exposure midpoints, length ``M``.
+        delta: Exposure widths, length ``M`` (must be >= 0).
+        num_insts: Number of groups to assign into; must be static, and at
+            least :func:`count_min_instids` or the assignment is not valid.
+
+    Returns:
+        Length ``M`` integer array of group assignments,
+        ``0 <= instid[i] < num_insts``.
+    """
+    a = t - delta / 2
+    b = t + delta / 2
+    order = jnp.argsort(a)
+    a_sorted, b_sorted = a[order], b[order]
+
+    def step(free_at, i):
+        # free_at[g] is when group g's last window ended; -inf = never used.
+        gid = jnp.argmax(free_at <= a_sorted[i])
+        return free_at.at[gid].set(b_sorted[i]), gid
+
+    _, gids = lax.scan(step, jnp.full(num_insts, -jnp.inf), jnp.arange(a.shape[0]))
+    # gids are in start order; instid must come back in input order.
+    return jnp.zeros_like(gids).at[order].set(gids)
+
+
 def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
-    r"""Compute the minimum number of non-overlapping ``instid`` groups for a
+    r"""
+    Compute the minimum number of non-overlapping ``instid`` groups for a
     set of ``M`` exposure windows :math:`(t_i - \delta_i/2,\; t_i + \delta_i/2)`
     with arbitrary overlap.
 
@@ -20,39 +112,17 @@ def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
 
     This is the "minimum number of meeting rooms" problem, which is optimally
     solved with the standard "reuse whichever group's window finished earliest,
-    if it's  already finished" greedy sweep, via a min-heap keyed by end time.
-    Cost is :math:`O(M \log M)`.
+    if it's  already finished" greedy sweep. Cost is :math:`O(M \log M)`.
 
-    Written in plain Python/``heapq`` as it is a one-time preprocessing step
-    and defines the shape of the augmented state, two things that are not jittable.
-
-    Args:
-        t: Exposure midpoints, length ``M``.
-        delta: Exposure widths, length ``M`` (must be >= 0).
+    For calls inside ``jit``, first call :func:`count_min_instids` once outside the 
+    trace and then call :func:`assign_instids` directly.
 
     Returns:
-        instid: Length ``M`` integer array of group assignments,
-            ``0 <= instid[i] < num_insts``.
-        num_insts: The minimum number of "instruments" i.e. ``int(jnp.max(instid)) + 1``.
+        instid: Length ``M`` integer array of group assignments.
+        num_insts: The number of distinct groups used.
     """
-    a = [float(x) for x in (t - delta / 2)]
-    b = [float(x) for x in (t + delta / 2)]
-    M = len(a)
-    order = sorted(range(M), key=lambda i: a[i])
-
-    heap: list[tuple[float, int]] = []  # (end_time, group id), min-heap by end_time
-    instid = [0] * M
-    next_id = 0
-    for i in order:
-        if heap and heap[0][0] <= a[i]:
-            _end_time, gid = heapq.heappop(heap)
-        else:
-            gid = next_id
-            next_id += 1
-        instid[i] = gid
-        heapq.heappush(heap, (b[i], gid))
-
-    return jnp.array(instid, dtype=int), next_id
+    num_insts = count_min_instids(t, delta)
+    return assign_instids(t, delta, num_insts), num_insts
 
 
 def block_view(A, b):

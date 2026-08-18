@@ -16,7 +16,7 @@ import jax.numpy as jnp
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.helpers import assign_min_instids, robust_sqrt
+from smolgp.helpers import assign_instids, count_min_instids, robust_sqrt
 from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
 from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
@@ -419,28 +419,30 @@ class GaussianProcess(eqx.Module):
                         "instid must have the same length as the data coordinates "
                         f"(got {instid.shape[0]} vs {jnp.shape(t_coord)[0]})"
                     )
-                unique_insts = jnp.unique(instid)
-                num_insts = int(unique_insts.shape[0])
-                if not jnp.array_equal(unique_insts, jnp.arange(num_insts)):
-                    raise ValueError(
-                        "instid must contain consecutive integer instrument ids "
-                        f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
-                    )
+                try:
+                    # cannot be jitted, so if this fails
+                    unique_insts = jnp.unique(instid)
+                except jax.errors.ConcretizationTypeError:
+                    # just retain the kernel's configured num_insts
+                    unique_insts = None
+                if unique_insts is not None:
+                    num_insts = int(unique_insts.shape[0])
+                    if not jnp.array_equal(unique_insts, jnp.arange(num_insts)):
+                        raise ValueError(
+                            "instid must contain consecutive integer instrument ids "
+                            f"0, 1, ..., num_insts-1; got unique values {unique_insts}"
+                        )
 
-                # Only reinitialize when we're about to build a fresh solver from
-                # this kernel. When a pre-built solver instance is passed through
-                # (as GaussianProcess.condition() does when constructing the
-                # conditioned/prediction GP), the kernel must stay consistent with
-                # that already-built solver rather than be resized to match a
-                # possibly-partial test-time instid subset.
-                building_fresh_solver = solver is None or solver in [
-                    StateSpaceSolver,
-                    IntegratedStateSpaceSolver,
-                    ParallelStateSpaceSolver,
-                    ParallelIntegratedStateSpaceSolver,
-                ]
-                if building_fresh_solver:
-                    self.kernel = assign_num_insts(self.kernel, num_insts)
+                    # Only auto-resize for fresh solvers; preserve pre-built
+                    # solver kernels for when test-time instid is a partial subset.
+                    building_fresh_solver = solver is None or solver in [
+                        StateSpaceSolver,
+                        IntegratedStateSpaceSolver,
+                        ParallelStateSpaceSolver,
+                        ParallelIntegratedStateSpaceSolver,
+                    ]
+                    if building_fresh_solver:
+                        self.kernel = assign_num_insts(self.kernel, num_insts)
 
         # Data coordinates (or tuple of coordinates)
         self.X = X
@@ -523,19 +525,130 @@ class GaussianProcess(eqx.Module):
 
     @property
     def variance(self) -> JAXArray:
+        r"""The marginal variance at each coordinate, i.e.
+        :math:`\mathrm{diag}(\texttt{covariance})`.
+
+        If conditioned, this is the posterior variance at this GP's coordinates.
+        Otherwise it is the prior variance plus the observation noise.
+
+        Computed directly rather than constructing the full covariance
+        matrix and taking its diagonal (more expensive).
         """
-        If conditioned, this will be the variance at the data points
-        Otherwise, it is just the prior variance.
-        """
-        return self.var
+        if self.var is not None:
+            return self.var
+        prior_var = jax.vmap(self.kernel.evaluate)(self.X, self.X)
+        return prior_var + self._noise_diagonal()
+
+    def _noise_diagonal(self) -> JAXArray:
+        """Per-observation noise variance, as a length-``N`` vector."""
+        return jnp.diagonal(self.noise, axis1=-2, axis2=-1).squeeze(-1)
 
     @property
     def covariance(self) -> JAXArray:
-        # TODO: Eq. 12.55 in Sarkka & Solin 2019
-        #   if G = states.smoothing_gains exists, otherwise
-        #   I guess we raise an error that its not conditioned?
-        # return self.covariance_value
-        raise NotImplementedError
+        r"""The full covariance matrix at this GP's coordinates.
+        For just the diagonal, use :attr:`variance`.
+
+        .. warning::
+            This materializes an :math:`N \times N` matrix, which is exactly
+            the cost ``smolgp`` exists to avoid: :math:`O(N^2)` memory and,
+            for the conditioned case, :math:`O(N^2 d^3)` time. It is provided
+            for small problems, for validation against dense references, and
+            for cases genuinely needing the joint distribution. Prefer
+            :attr:`variance` (:math:`O(N)`) when the marginals suffice.
+
+        The unconditioned case is just the prior covariance plus measurement
+        noise :math:`k(X, X) + \Sigma_n`
+
+        The conditioned case returns the posterior covariance at the data using
+        the smoother cross-covariance identity (Eq. 12.55 of Särkkä & Solin 2019).
+        The diagonal is the observed smoothed variances,
+
+        .. math::
+            \Sigma_{k,k} = H_k P_k^s H_k^T,
+
+        and the lower triangle of the symmetric covariance matrix is
+
+        .. math::
+            \Sigma_{i,j}
+                = H_i \left(\prod_{m=i}^{j-1} G_m\right) P^s_j H_j^T, \quad i < j,
+
+        with :math:`G_k` the RTS smoothing gains. The gains are recomputed on
+        demand from the cached filtered/predicted covariances in :math:`O(N d^3)`,
+        negligible compared to forming the matrix itself.
+
+        Raises:
+            NotImplementedError: for a GP returned by
+                ``condition(y, X_test=...)``, whose coordinates are the test
+                points rather than the training states. The cross-covariance
+                *between* two arbitrary test points is not produced by the
+                current predict machinery.
+        """
+        if self.states is None:
+            return self.kernel(self.X, self.X) + jnp.diag(self._noise_diagonal())
+
+        n_train = self.states.y.shape[0]
+        if self.num_data != n_train:
+            raise NotImplementedError(
+                "covariance is only available at the training coordinates; this "
+                "GP was built by condition(y, X_test=...), so its coordinates are "
+                f"{self.num_data} test points rather than the {n_train} training "
+                "points. Condition without X_test to get the joint posterior "
+                "covariance at the data."
+            )
+        return self._posterior_covariance()
+
+    def _posterior_covariance(self) -> JAXArray:
+        r"""The joint posterior covariance at the data points, via the RTS
+        smoother cross-covariance recursion (see :attr:`covariance`).
+
+        See Eq. 12.55 of Särkkä & Solin 2019. We expand this definition to
+        include integrated SSMs by first building the ``(K, K, d, d)``
+        state-space cross-covariance, then selecting and projecting the
+        ``N`` data-carrying states into observation space in data order.
+        """
+        sc = self.state_coords
+        t_states, _stateid = sc.t_states, sc.stateid
+        K = t_states.shape[0]
+        N = self.states.y.shape[0]
+
+        P_filt = self.states.filtered_cov
+        P_pred = self.states.predicted_cov
+        P_smooth = self.states.smoothed_cov
+
+        # Recompute the y-independent smoothing gains from the cached covariances
+        G = self.solver.smoothing_gains(P_filt, P_pred)
+
+        # Row i of the block matrix: running product G_i G_{i+1} ... G_{j-1},
+        # right-multiplied by P^s_j. Scanning forward from each i keeps this at
+        # one (d, d) matmul per block rather than re-deriving the product.
+        eye = jnp.eye(self.kernel.dimension, dtype=P_smooth.dtype)
+
+        def row(i):
+            def step(prod, j):
+                # prod holds G_i...G_{j-1}; advance it with G_{j-1} for j > i.
+                prod_next = jnp.where(j > i, prod @ G[jnp.clip(j - 1, 0, K - 2)], prod)
+                block = jnp.where(j >= i, prod_next @ P_smooth[j], jnp.zeros_like(eye))
+                return prod_next, block
+
+            _, blocks = jax.lax.scan(step, eye, jnp.arange(K))
+            return blocks  # (K, d, d), valid for j >= i
+
+        upper = jax.lax.map(row, jnp.arange(K))  # (K, K, d, d), upper triangle
+
+        # Mirror the upper triangle into the lower one: Cov(j, i) = Cov(i, j)^T.
+        lower = jnp.swapaxes(jnp.transpose(upper, (1, 0, 2, 3)), -1, -2)
+        iu = jnp.arange(K)[:, None] <= jnp.arange(K)[None, :]
+        C = jnp.where(iu[..., None, None], upper, lower)
+
+        # Select the data-carrying states, in data order, and project.
+        idx = data_order_indices(sc, N)
+        C_data = jnp.take(jnp.take(C, idx, axis=0), idx, axis=1)
+        H = jax.vmap(self.kernel.observation_model)(self.X)  # (N, D, dim)
+
+        def project(H_a, row_blocks):
+            return jax.vmap(lambda H_b, blk: (H_a @ blk @ H_b.T)[0, 0])(H, row_blocks)
+
+        return jax.vmap(project)(H, C_data)
 
     def log_probability(self, y: JAXArray) -> JAXArray:
         """Compute the log probability of this multivariate normal
@@ -832,6 +945,7 @@ class GaussianProcess(eqx.Module):
         key: jax.random.KeyArray,
         shape: Sequence[int] | None = None,
         X_test: JAXArray | None = None,
+        num_test_insts: int | None = None,
     ) -> JAXArray:
         """Generate samples from the process.
 
@@ -864,6 +978,14 @@ class GaussianProcess(eqx.Module):
                 integrated kernel, this should be either ``(t, delta)`` or ``(t, delta, instid)``
                 where ``t`` is the array of exposure midpoints, ``delta`` is the array of
                 exposure durations, and ``instid`` is the array of instrument IDs for each exposure.
+            num_test_insts (int, optional): Number of probe groups to allocate
+                for exposure-integrated test points. Derived from the
+                coordinates when omitted, which reads their values and so
+                cannot run under ``jit``. Pass it explicitly -- it is ``1``
+                for instantaneous or non-overlapping test points -- to keep
+                this call jittable. Must be at least
+                :func:`~smolgp.helpers.count_min_instids`, or overlapping
+                windows will share a probe and the draw will be wrong.
 
         Returns:
             The sampled realizations from the process with shape ``(N_samples,) +
@@ -876,7 +998,7 @@ class GaussianProcess(eqx.Module):
         # always auto-assigned here; the real instrument instid (for the
         # observation model) defaults to 0 if not given. num_test_insts must
         # be concrete here since it sizes kernel_ext inside _sample.
-        num_test_insts = 0
+        n_probe = 0
         instid_proj = None
         if (
             isinstance(X_test, tuple)
@@ -884,14 +1006,24 @@ class GaussianProcess(eqx.Module):
             and isinstance(self.solver, IntegratedStateSpaceSolver)
         ):
             t_test, delta_test = X_test[0], X_test[1]
-            instid_group, num_test_insts = assign_min_instids(t_test, delta_test)
+            # Deriving the probe count reads the coordinate *values*, so it
+            # cannot happen under a trace. A caller who already knows it --
+            # e.g. non-overlapping exposures, or instantaneous test points,
+            # both of which need exactly one probe -- can pass it in and keep
+            # this whole call jittable.
+            n_probe = (
+                count_min_instids(t_test, delta_test)
+                if num_test_insts is None
+                else int(num_test_insts)
+            )
+            instid_group = assign_instids(t_test, delta_test, n_probe)
             instid_proj = (
                 jnp.asarray(X_test[2])
                 if len(X_test) > 2
                 else jnp.zeros_like(instid_group)
             )
             X_test = (t_test, delta_test, instid_group)
-        return self._sample(key, shape, X_test, num_test_insts, instid_proj)
+        return self._sample(key, shape, X_test, n_probe, instid_proj)
 
     def numpyro_dist(self, **kwargs: Any) -> TinyDistribution:
         """Get the numpyro MultivariateNormal distribution for this process"""

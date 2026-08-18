@@ -11,6 +11,7 @@ from tinygp.solvers.quasisep.solver import QuasisepSolver
 from smolgp.kernels.base import StateSpaceModel
 from smolgp.solvers.parallel.kalman import ParallelKalmanFilter
 from smolgp.solvers.parallel.rts import ParallelRTSSmoother
+from smolgp.solvers.rts import rts_gains
 from smolgp.solvers.state_coords import StateCoords
 
 
@@ -60,15 +61,15 @@ class ParallelStateSpaceSolver(eqx.Module):
         """Gather per-observation arrays into the solver's (sorted) state
         order; see :meth:`smolgp.solvers.solver.StateSpaceSolver._to_state_order`."""
         obsid = self.state_coords.obsid
-        return tuple(
-            jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays
-        )
+        return tuple(jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays)
 
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
         y_nd = y[:, None] if y.ndim == 1 else y
-        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(
+            self.X, y_nd, self.noise
+        )
         return ParallelKalmanFilter(
             self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )
@@ -77,6 +78,21 @@ class ParallelStateSpaceSolver(eqx.Module):
         """Wrapper for RTS smoother used with this solver"""
         (X_sorted,) = self._to_state_order(self.X)
         return ParallelRTSSmoother(self.kernel, X_sorted, kalman_results)
+
+    def smoothing_gains(self, P_filtered, P_predicted) -> JAXArray:
+        """The RTS smoothing gains G_k; see
+        :meth:`smolgp.solvers.solver.StateSpaceSolver.smoothing_gains`.
+
+        The gains are a pointwise function of the filtered/predicted
+        covariances, which this solver produces identically to the sequential
+        one, so the same helper applies.
+        """
+        return rts_gains(
+            self.kernel.transition_matrix,
+            self.state_coords.t_states,
+            P_filtered,
+            P_predicted,
+        )
 
     def condition(self, y, return_v_S=False) -> JAXArray:
         """

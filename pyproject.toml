@@ -1,6 +1,6 @@
 [project]
 name = "smolgp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Gaussian Process State Space Models in Python/JAX"
 authors = [{ name = "Ryan Rubenzahl", email = "rrubenzahl@gmail.com" },
            { name = "Soichiro Hattori", email = "soichiro.hattori@gmail.com"}]
@@ -16,11 +16,15 @@ classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
 ]
+
 dependencies = [
     "equinox>=0.13.1",
     "jax>=0.6.2",
-    "tinygp>=0.3.1",
+    "tinygp>=0.3.2.dev0",
 ]
+
+[tool.uv.sources]
+tinygp = { git = "https://github.com/dfm/tinygp.git", branch = "main" }
 
 # Dependency groups are for development, testing, documentation, etc.
 [dependency-groups]
@@ -44,20 +48,7 @@ docs = [
 #    "numpyro",
 #    "jaxopt",
 ]
-cuda = ["jax[cuda12]"] # for benchmarking on GPU
-
-# Optional dependencies are for extra functionality users may want
-[project.optional-dependencies]
-cuda12 = ["jax[cuda12]"]
-cuda13 = ["jax[cuda13]"]
-
-[tool.uv]
-conflicts = [
-    [
-    {group = "cuda12"}, 
-    {group = "cuda13"}
-    ]
-]
+cuda = ["jax[cuda13]"] # for benchmarking on GPU
 
 [build-system]
 requires = ["hatchling >= 1.26"]

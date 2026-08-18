@@ -52,7 +52,7 @@ def test_parallel():
     ## Mock integrated data
     texp, readout = 140.0, 40.0
     t_train, y_train = generate_integrated_data(
-        N, kernel_tiny, texp=texp, readout=readout, yerr=yerr
+        N, kernel_smol, texp=texp, readout=readout, yerr=yerr
     )
     texp_train = jnp.full_like(t_train, texp)
     yerr_train = jnp.full_like(t_train, yerr)
