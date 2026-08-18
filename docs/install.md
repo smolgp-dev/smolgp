@@ -6,16 +6,10 @@
 
 As `smolgp` extends the functionality of `tinygp`, it utilizes a number of fundamental `tinygp` functions and classes and so requires `tinygp` as a dependency. 
 
-:::{admonition} **Installing on GPU** 
-:class: tip
-If you want to take advantage of the GPU-optimized parts of the code (e.g. the parallel solvers), you'll want to install the CUDA version of [`jax`](https://github.com/google/jax/#installation). You can do that with `uv` like so:
-```bash
-uv add smolgp[cuda]
-```
-or `uv add smolgp[cuda12]` or `uv add smolgp[cuda13]` for a specific version.
-:::
+::::{tab-set}
 
-## Using uv
+:::{tab-item} uv
+:sync: uv
 
 The recommended way to install the most recent stable version of `smolgp` is to use [uv](https://docs.astral.sh/uv/):
 ```bash
@@ -25,6 +19,10 @@ To install in the current `uv` venv but not add it to `pyproject.toml`, you can 
 ```bash
 uv pip install smolgp
 ```
+:::
+
+:::{tab-item} pip
+:sync: pip
 
 Of course, you can always just use [pip](https://pip.pypa.io):
 ```bash
@@ -32,8 +30,10 @@ python -m pip install smolgp
 ```
 
 We do not recommend using `conda`.
+:::
 
-## From source
+:::{tab-item} From source
+:sync: source
 
 Alternatively, you can get the source:
 
@@ -46,6 +46,21 @@ Or, to add to another `uv` enviornment:
 ```bash
 uv add --editable /path/to/smolgp
 ```
+:::
+
+::::
+
+:::{admonition} **Installing on GPU** 
+:class: tip
+If you want to take advantage of the GPU-optimized parts of the code (e.g. the {ref}`parallel solvers <parallel>`), you'll want to install the CUDA version of [`jax`](https://github.com/google/jax/#installation). You can do that with `uv` like so:
+```bash
+uv add smolgp[cuda]
+```
+or `uv add smolgp[cuda12]` or `uv add smolgp[cuda13]` for a specific version.
+
+Just remember to switch back before running on CPU ;)
+:::
+
 
 ## Tests
 
