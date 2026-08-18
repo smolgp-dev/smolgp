@@ -4,6 +4,9 @@
 
 # Installation Guide
 
+[![PyPI](https://img.shields.io/pypi/v/smolgp)](https://pypi.org/project/smolgp/)
+[![Supported Python versions](https://img.shields.io/pypi/pyversions/smolgp)](https://pypi.org/project/smolgp/)
+
 As `smolgp` extends the functionality of `tinygp`, it utilizes a number of fundamental `tinygp` functions and classes and so requires `tinygp` as a dependency. 
 
 ::::{tab-set}

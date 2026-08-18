@@ -78,3 +78,28 @@ html_theme_options = {
     "use_download_button": True,
 }
 html_baseurl = "https://smolgp.readthedocs.io/en/latest/"
+
+
+# -- Lightbox ------------------------------------------------
+# sphinxcontrib.lightbox2 wraps every image in its own <a>, including images
+# that are already links (badges).  Nested <a> is invalid HTML, so the browser
+# drops the outer one and the badge opens the image instead of its target.
+# Leave linked images alone; everything else still gets a lightbox.
+def setup(app):
+    from docutils import nodes
+    from sphinx.writers.html5 import HTML5Translator
+    from sphinxcontrib import lightbox2
+
+    def visit_image(self, node):
+        if isinstance(node.parent, nodes.reference):
+            HTML5Translator.visit_image(self, node)
+        else:
+            lightbox2.html_visit_image(self, node)
+
+    def depart_image(self, node):
+        if isinstance(node.parent, nodes.reference):
+            HTML5Translator.depart_image(self, node)
+        else:
+            lightbox2.html_depart_image(self, node)
+
+    app.add_node(nodes.image, html=(visit_image, depart_image), override=True)
