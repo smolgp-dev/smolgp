@@ -1,2 +1,2 @@
 docs/* linguist-documentation
-tests/* linguist-detectable=false
+tests/benchmark/run/* linguist-detectable=false
