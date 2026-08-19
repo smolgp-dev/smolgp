@@ -40,6 +40,7 @@ from smolgp.kernels.base import (
     Exp as Exp,
     Matern32 as Matern32,
     Matern52 as Matern52,
+    Matern as Matern,
     Cosine as Cosine,
     ExpSineSquared as ExpSineSquared,
     Quasiperiodic as Quasiperiodic,
