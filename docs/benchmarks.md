@@ -5,7 +5,7 @@
 This page summarizes the key plots from Section 4 in [Rubenzahl et al. 2026](https://ui.adsabs.harvard.edu/abs/2026arXiv260102527R/abstract), which benchmark the performance of `smolgp` on CPU (blue curves) and GPU (purple curves). We compare to the performance of the full (dense) GP solution, as implemented in `tinygp` (green curves), as well as the `tinygp` quasiseprable implementation on CPU (orange) and GPU (red).
 
 Each set of plots benchmark the runtime and memory usage for computing the
-1. likelihood
+1. likelihood (value only and [value + gradient](https://docs.jax.dev/en/latest/_autosummary/jax.value_and_grad.html))
 2. conditioned mean and variance at the data points
 3. predicted mean and variance at some test points,
 4. drawing samples from the prior, and
@@ -18,7 +18,7 @@ Note that both predicting (#3) and sampling the posterior (#5) at test points sc
 CPU benchmarks were run on an Intel&reg; Xeon&reg; w53435X with 512 GB RAM.
 GPU benchmarks were run on an NVIDIA RTX 6000 Ada with 48 GB of GPU memory, running CUDA v12.8. The functions used for timing and memory profiling are located in [`tests/benchmark`](https://github.com/smolgp-dev/smolgp/tree/main/tests/benchmark). 
 
-Runs where the peak memory usage was too low to be reliably measured above the baseline noise are drawn as open circles computed from the theoretical memory usage given the measured scaling. As such, these regions are likely overhead-limited.
+For memory profiling, solid curves show the total peak memory the process actually used (i.e., including overhead like interpreter, JIT, etc.). The faded curves with open markers show just the memory used in the computation, taken from the XLA buffer. 
 :::
 
 ## Instantaneous measurements
@@ -32,6 +32,10 @@ For instantaneous measurements, and certain kernels[^1], optimized quasiseparabl
 
 :::{grid-item}
 :::{image} _static/benchmarks/llh_benchmark.png
+:::
+
+:::{grid-item}
+:::{image} _static/benchmarks/llh_value_and_grad_benchmark.png
 :::
 
 :::{grid-item}
@@ -63,6 +67,10 @@ Note that sampling integrated exposures incurs an additional scaling penalty if 
 
 :::{grid-item}
 :::{image} _static/benchmarks/llh_int_benchmark.png
+:::
+
+:::{grid-item}
+:::{image} _static/benchmarks/llh_int_value_and_grad_benchmark.png
 :::
 
 :::{grid-item}
