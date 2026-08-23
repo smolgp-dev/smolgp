@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GPU sweeps. Everything applicable by default; pick individual ones with flags.
 #
-#   ./run/rungpu.sh                     all applicable: llh, cond, pred
+#   ./run/rungpu.sh                     all applicable: llh, llh-vg, cond, pred
 #   ./run/rungpu.sh --llh               just the likelihood
 #   ./run/rungpu.sh --cond --int        integrated conditioning
 #   ./run/rungpu.sh --check             verify the profiler, run nothing
@@ -78,7 +78,8 @@ for kind in $(expand_kinds "$KINDS"); do
             continue
             ;;
     esac
-    run "$kind$TAG (GPU)" "$kind" --gpu ${EXTRA[@]+"${EXTRA[@]}"} $GPU_BUDGET --plot
+    run "$kind$TAG (GPU)" $(kind_args "$kind") --gpu ${EXTRA[@]+"${EXTRA[@]}"} \
+        $GPU_BUDGET --plot
 done
 
 summary
