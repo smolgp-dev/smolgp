@@ -332,7 +332,7 @@ def test_smoothing_gain_singular_input():
     fall back to the lstsq minimum-norm solution, matching a manual lstsq
     call on the same system exactly.
     """
-    from smolgp.helpers import get_smoothing_gain
+    from smolgp.helpers import smoothing_gain
 
     key1 = jax.random.PRNGKey(1)
     n = 4
@@ -346,7 +346,7 @@ def test_smoothing_gain_singular_input():
     P_pred_next = Reset @ P @ Reset.T  # exactly singular at reset_idx
     numerator = P @ Reset.T  # matches the AR/A_k.T structure at Delta=0
 
-    G = get_smoothing_gain(P_pred_next, numerator)
+    G = smoothing_gain(P_pred_next, numerator)
     G_lstsq, *_ = jnp.linalg.lstsq(P_pred_next.T, numerator.T)
     G_lstsq = G_lstsq.T
 

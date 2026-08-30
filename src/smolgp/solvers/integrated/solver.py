@@ -8,8 +8,9 @@ import jax.numpy as jnp
 from tinygp.helpers import JAXArray
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 
-from smolgp.helpers import get_smoothing_gain
+from smolgp.helpers import smoothing_gain
 from smolgp.kernels.base import StateSpaceModel
+from smolgp.solvers.base import Solver
 from smolgp.solvers.integrated.kalman import (
     IntegratedKalmanFilter,
     integrated_kalman_filter_batched_mean,
@@ -24,16 +25,11 @@ from smolgp.solvers.integrated.rts import (
 from smolgp.solvers.state_coords import StateCoords
 
 
-class IntegratedStateSpaceSolver(eqx.Module):
+class IntegratedStateSpaceSolver(Solver):
     """
     A solver that uses ``jax.lax.scan`` to implement Kalman filtering
     and RTS smoothing for integrated measurements
     """
-
-    X: JAXArray
-    kernel: StateSpaceModel
-    noise: JAXArray  # shape (N, D, D): observation noise covariance per time step
-    state_coords: StateCoords
 
     def __init__(
         self,
@@ -89,19 +85,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
             t_states=t_states, instid=instid, obsid=obsid, stateid=stateid
         )
 
-    def normalization(self) -> JAXArray:
-        # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-        class _NoiseAdapter:
-            def __init__(self, n):
-                self._n = n
-
-            def diagonal(self):
-                return self._n[0, 0, :]
-
-        return QuasisepSolver(
-            self.kernel, self.X, _NoiseAdapter(self.noise)
-        ).normalization()
-
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         sc = self.state_coords
@@ -144,33 +127,6 @@ class IntegratedStateSpaceSolver(eqx.Module):
             P_filtered,
             P_predicted,
         )
-
-    def condition(self, y, return_v_S=False) -> JAXArray:
-        """
-        Compute the Kalman predicted, filtered, and RTS smoothed
-        means and covariances at each of the input coordinates
-        """
-
-        # Kalman filtering
-        kalman_results = self.Kalman(y, return_v_S=return_v_S)
-        if return_v_S:
-            m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
-            v_S = (v, S)
-        else:
-            m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
-            v_S = None
-
-        # RTS smoothing
-        rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
-        m_smoothed, P_smoothed = rts_results
-
-        conditioned_states = (
-            (m_predicted, P_predicted),
-            (m_filtered, P_filtered),
-            (m_smoothed, P_smoothed),
-        )
-
-        return self.state_coords, conditioned_states, v_S
 
     def condition_batched_mean(self, y_batch: JAXArray) -> JAXArray:
         """
@@ -334,7 +290,7 @@ class IntegratedStateSpaceSolver(eqx.Module):
             A_k = A_aug(dt)
 
             # RTS update
-            G_k = get_smoothing_gain(P_pred_next, P_star_pred @ A_k.T)
+            G_k = smoothing_gain(P_pred_next, P_star_pred @ A_k.T)
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
             P_star_hat = P_star_pred + G_k @ (P_hat_next - P_pred_next) @ G_k.T
 

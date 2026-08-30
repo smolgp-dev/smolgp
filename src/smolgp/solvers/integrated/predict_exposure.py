@@ -5,7 +5,7 @@ import dataclasses
 import jax
 import jax.numpy as jnp
 
-from smolgp.helpers import get_smoothing_gain
+from smolgp.helpers import smoothing_gain
 
 
 def predict_exposure(
@@ -161,7 +161,7 @@ def predict_exposure(
     A_real = kernel.transition_matrix(0, dt_next)
     A_rect = jnp.zeros((n, n_ext)).at[:, :n].set(A_real)
     numerator = P_star_pred @ A_rect.T
-    G_k = get_smoothing_gain(P_predicted[idx_next], numerator)
+    G_k = smoothing_gain(P_predicted[idx_next], numerator)
     m_smooth_res = m_star_pred + G_k @ (m_smoothed[idx_next] - m_predicted[idx_next])
     P_smooth_res = (
         P_star_pred + G_k @ (P_smoothed[idx_next] - P_predicted[idx_next]) @ G_k.T

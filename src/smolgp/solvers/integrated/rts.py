@@ -3,7 +3,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from smolgp.helpers import get_smoothing_gain
+from smolgp.helpers import smoothing_gain
 
 
 def IntegratedRTSSmoother(kernel, t_states, obsid, instid, stateid, kalman_results):
@@ -52,7 +52,13 @@ def integrated_rts_smoother(
     for detailed description of the algorithm and notation.
     """
 
-    def step(carry, k):
+    A_all = jax.vmap(lambda d: A_aug(0, d))(jnp.diff(t_states))
+
+    def step(carry, data):
+        # k is still streamed: the body gathers m_filtered[k] and friends, and
+        # branches on stateid[k] / obsid[k].
+        A_k, k = data
+
         # Outputs from Kalman filter, unpacked for notational consistency
         m_k = m_filtered[k]
         P_k = P_filtered[k]
@@ -62,10 +68,6 @@ def integrated_rts_smoother(
         # Unpack state and covariance from last iteration
         m_hat_next, P_hat_next = carry
 
-        # Compute smoothing gain
-        Delta = t_states[k + 1] - t_states[k]
-        A_k = A_aug(0, Delta)
-
         def smooth_start():
             """RTS smooth an exposure-start state"""
 
@@ -74,14 +76,14 @@ def integrated_rts_smoother(
 
             Reset = RESET(instid[obsid[k]])
             AR = A_k @ Reset
-            G_k = get_smoothing_gain(P_pred_next, P_k_pre @ AR.T)
+            G_k = smoothing_gain(P_pred_next, P_k_pre @ AR.T)
             m_hat_k = m_k_pre + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k_pre + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
 
         def smooth_end():
             """RTS smooth an exposure-end state"""
-            G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)
+            G_k = smoothing_gain(P_pred_next, P_k @ A_k.T)
             m_hat_k = m_k + G_k @ (m_hat_next - m_pred_next)
             P_hat_k = P_k + G_k @ (P_hat_next - P_pred_next) @ G_k.T
             return m_hat_k, P_hat_k
@@ -100,7 +102,8 @@ def integrated_rts_smoother(
 
     # Run backward from N-2 down to 0
     K = len(t_states)  # number of iterations
-    _, outputs = jax.lax.scan(step, init_carry, jnp.arange(K - 2, -1, -1))
+    ks = jnp.arange(K - 2, -1, -1)
+    _, outputs = jax.lax.scan(step, init_carry, (A_all[::-1], ks))
     m_smooth_reversed, P_smooth_reversed = outputs
 
     # Reverse outputs (with final filtered=smoothed state) to match time order
@@ -131,11 +134,11 @@ def integrated_rts_gains(A_aug, RESET, t_states, obsid, instid, stateid, P_filte
             P_k_pre = P_predicted[k]
             Reset = RESET(instid[obsid[k]])
             AR = A_k @ Reset
-            return get_smoothing_gain(P_pred_next, P_k_pre @ AR.T)
+            return smoothing_gain(P_pred_next, P_k_pre @ AR.T)
 
         def end_gain():
             P_k = P_filtered[k]
-            return get_smoothing_gain(P_pred_next, P_k @ A_k.T)
+            return smoothing_gain(P_pred_next, P_k @ A_k.T)
 
         return jax.lax.cond(
             stateid[k] == 0, lambda _: start_gain(), lambda _: end_gain(), operand=None

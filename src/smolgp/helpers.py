@@ -210,14 +210,66 @@ def robust_sqrt(M: JAXArray) -> JAXArray:
     return V * jnp.sqrt(jnp.clip(w, min=0.0))[None, :]
 
 
-def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
+def transition_sequence(A, Q, t: JAXArray) -> tuple[JAXArray, JAXArray]:
+    r"""Per-step transition matrices and process noise, for precomputing.
+
+    Returns ``A(0, Delta_k)`` and ``Q(0, Delta_k)`` for every step ``k``, with
+    :math:`\Delta_0 = 0` for the first step (transition from the prior) and
+    :math:`\Delta_k = t_k - t_{k-1}` thereafter.
+
+    Building these with :func:`jax.vmap` ahead of the scan, and streaming them
+    in as scan ``xs``, is much faster than calling ``A``/``Q`` inside the scan
+    body even though the arithmetic is identical: both are matrix exponentials
+    (or Van Loan blocks) of a fixed generator, so as a scan body they are a
+    serial chain of small unfusable kernels, whereas vmapped they become one
+    batched kernel. The tradeoff is carrying two extra arrays of shape 
+    ``(N, dim, dim)`` in memory, which is not a significant addition.
+    """
+    Deltas = jnp.concatenate([jnp.zeros((1,), t.dtype), jnp.diff(t)])
+    A_all = jax.vmap(lambda d: A(0, d))(Deltas)
+    Q_all = jax.vmap(lambda d: Q(0, d))(Deltas)
+    return A_all, Q_all
+
+
+def kalman_gain(S: JAXArray, PHt: JAXArray) -> JAXArray:
+    r"""The Kalman gain 
+    
+    .. math:: 
+        K_k = \mathbf{P}_k^- \mathbf{H}_k^T \mathbf{S}_k^{-1}.
+
+    Args:
+        S: The :math:`D \times D` innovation covariance  :math:`\mathbf{H}_k \mathbf{P}_k^- \mathbf{H}_k^T + \mathbf{R}_k`
+        PHt: The product :math:`\mathbf{P}_k^- \mathbf{H}_k^T`, shape ``(dim, D)``.
+
+    For a scalar observation (``D == 1``) the inverse is just division,
+    and ``D = S.shape[0]`` is a static shape known at trace time, so we
+    can boost performance for this common case by avoiding ``solve``.
+    """
+    if S.shape[0] == 1:
+        return PHt / S[0, 0]
+    return jnp.linalg.solve(S.T, PHt.T).T
+
+
+def smoothing_gain(P_pred_next: JAXArray, PAt: JAXArray) -> JAXArray:
     r"""Computes the RTS smoothing gain :math:`G_k` from
 
     .. math::
 
-        G_k^T = \mathrm{solve}(\mathbf{P}_{\mathrm{pred,next}}^T,\ \mathrm{numerator}^T),
+        G_k = \mathbf{P}_k \mathbf{A}_k^T \left[\mathbf{P}_{k+1}^{-}\right]^{-1}.
 
-    guarding against :math:`\mathbf{P}_{\mathrm{pred,next}}` being exactly singular. This
+    Args:
+        P_pred_next: The predicted covariance :math:`\mathbf{P}_{k+1}^{-}` for the next step.
+        PAt: The product :math:`\mathbf{P}_k \mathbf{A}_k^T` for the current step.
+
+    Returns:
+        The RTS smoothing gain :math:`G_k`.
+
+    TLDR; usage converts
+        ``G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T``
+    to
+        ``G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)``
+
+    Guards against :math:`\mathbf{P}_{\mathrm{pred,next}}` being exactly singular. This
     arises when two states in an exposure-aware model occupy the same instant in time,
     which produces a singular covariance in two different ways:
         1. An exposure-start reset zeroes a row/column of the covariance. If the following
@@ -241,11 +293,6 @@ def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
     Both branches compute the correct smoothing gain by inverting the predicted covariance, but with different methods:
     - The common (non-singular) case uses :func:`jnp.linalg.solve` (LU-based, cheap), which assumes invertibility.
     - The degenerate case uses :func:`jnp.linalg.lstsq` (SVD-based), which is more expensive but handles singular matrices correctly.
-
-    TLDR; usage converts
-        ``G_k = jnp.linalg.solve(P_pred_next.T, (P_k @ A_k.T).T).T``
-    to
-        ``G_k = get_smoothing_gain(P_pred_next, P_k @ A_k.T)``
     """
     n = P_pred_next.shape[0]
     scale = jnp.trace(P_pred_next) / n
@@ -254,10 +301,10 @@ def get_smoothing_gain(P_pred_next: JAXArray, numerator: JAXArray) -> JAXArray:
     is_singular = (sign <= 0) | (logdet_normalized < -30.0)
 
     def solve_generic(_):
-        return jnp.linalg.solve(P_pred_next.T, numerator.T).T
+        return jnp.linalg.solve(P_pred_next.T, PAt.T).T
 
     def solve_degenerate(_):
-        Y, *_ = jnp.linalg.lstsq(P_pred_next.T, numerator.T)
+        Y, *_ = jnp.linalg.lstsq(P_pred_next.T, PAt.T)
         return Y.T
 
     return jax.lax.cond(is_singular, solve_degenerate, solve_generic, operand=None)

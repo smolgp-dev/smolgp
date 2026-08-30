@@ -3,6 +3,9 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+from smolgp.helpers import kalman_gain, transition_sequence
+from smolgp.solvers.base import log_prob_from_v_S
+
 
 def IntegratedKalmanFilter(
     kernel, X, y, t_states, obsid, instid, stateid, R, return_v_S=False
@@ -62,21 +65,16 @@ def integrated_kalman_filter(
     """
 
     H = jax.vmap(H_aug)(X)
+    A_all, Q_all = transition_sequence(A_aug, Q_aug, t_states)
 
     @jax.jit
-    def step(carry, k):
+    def step(carry, data):
         # Unpack previous state and covariance
         m_prev, P_prev = carry
-
-        # If k==0 we use the prior m0, Pinf and zero time-lag (dt=0)
-        Delta = jax.lax.cond(
-            k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k
-        )
+        # k is still streamed: the body indexes obsid[k] and stateid[k], and
+        # gathers per-observation H/y/R through n = obsid[k].
+        A_prev, Q_prev, k = data
         n = obsid[k]
-
-        # Get transition matrix
-        A_prev = A_aug(0, Delta)
-        Q_prev = Q_aug(0, Delta)
 
         # Predict step is same
         m_pred = A_prev @ m_prev
@@ -88,7 +86,7 @@ def integrated_kalman_filter(
             y_pred = Hk @ m_pred  # predicted observation
             v_k = y[n] - y_pred  # "innovation" or "surprise" term
             S_k = Hk @ P_pred @ Hk.T + R[n]  # uncertainy in predicted observation
-            K_k = jnp.linalg.solve(S_k.T, (P_pred @ Hk.T).T).T  # Kalman gain
+            K_k = kalman_gain(S_k, P_pred @ Hk.T)  # Kalman gain
             m_k = m_pred + K_k @ v_k  # conditioned state estimate
             P_k = P_pred - K_k @ S_k @ K_k.T  # conditioned covariance estimate
             return m_k, P_k, m_pred, P_pred, v_k, S_k
@@ -116,7 +114,9 @@ def integrated_kalman_filter(
     init_carry = (m0, P0)
 
     # Run the filter over all time steps, unpack, and return results
-    _, outputs = jax.lax.scan(step, init_carry, jnp.arange(len(t_states)))
+    _, outputs = jax.lax.scan(
+        step, init_carry, (A_all, Q_all, jnp.arange(len(t_states)))
+    )
     m_filtered, P_filtered, m_predicted, P_predicted, v, S = outputs
 
     # only return v,S at exposure ends (where there is data)
@@ -159,7 +159,7 @@ def integrated_kalman_gains(A_aug, H_aug, RESET, R, X, t_states, obsid, instid, 
         Hk = H_all[n]
         P_pred_k = P_predicted[k]
         S_k = Hk @ P_pred_k @ Hk.T + R[n]
-        K_k = jnp.linalg.solve(S_k.T, (P_pred_k @ Hk.T).T).T
+        K_k = kalman_gain(S_k, P_pred_k @ Hk.T)
         Reset_k = RESET(instid[n])
         return A_k, K_k, Reset_k
 

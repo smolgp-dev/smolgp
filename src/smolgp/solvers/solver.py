@@ -9,12 +9,18 @@ from tinygp.helpers import JAXArray
 from tinygp.solvers.quasisep.solver import QuasisepSolver
 
 from smolgp.kernels.base import StateSpaceModel
-from smolgp.solvers.kalman import KalmanFilter, kalman_filter_batched_mean, kalman_gains
+from smolgp.solvers.base import Solver
+from smolgp.solvers.kalman import (
+    KalmanFilter,
+    KalmanLoglike,
+    kalman_filter_batched_mean,
+    kalman_gains,
+)
 from smolgp.solvers.rts import RTSSmoother, rts_gains, rts_smoother_batched_mean
 from smolgp.solvers.state_coords import StateCoords
 
 
-class StateSpaceSolver(eqx.Module):
+class StateSpaceSolver(Solver):
     r"""A solver that implements Kalman filtering and RTS smoothing for state space GPs.
 
     Given a :class:`~smolgp.kernels.StateSpaceModel` kernel and a set of observed
@@ -45,11 +51,6 @@ class StateSpaceSolver(eqx.Module):
             case (see :meth:`~smolgp.solvers.state_coords.StateCoords.instantaneous`).
     """
 
-    X: JAXArray
-    kernel: StateSpaceModel
-    noise: JAXArray
-    state_coords: StateCoords
-
     def __init__(
         self,
         kernel: StateSpaceModel,
@@ -68,50 +69,27 @@ class StateSpaceSolver(eqx.Module):
         self.noise = noise
         self.state_coords = StateCoords.instantaneous(kernel.coord_to_sortable(X))
 
-    @property
-    def t_states(self) -> JAXArray:
-        """Sortable scalar coordinates of each state (``state_coords.t_states``)."""
-        return self.state_coords.t_states
-
-    def normalization(self) -> JAXArray:
-        # TODO: do we want/can we implement this in state space? for now, fall back to quasisep
-        class _NoiseAdapter:
-            def __init__(self, n):
-                self._n = n
-
-            def diagonal(self):
-                return self._n[0, 0, :]
-
-        return QuasisepSolver(
-            self.kernel, self.X, _NoiseAdapter(self.noise)
-        ).normalization()
-
-    def _to_state_order(self, *arrays: JAXArray) -> tuple[JAXArray, ...]:
-        """Gather per-observation arrays into the solver's (sorted) state order.
-
-        ``self.X`` and everything derived from it (``y``, ``noise``) are kept
-        in the caller's input order; the filter/smoother step through time, so
-        they need the sorted order instead. ``state_coords.obsid`` is exactly
-        that permutation. Results come back in state order and are mapped
-        back by the usual sort-by-``obsid`` machinery.
-        """
-        obsid = self.state_coords.obsid
-        return tuple(jax.tree_util.tree_map(lambda a: a[obsid], arr) for arr in arrays)
-
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         y_nd = y[:, None] if y.ndim == 1 else y
-        # Pass the FULL X (not just t_states): the filter derives its own
-        # sortable timeline via coord_to_sortable, but also needs the
-        # unreduced coordinates to evaluate an observation model that depends
-        # on more than the sort key (e.g. a per-output id channel). Sorting X
-        # here is what makes that derived timeline monotonic.
         X_sorted, y_sorted, noise_sorted = self._to_state_order(
             self.X, y_nd, self.noise
         )
         return KalmanFilter(
             self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )
+
+    def log_probability(self, y) -> JAXArray:
+        """The marginal log likelihood, without running the full filter.
+
+        Uses :func:`~smolgp.solvers.kalman.kalman_loglike`, whose scan only 
+        computes the parts of the Kalman filter needed for the likelihood
+        """
+        y_nd = y[:, None] if y.ndim == 1 else y
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(
+            self.X, y_nd, self.noise
+        )
+        return KalmanLoglike(self.kernel, X_sorted, y_sorted, noise_sorted)
 
     def RTS(self, kalman_results) -> Any:
         """Wrapper for RTS smoother used with this solver"""
@@ -126,33 +104,6 @@ class StateSpaceSolver(eqx.Module):
         return rts_gains(
             self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted
         )
-
-    def condition(self, y, return_v_S=False) -> JAXArray:
-        """
-        Compute the Kalman predicted, filtered, and RTS smoothed
-        means and covariances at each of the input coordinates
-        """
-
-        # Kalman filtering
-        kalman_results = self.Kalman(y, return_v_S=return_v_S)
-        if return_v_S:
-            m_filtered, P_filtered, m_predicted, P_predicted, v, S = kalman_results
-            v_S = (v, S)
-        else:
-            m_filtered, P_filtered, m_predicted, P_predicted = kalman_results
-            v_S = None
-
-        # RTS smoothing
-        rts_results = self.RTS((m_filtered, P_filtered, m_predicted, P_predicted))
-        m_smoothed, P_smoothed = rts_results
-
-        # Pack-up results and return
-        conditioned_states = (
-            (m_predicted, P_predicted),
-            (m_filtered, P_filtered),
-            (m_smoothed, P_smoothed),
-        )
-        return self.state_coords, conditioned_states, v_S
 
     def condition_batched_mean(self, y_batch: JAXArray) -> JAXArray:
         """
