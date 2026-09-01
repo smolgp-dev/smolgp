@@ -18,6 +18,7 @@ class ParallelIntegratedStateSpaceSolver(IntegratedStateSpaceSolver):
 
     _instid_per_state: JAXArray
 
+
     def __init__(
         self,
         kernel: StateSpaceModel,
@@ -44,6 +45,16 @@ class ParallelIntegratedStateSpaceSolver(IntegratedStateSpaceSolver):
         # than doing the instid[obsid[k]] gather themselves, so hoist that
         # gather here (once) instead of into every per-state vmapped call.
         self._instid_per_state = self.state_coords.instid_per_state()
+
+    def log_probability(self, y) -> JAXArray:
+        """The marginal log likelihood, reduced from this solver's own filter.
+
+        Overrides :meth:`IntegratedStateSpaceSolver.log_probability` deliberately, 
+        as that is an optimized *sequential* scan. The generic path to reuse the
+        Kalman filtered ``v`` and ``S`` is better here, as those are determined
+        via associative scan, hence the likelihood stays log-depth.
+        """
+        return self._log_probability_from_filter(y)
 
     def Kalman(self, y, return_v_S=True) -> Any:
         """Wrapper for Kalman filter used with this solver"""

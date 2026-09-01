@@ -3,7 +3,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from smolgp.helpers import get_smoothing_gain
+from smolgp.helpers import smoothing_gain
 
 
 def RTSSmoother(kernel, X, kalman_results):
@@ -32,15 +32,16 @@ def rts_smoother(A, t, m_filtered, P_filtered, m_predicted, P_predicted):
     See Theorem 8.2 (pdf page 156) in "Bayesian Filtering and Smoothing"
     by Simo Särkkä for detailed description of the algorithm and notation.
     """
-    N = len(t)  # number of data points
 
-    def step(carry, k):
+    A_all = jax.vmap(lambda d: A(0, d))(jnp.diff(t))
+
+    def step(carry, data):
         """
         Routine for a single step of the RTS smoother
 
         Parameters:
             carry: (m_next, P_next) - next state and covariance
-            k: index of the current time step
+            data: (A_k, m_k, P_k, m_pred_next, P_pred_next) for this step
 
             Recall we are iterating backwards, so _next is k+1
 
@@ -50,19 +51,10 @@ def rts_smoother(A, t, m_filtered, P_filtered, m_predicted, P_predicted):
         """
 
         # Outputs from Kalman filter, unpacked for notational consistency
-        m_k = m_filtered[k]
-        P_k = P_filtered[k]
-        m_pred_next = m_predicted[k + 1]  # has superscript minus
-        P_pred_next = P_predicted[k + 1]  # has superscript minus
+        A_k, m_k, P_k, m_pred_next, P_pred_next = data  # _next has superscript minus
 
         # Unpack state and covariance from last iteration
         m_hat_next, P_hat_next = carry
-
-        # Time-lag between states
-        Delta_k = t[k + 1] - t[k]
-
-        # Transition matrix
-        A_k = A(0, Delta_k)
 
         # Compute smoothing gain
         # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
@@ -78,8 +70,16 @@ def rts_smoother(A, t, m_filtered, P_filtered, m_predicted, P_predicted):
     # Start smoothing from final filtered state
     init_carry = (m_filtered[-1], P_filtered[-1])
 
-    # Run backward from N-2 down to 0
-    _, outputs = jax.lax.scan(step, init_carry, jnp.arange(N - 2, -1, -1))
+    # Run backward from N-2 down to 0. The scan descends in k, so every
+    # streamed slice is reversed to match.
+    xs = (
+        A_all[::-1],
+        m_filtered[:-1][::-1],
+        P_filtered[:-1][::-1],
+        m_predicted[1:][::-1],
+        P_predicted[1:][::-1],
+    )
+    _, outputs = jax.lax.scan(step, init_carry, xs)
     m_smooth_reversed, P_smooth_reversed = outputs
 
     # Reverse outputs to match time order
@@ -112,7 +112,7 @@ def rts_gains(A, t, P_filtered, P_predicted):
         P_pred_next = P_predicted[k + 1]
         Delta_k = t[k + 1] - t[k]
         A_k = A(0, Delta_k)
-        return get_smoothing_gain(P_pred_next, P_k @ A_k.T)
+        return smoothing_gain(P_pred_next, P_k @ A_k.T)
 
     return jax.vmap(gain_at_k)(jnp.arange(N - 1))
 

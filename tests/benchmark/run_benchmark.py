@@ -13,6 +13,7 @@ from benchmark import (
     rebuild_from_points,
     RESERVE_FRAC,
     RESERVE_GB,
+    existing_floors,
     format_bytes,
     load_benchmark_data,
     ram_budget,
@@ -54,6 +55,14 @@ from funcs import (
     ss_pred,
     ss_sample_post,
     ss_sample_prior,
+    gp_llh_vg,
+    igp_llh_vg,
+    ipss_llh_vg,
+    iss_llh_vg,
+    pqs_llh_vg,
+    pss_llh_vg,
+    qs_llh_vg,
+    ss_llh_vg,
 )
 from plotting import make_benchmark_figure, use_paper_style
 
@@ -61,6 +70,21 @@ import smolgp
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
+
+#: Per-call budget for --long-runs-only, in seconds. These are the points a
+#: production sweep declines precisely because they are slow, so the budget has
+#: to be loose enough to be worth the trip: 30 min per call lets the dense O(N^3)
+#: curves reach one more grid point, and the _retired retirement in
+#: benchmark() still stops each curve the first time it goes over.
+LONG_RUN_MAX_SECONDS = 1800.0
+
+#: ...and the lower bound. Tier 2 exists for points that are individually
+#: expensive; anything faster than this per call is the production suite's job,
+#: which already runs a 600 s per-call budget. A cheap point missing from
+#: production is missing because of its memory cutoff or because it crashed,
+#: and re-attempting it here fixes neither -- it just re-runs known failures,
+#: since a failed point is stored as NaN and so looks unmeasured.
+LONG_RUN_MIN_SECONDS = 600.0
 
 # Suppress only JAX XLA bridge warnings
 logging.getLogger("jax._src.xla_bridge").setLevel(logging.ERROR)
@@ -151,6 +175,50 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--value-and-grad",
+        action="store_true",
+        help=(
+            "Benchmark the likelihood as a hyperparameter fit calls it: value "
+            "AND gradient with respect to the kernel's parameters. llh only. "
+            "Writes to a separate '<kind>_value_and_grad' family of results, "
+            "checkpoints and figures, so it cannot be confused with the "
+            "forward-only numbers. _COST is calibrated on the forward pass, so "
+            "the memory coefficients are scaled by _GRAD_MEM_FACTOR (2.6x to "
+            "98x, measured per curve) to account for reverse mode keeping the "
+            "forward intermediates -- without which the model badly "
+            "over-estimates how large a dense curve can go."
+        ),
+    )
+    parser.add_argument(
+        "--nrepeat",
+        type=int,
+        default=None,
+        help=(
+            "Repeats per measured point. The default is adaptive, chosen per "
+            "point from its first call (NREPEAT_SCHEDULE: 7 below 1 s/call, 5 "
+            "below 10 s, 3 below 60 s, 1 above), which is what production runs "
+            "should use -- scatter falls with runtime, so a slow point needs "
+            "fewer samples to pin its mean well inside a plot pixel. --quick "
+            "defaults to a fixed 3 and --long-runs-only to 1. An explicit "
+            "value here is fixed at every size; lower it for a fast check that "
+            "the sweep runs and the numbers land in the right place. Outlier "
+            "rejection costs two samples, so it is skipped below 5 repeats."
+        ),
+    )
+    parser.add_argument(
+        "--curves",
+        default=None,
+        help=(
+            "Re-run only these curves, comma separated, e.g. --curves SSM or "
+            "--curves SSM,pSSM. Useful when a change touches one "
+            "implementation and re-measuring the others (GP/QSM are tinygp) "
+            "would cost hours for identical numbers. Same partial-run rules "
+            "as --sizes: the aggregate is left alone and --rebuild folds the "
+            "new points in, keeping the untouched curves' existing "
+            "measurements."
+        ),
+    )
+    parser.add_argument(
         "--make-data",
         action="store_true",
         help=(
@@ -192,6 +260,50 @@ if __name__ == "__main__":
         help=(
             "Abridged local pass: fewer sizes, smaller maximum, and a 5 s "
             "per-measurement budget unless --max-seconds says otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--long-runs-only",
+        action="store_true",
+        help=(
+            "Fill in only the points a production sweep declines. For each "
+            "curve the production cutoff becomes a *floor*, so the run "
+            "measures the band (production cutoff, long cutoff] and "
+            "re-measures nothing that already has a number. The long cutoff "
+            "comes from a relaxed budget: the full detected RAM taken "
+            "literally, and a per-call budget of "
+            f"{LONG_RUN_MAX_SECONDS:g}s instead of the production default. "
+            "Repeats default to 1, since these points cost minutes to hours "
+            "each and their scatter at that runtime is well under 1%. Follows "
+            "the partial-run rules: the aggregate is left alone and --rebuild "
+            "folds the new points in. Expect some to be OOM-killed -- that is "
+            "the intent, and a dead subprocess is recorded as NaN."
+        ),
+    )
+    parser.add_argument(
+        "--xla-only",
+        action="store_true",
+        help=(
+            "Do not profile. Compile each point and record only XLA's buffer "
+            "accounting (temp + output + argument) -- the computation's working "
+            "set, excluding the interpreter, the JAX runtime, allocator slack "
+            "and the CUDA context. Static, so it needs no timed run: the whole "
+            "suite takes minutes. The result is MERGED into the existing "
+            "aggregate, filling the xla slot of each memory entry and leaving "
+            "every measured value untouched."
+        ),
+    )
+    parser.add_argument(
+        "--absolute-only",
+        action="store_true",
+        help=(
+            "Re-execute each point once and record only the ABSOLUTE peak "
+            "memory -- the whole process high-water mark, including the Python "
+            "interpreter and JAX runtime, i.e. what must actually be free to "
+            "run it. Merged into the existing aggregate: the mean, std and xla "
+            "slots are left exactly as they are, and no per-point checkpoint is "
+            "written, so a single-shot run cannot degrade the averaged values. "
+            "Implies --nrepeat 1, since a peak needs no averaging."
         ),
     )
     parser.add_argument(
@@ -237,7 +349,9 @@ if __name__ == "__main__":
         if max_seconds is None:
             max_seconds = 5.0
     if max_seconds is None:
-        max_seconds = DEFAULT_MAX_SECONDS
+        max_seconds = (
+            LONG_RUN_MAX_SECONDS if args.long_runs_only else DEFAULT_MAX_SECONDS
+        )
     if args.func in SCALES_WITH_M:
         logmax -= round(math.log10(M_PER_N))
     if args.quick:
@@ -281,6 +395,11 @@ if __name__ == "__main__":
         # An explicit --max-ram is a deliberate, hand-picked budget: honour it
         # literally rather than shaving it again with the calibration margin.
         safety=1.0 if args.max_ram is not None else None,
+        # Reverse mode keeps the forward pass's intermediates, and _COST is
+        # calibrated on the forward pass, so the memory coefficients need
+        # scaling (see _GRAD_MEM_FACTOR). Without this the model allowed
+        # integrated GP up to N = 9.8e4 against a real limit near 1e4.
+        value_and_grad=args.value_and_grad,
         detail=True,
     )
     if args.max_ram is not None:
@@ -293,12 +412,30 @@ if __name__ == "__main__":
             f"{min(RESERVE_GB, RESERVE_FRAC * psutil.virtual_memory().total / 1e9):g} GB reserve"
         )
     budget_s = "unbounded" if max_seconds == float("inf") else f"{max_seconds:g}s"
-    print(
-        f"Size cutoffs for {device.upper()} "
-        f"({format_bytes(budget)} / {budget_s} per call; {source}):"
-    )
-    for name, c in sorted(cutoffs.items()):
-        print(f"    {name:5s} {c:9.3g}   ({bounds[name]}-bound)")
+
+    # --long-runs-only inverts the window: the cutoffs just computed (under a
+    # deliberately loose budget) become the top of the band, and the *floor* is
+    # read off the existing result file further down, once its name is known.
+    # The floor deliberately comes from what has already been measured rather
+    # than from re-deriving the production cutoff: a production sweep may have
+    # been run with its own --max-ram (llh-vg uses 170 GB), so the model would
+    # reconstruct the wrong boundary, whereas "the largest size this curve
+    # already has a number for" is exact whatever flags produced it.
+    floors = {}
+    if args.long_runs_only:
+        print(
+            f"Long-run fill-in. Upper bounds at "
+            f"{format_bytes(budget)} / {budget_s} per call ({source}):"
+        )
+        for name, c in sorted(cutoffs.items()):
+            print(f"    {name:5s} {c:9.3g}   ({bounds[name]}-bound)")
+    else:
+        print(
+            f"Size cutoffs for {device.upper()} "
+            f"({format_bytes(budget)} / {budget_s} per call; {source}):"
+        )
+        for name, c in sorted(cutoffs.items()):
+            print(f"    {name:5s} {c:9.3g}   ({bounds[name]}-bound)")
 
     # Pre-flight sanity check. The budget is a promise about a specific device,
     # and the two ways to get it wrong are both silent and both fatal: a CPU
@@ -402,14 +539,114 @@ if __name__ == "__main__":
     # (It used to: one `--quick` run would silently replace a multi-hour
     # result with nine truncated points.)
     isquick = "_quick" if args.quick else ""
-    out_filename = f"results/{device}_{args.func}{isinst}{isquick}_benchmark.pkl"
+    isvg = "_value_and_grad" if args.value_and_grad else ""
+    if args.value_and_grad and args.func != "llh":
+        raise SystemExit(
+            "--value-and-grad is implemented for 'llh' only. The predict and "
+            "sample benchmarks take (t_test, gp, y) rather than (data, kernel), "
+            "so they need their own wrappers before they can be differentiated."
+        )
+    out_filename = f"results/{device}_{args.func}{isinst}{isvg}{isquick}_benchmark.pkl"
+
+    if args.long_runs_only:
+        # pred and sample-post store their x axis in N but express cutoffs in
+        # M, so the stored sizes need scaling before they can be compared.
+        # sample-prior already stores M, and llh/cond are in N throughout.
+        floors = existing_floors(
+            out_filename,
+            cutoffs,
+            m_per_n=M_PER_N if args.func in SCALES_WITH_M else None,
+        )
+        print("  Floors, from the largest size each curve already has:")
+        empty = True
+        for name in sorted(cutoffs):
+            f, c = floors.get(name, 0.0), cutoffs[name]
+            if c <= f:
+                print(f"    {name:5s} {f:9.3g}  ->  {c:9.3g}   nothing to do")
+            else:
+                empty = False
+                print(f"    {name:5s} {f:9.3g}  ->  {c:9.3g}   to measure")
+        if empty:
+            # A no-op, not a failure: a suite that loops over every kind will
+            # hit this for the ones already complete, and exiting non-zero
+            # there would fill the summary with false alarms.
+            print(
+                "  Every curve is already measured up to its long-run cutoff, "
+                "so there is nothing to fill in. Raise --max-seconds or "
+                "--max-ram to go further."
+            )
+            raise SystemExit(0)
 
     def _int_list(v):
         return [int(x) for x in v.split(",") if x.strip()] if v else None
 
+    # Repeats per point. --quick is for "does this run at all", so it drops to
+    # 3 by default; an explicit --nrepeat always wins.
+    # None => adaptive (benchmark.NREPEAT_SCHEDULE picks per point from the
+    # first call). --quick stays on a small fixed count: it exists to answer
+    # "does this run at all", and adaptive would give it 7 repeats at every
+    # size, since its whole grid is sub-second.
+    n_repeat = args.nrepeat if args.nrepeat is not None else (3 if args.quick else None)
+    if args.absolute_only:
+        n_repeat = 1
+    if n_repeat is None and args.long_runs_only:
+        # Every point in a long run is minutes to hours per call, where the
+        # measured repeat-to-repeat scatter is 0.4% -- far below a plot pixel.
+        # Paying for 3 of them would triple a ~10 h sweep to buy nothing.
+        n_repeat = 1
+    if n_repeat is not None and n_repeat < 1:
+        raise SystemExit(f"--nrepeat must be at least 1, got {n_repeat}")
+    if n_repeat is not None:
+        print(
+            f"Note: fixed n_repeat = {n_repeat} at every size (default is "
+            "adaptive: 7 / 5 / 3 / 1 by per-call time)."
+        )
+
     only_sizes = _int_list(args.sizes)
     only_indices = _int_list(args.indices)
-    partial = bool(only_sizes or only_indices)
+    only_curves = (
+        [c.strip() for c in args.curves.split(",") if c.strip()]
+        if args.curves
+        else None
+    )
+    # A long run measures a disjoint band of sizes, so its result arrays are
+    # NaN everywhere the production sweep has numbers. Writing that over the
+    # aggregate would erase the sweep; treat it as partial and let --rebuild
+    # merge the per-point checkpoints in.
+    partial = bool(only_sizes or only_indices or only_curves or args.long_runs_only)
+
+    # Naming sizes is a deliberate request for those points, exactly as
+    # --long-runs-only is, so an over-budget result is the measurement rather
+    # than an accident: retire the curve but keep the number. Without this a
+    # re-measurement of a known-slow point silently throws itself away -- which
+    # is what happened to llh-vg GP at N=56234, 949 s of compute discarded for
+    # being over a 600 s budget it was never meant to respect.
+    keep_over_budget = bool(args.long_runs_only or only_sizes or only_indices)
+
+    if args.value_and_grad:
+        # Same curves, differentiated. Only llh reaches here (checked above).
+        llh_funcs = [
+            {"SSM": ss_llh_vg, "QSM": qs_llh_vg, "GP": gp_llh_vg,
+             "pQSM": pqs_llh_vg, "pSSM": pss_llh_vg},
+            {"SSM": iss_llh_vg, "GP": igp_llh_vg, "pSSM": ipss_llh_vg},
+        ]
+        print("Benchmarking value AND gradient (hyperparameter-fit cost)")
+
+    if only_curves:
+        # Drop the unrequested curves from every kind's function dict. Done in
+        # one place rather than per-dispatch so a new kind cannot forget it.
+        _all = [llh_funcs, cond_funcs, pred_funcs, sample_prior_funcs, sample_post_funcs]
+        known = {c for fl in _all for d in fl for c in d}
+        unknown = sorted(set(only_curves) - known)
+        if unknown:
+            raise SystemExit(
+                f"Unknown curve(s): {', '.join(unknown)}. "
+                f"Known curves: {', '.join(sorted(known))}"
+            )
+        for fl in _all:
+            for i, d in enumerate(fl):
+                fl[i] = {k: v for k, v in d.items() if k in only_curves}
+        print(f"Restricting to curves: {', '.join(only_curves)}")
 
     if args.make_data:
         print(f"Building data files for {args.func}{isinst or ''}...")
@@ -425,9 +662,10 @@ if __name__ == "__main__":
 
     if args.rebuild:
         Ns, runtime, memory, outputs = rebuild_from_points(
-            args.func, device, integrated=args.int, m_per_n=M_PER_N,
+            args.func + isvg, device, integrated=args.int, m_per_n=M_PER_N,
             n_sizes=n_sizes, logmin=1,
             logmax=logmax + (round(math.log10(M_PER_N)) if args.func in SCALES_WITH_M else 0),
+            tag=isvg + isquick,
         )
     elif args.plot_only:
         pass  # nothing to run; jump straight to plotting below
@@ -435,14 +673,12 @@ if __name__ == "__main__":
         if args.func == "llh":
             print("Benchmarking likelihood...")
             funcs = llh_funcs[int(args.int)]
-            n_repeat = 7
             N_N = 17
             logN_min = 1
             logN_max = 7
         elif args.func == "cond":
             print("Benchmarking condition...")
             funcs = cond_funcs[int(args.int)]
-            n_repeat = 7
             N_N = 17
             logN_min = 1
             logN_max = 7
@@ -457,11 +693,16 @@ if __name__ == "__main__":
             logN_min=logN_min,
             logN_max=logmax,
             cutoffs=cutoffs,
+            floors=floors,
+            keep_over_budget=keep_over_budget,
+            min_seconds=LONG_RUN_MIN_SECONDS if args.long_runs_only else None,
+            xla_only=args.xla_only,
+            no_checkpoint=args.absolute_only,
             drop_outliers=True,
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
-            tag=isquick,
+            tag=isvg + isquick,
             only_sizes=only_sizes,
             only_indices=only_indices,
         )
@@ -474,16 +715,21 @@ if __name__ == "__main__":
             funcs,
             kernels,
             yerr=yerr,
-            n_repeat=7,
+            n_repeat=n_repeat,
             N_N=n_sizes,
             logN_min=1,
             logN_max=logmax,
             maxN=1e5,  # in N
             cutoffs=cutoffs,  # in M
+            floors=floors,  # in M
+            keep_over_budget=keep_over_budget,
+            min_seconds=LONG_RUN_MIN_SECONDS if args.long_runs_only else None,
+            xla_only=args.xla_only,
+            no_checkpoint=args.absolute_only,
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
-            tag=isquick,
+            tag=isvg + isquick,
             only_sizes=only_sizes,
             only_indices=only_indices,
         )
@@ -495,16 +741,21 @@ if __name__ == "__main__":
         Ns, runtime, memory, outputs = run_prior_sample_benchmark(
             funcs,
             kernels,
-            n_repeat=7,
+            n_repeat=n_repeat,
             N_N=n_sizes,
             logM_min=1,
             logM_max=logmax,
             cutoffs=cutoffs,
+            floors=floors,
+            keep_over_budget=keep_over_budget,
+            min_seconds=LONG_RUN_MIN_SECONDS if args.long_runs_only else None,
+            xla_only=args.xla_only,
+            no_checkpoint=args.absolute_only,
             drop_outliers=True,
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
-            tag=isquick,
+            tag=isvg + isquick,
             only_sizes=only_sizes,
             only_indices=only_indices,
         )
@@ -518,16 +769,21 @@ if __name__ == "__main__":
             funcs,
             kernels,
             yerr=yerr,
-            n_repeat=7,
+            n_repeat=n_repeat,
             N_N=n_sizes,
             logN_min=1,
             logN_max=logmax,
             maxN=1e5,
             cutoffs=cutoffs,
+            floors=floors,
+            keep_over_budget=keep_over_budget,
+            min_seconds=LONG_RUN_MIN_SECONDS if args.long_runs_only else None,
+            xla_only=args.xla_only,
+            no_checkpoint=args.absolute_only,
             use_gpu_profiler=args.gpu,
             exposure_quantities=(texp, readout) if args.int else None,
             max_seconds=max_seconds,
-            tag=isquick,
+            tag=isvg + isquick,
             only_sizes=only_sizes,
             only_indices=only_indices,
         )
@@ -537,7 +793,49 @@ if __name__ == "__main__":
             "or 'sample-post'."
         )
 
-    if args.rebuild:
+    if args.xla_only or args.absolute_only:
+        slot = 3 if args.xla_only else 2
+        what = "xla" if args.xla_only else "absolute"
+        # Merge, never overwrite. This pass produces only the xla figure, so it
+        # fills slot [3] of each memory entry and leaves the measured mean, std
+        # and absolute peak exactly as they were. Entries that predate the
+        # widened tuple are padded to four fields on the way through.
+        if not os.path.exists(out_filename):
+            raise SystemExit(
+                f"{out_filename} does not exist -- --{what}-only merges into an "
+                "existing aggregate rather than creating one. Run the sweep first."
+            )
+        old_data = load_benchmark_data(out_filename)
+        old_mem = old_data.get("memory", {})
+        # Match by size, never by position. --sizes/--indices narrow the grid,
+        # so this run's arrays are shorter than the aggregate's and a positional
+        # merge silently writes each value onto the wrong N -- measuring
+        # N = 749 and storing it as N = 23.
+        fresh_by_n = {}
+        for curve in memory:
+            fresh_by_n[curve] = {
+                int(n): e for n, e in zip(Ns, memory[curve])
+            }
+        merged, filled = {}, 0
+        for curve, entries in old_mem.items():
+            lookup = fresh_by_n.get(curve, {})
+            out = []
+            for n, e in zip(old_data["Ns"], entries):
+                e = list(tuple(e) + (float("nan"),) * (4 - len(e)))
+                got = lookup.get(int(n))
+                x = got[slot] if got is not None and len(got) > slot else float("nan")
+                if x == x:  # not NaN
+                    filled += 1
+                    e[slot] = x
+                out.append(tuple(e))
+            merged[curve] = out
+        save_benchmark_data(
+            out_filename, old_data["Ns"], old_data["runtime"], merged,
+            old_data["outputs"],
+        )
+        print(f"  filled the {what} slot for {filled} points; other values "
+              f"untouched\n  wrote {out_filename}")
+    elif args.rebuild:
         print("Wrote results to", out_filename)
         save_benchmark_data(out_filename, Ns, runtime, memory, outputs)
     elif partial:
@@ -561,11 +859,22 @@ if __name__ == "__main__":
     if args.plot or args.plot_only:
         kind = args.func.replace("-", "_")  # sample-prior -> sample_prior
         use_paper_style(usetex=not args.no_tex)
-        cpu_data = load_benchmark_data(f"results/cpu_{args.func}{isinst}_benchmark.pkl")
-        gpu_file = f"results/gpu_{args.func}{isinst}_benchmark.pkl"
+        # isquick matters here: an abridged run has its own aggregate and its own
+        # figure, and must not read or overwrite the production ones.
+        cpu_data = load_benchmark_data(
+            f"results/cpu_{args.func}{isinst}{isvg}{isquick}_benchmark.pkl"
+        )
+        gpu_file = f"results/gpu_{args.func}{isinst}{isvg}{isquick}_benchmark.pkl"
         gpu_data = load_benchmark_data(gpu_file) if os.path.exists(gpu_file) else None
         if gpu_data is None:
             print(f"  (no {gpu_file}; plotting CPU curves only)")
         make_benchmark_figure(
-            kind, cpu_data, gpu_data=gpu_data, integrated=args.int, savefig=True
+            kind, cpu_data, gpu_data=gpu_data, integrated=args.int,
+            tag=isvg,
+            suffix=isquick,
+            title_suffix=" + gradient" if args.value_and_grad else "",
+            # An abridged run is for eyeballing, so its figure goes to
+            # scratch_figures/ rather than the published docs directory.
+            scratch=args.quick,
+            savefig=True,
         )

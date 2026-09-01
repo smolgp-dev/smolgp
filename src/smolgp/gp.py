@@ -34,6 +34,7 @@ from smolgp.solvers.sample import (
     project_trajectory_at_positions,
     sample_prior_trajectory,
 )
+from smolgp.solvers.base import log_prob_from_v_S
 from smolgp.solvers.state_coords import StateCoords
 
 if TYPE_CHECKING:
@@ -651,19 +652,18 @@ class GaussianProcess(eqx.Module):
         return jax.vmap(project)(H, C_data)
 
     def log_probability(self, y: JAXArray) -> JAXArray:
-        """Compute the log probability of this multivariate normal
+        """Compute the log probability of this Gaussian Process, given the 
+        observed data ``y``.
 
         Args:
             y (JAXArray): The observed data. This should have the shape
-                ``(N_data,)``, where ``N_data`` was the zeroth axis of the ``X``
-                data provided when instantiating this object.
-
+                ``(N_data, D)``, where ``N_data`` is the number of data
+                coordinates in ``X`` and ``D`` is the observation dimension.
+                
         Returns:
-            The marginal log probability of this multivariate normal model,
-            evaluated at ``y``.
+            The marginal log probability of the GP, evaluated at ``y``.
         """
-        _, _, _, _, v, S = self.solver.Kalman(y, return_v_S=True)
-        return self._compute_log_prob(v, S)
+        return self.solver.log_probability(y)
 
     @property
     def state_coords(self) -> StateCoords:
@@ -769,7 +769,7 @@ class GaussianProcess(eqx.Module):
 
         ## Grab likelihood (v and S will already be
         ## filtered down to the "at the data" states)
-        log_prob = self._compute_log_prob(v, S)
+        log_prob = log_prob_from_v_S(v, S)
 
         ## Make predictions at X_test if given
         if kernel is None:
@@ -1375,33 +1375,6 @@ class GaussianProcess(eqx.Module):
         if shape is None:
             return samples[..., 0]
         return samples.reshape((N_out,) + tuple(shape))
-
-    @jax.jit
-    def _compute_log_prob(self, v: JAXArray, S: JAXArray) -> JAXArray:
-        """
-        Compute the log-likelihood given v and S from the Kalman filter
-        """
-        ## More readable version:
-        # def llh(k):
-        #     v_k, S_k = v[k], S[k]
-        #     L_k = jnp.linalg.cholesky(S_k)
-        #     w = jax.scipy.linalg.solve_triangular(L_k, v_k, lower=True)
-        #     quad = jnp.dot(w, w)
-        #     logdetS_k = 2.0 * jnp.sum(jnp.log(jnp.diag(L_k)))
-        #     d = v_k.shape[0]
-        #     return quad + logdetS_k + d*jnp.log(2*jnp.pi)
-        # loglike = -0.5 * jnp.sum(jax.vmap(llh)(jnp.arange(len(v))))
-
-        L = jax.vmap(jnp.linalg.cholesky)(S)  # [T, D, D]
-        w = jax.scipy.linalg.solve_triangular(L, v[..., None], lower=True)
-        w = jnp.squeeze(w, axis=-1)
-        quad = jnp.sum(w**2, axis=1)
-        logdetS = 2.0 * jnp.sum(jnp.log(jnp.diagonal(L, axis1=-2, axis2=-1)), axis=1)
-        d = v.shape[1]
-        log_probs = quad + logdetS + d * jnp.log(2.0 * jnp.pi)
-        loglike = -0.5 * jnp.sum(log_probs)
-
-        return jnp.where(jnp.isfinite(loglike), loglike, -jnp.inf)
 
     def get_component_mean(
         self,

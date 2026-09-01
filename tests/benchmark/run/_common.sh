@@ -32,18 +32,23 @@ declare -a _CODES=()
 
 #: Everything a sweep can measure. "sample" is a shorthand -- there is no
 #: single `sample` benchmark, it expands to the prior and posterior draws.
-ALL_KINDS="llh cond pred sample"
+#: "llh-vg" is the likelihood measured the way a hyperparameter fit calls it,
+#: value AND gradient. It is a separate kind rather than a variant of "llh"
+#: because reverse mode changes the cost profile enough to need its own
+#: results, figure and memory budget -- and because it is easy to forget, which
+#: is precisely why it is in the default list.
+ALL_KINDS="llh llh-vg cond pred sample"
 
 parse_kinds() {
     # Splits arguments into kind selectors and everything else. Selectors are
-    # --llh/--cond/--pred/--sample; anything else (--int, --no-tex, --quick,
+    # --llh/--llh-vg/--cond/--pred/--sample; anything else (--int, --no-tex, --quick,
     # --max-seconds N ...) is passed straight through to run_benchmark.py.
     #
     # Precedence: explicit flags > KINDS env var > all of them.
     local kinds=() rest=()
     for a in "$@"; do
         case "$a" in
-            --llh|--cond|--pred|--sample) kinds+=("${a#--}") ;;
+            --llh|--llh-vg|--cond|--pred|--sample) kinds+=("${a#--}") ;;
             *) rest+=("$a") ;;
         esac
     done
@@ -69,6 +74,42 @@ expand_kinds() {
         fi
     done
     echo "${out[*]}"
+}
+
+kind_args() {
+    # The run_benchmark.py positional (and any kind-specific flag) for a kind.
+    # Deliberately unquoted at the call site so `llh-vg` expands to two words.
+    case "$1" in
+        llh-vg) echo "llh --value-and-grad" ;;
+        *)      echo "$1" ;;
+    esac
+}
+
+kind_cpu_budget() {
+    # Per-kind CPU budget. Every kind now uses CPU_BUDGET, including the
+    # gradient sweep.
+    #
+    # This used to override llh-vg to --max-ram 170. _COST is calibrated on the
+    # forward pass while reverse mode keeps the forward pass's intermediates, so
+    # at 485 GB the model allowed far larger sizes than really fit and the small
+    # budget was standing in for the missing factor. size_cutoffs now takes a
+    # value_and_grad argument and scales the memory coefficients by
+    # _GRAD_MEM_FACTOR -- measured per (kind, curve, integrated), 2.6x to 98x --
+    # so the model derives the right cutoff itself. Verified at --max-ram 485:
+    # GP stops at grid point 5.6e4 instantaneous and 1.0e4 integrated, which are
+    # exactly the largest sizes that measured successfully, and SSM/QSM stay
+    # cap-bound at 1e7.
+    #
+    # llh-vg keeps a raised *time* budget. Its dense GP point at N=56234 takes
+    # 949 s, and it is a wanted point -- it is the last GP marker in the
+    # deployed figure. Under the 600 s default the sweep now projects it as
+    # over-budget and skips it, which is cheaper than the old measure-then-
+    # discard but loses it just the same. 1200 s admits it while still bounding
+    # the sweep; the next grid point up is refused on memory regardless.
+    case "$1" in
+        llh-vg) echo "--max-ram 485 --max-seconds 1200" ;;
+        *)      echo "$CPU_BUDGET" ;;
+    esac
 }
 
 # XLA logs this at ERROR level on every process start, and it is pure noise:

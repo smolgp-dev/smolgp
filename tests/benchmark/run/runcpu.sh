@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CPU sweeps. Everything by default; pick individual ones with flags.
 #
-#   ./run/runcpu.sh                     all: llh, cond, pred, sample
+#   ./run/runcpu.sh                     all: llh, llh-vg, cond, pred, sample
 #   ./run/runcpu.sh --llh               just the likelihood
 #   ./run/runcpu.sh --cond --pred       two of them
 #   ./run/runcpu.sh --sample            prior and posterior draws
@@ -26,7 +26,8 @@ uv sync --dev || exit 1
 export JAX_PLATFORMS=cpu
 
 for kind in $(expand_kinds "$KINDS"); do
-    run "$kind$TAG (CPU)" "$kind" ${EXTRA[@]+"${EXTRA[@]}"} $CPU_BUDGET --plot
+    run "$kind$TAG (CPU)" $(kind_args "$kind") ${EXTRA[@]+"${EXTRA[@]}"} \
+        $(kind_cpu_budget "$kind") --plot
 done
 
 summary

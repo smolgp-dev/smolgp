@@ -160,9 +160,97 @@ class MemorySampler:
         return out, elapsed, self.peak - self.baseline
 
 
+def vm_hwm():
+    """Peak RSS the kernel has recorded for this process, in bytes.
+
+    ``VmHWM`` in /proc/self/status. The kernel raises it on every page fault
+    that pushes RSS higher, so unlike a sampling thread it cannot miss a peak.
+    It is monotonic since process start, so it also carries the JIT warm-up's
+    peak -- reset it with :func:`reset_vm_hwm` to scope it to one call.
+    """
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1]) * 1024
+    except OSError:
+        pass
+    return 0
+
+
+def reset_vm_hwm():
+    """Reset ``VmHWM`` to the current RSS. Returns True if it took.
+
+    Writing "5" to /proc/self/clear_refs clears the high-water mark (Linux
+    only, and only for the calling process). Lets the mark be scoped to the
+    timed call rather than to the whole process lifetime.
+    """
+    try:
+        with open("/proc/self/clear_refs", "w") as f:
+            f.write("5")
+        return True
+    except OSError:
+        return False
+
+
 class CPUMemorySampler(MemorySampler):
+    """Peak RSS from the kernel's own high-water mark, with a sampled fallback.
+
+    ``VmHWM`` is authoritative. The kernel raises it on every page fault that
+    pushes RSS higher, so it cannot miss a peak; the 1 ms sampling thread can,
+    and above roughly 30 GB it does. Verified on the production path against
+    dense GP likelihood, whose footprint is exactly 2*N^2*8 = 16 B/N^2 (the
+    kernel matrix plus its Cholesky factor):
+
+        N        reported   theory    ratio   B/N^2
+        1778       0.05 GB   0.05 GB   1.00    15.9
+        4216       0.28 GB   0.28 GB   1.00    16.0
+        10000      1.61 GB   1.60 GB   1.01    16.1
+        23713      9.02 GB   9.00 GB   1.00    16.0
+        56234     50.57 GB  50.60 GB   1.00    16.0
+
+    At N=56234 the sampled figure reads 33.6 GB against the same 50.60 GB, i.e.
+    0.66x, while the two agree to within 1% at every smaller size. The
+    consequence for the published figures was that the largest point of every
+    dense curve read low -- 11 B/N^2 against a theoretical 16 -- which looked
+    like an algorithmic change and was not: the runtimes across the same step
+    continue clean N^3 with no kink.
+
+    The sampled figure is still taken, as ``sampled``, purely as a cross-check;
+    a large disagreement is reported by profile_jax_function. It also stands in
+    as the reported value if ``VmHWM`` is unavailable, which is anywhere without
+    a Linux /proc.
+    """
+
     def fetch_memory(self):
         return self.proc.memory_info().rss
+
+    def measure(self, call):
+        self.record_baseline(0.1)
+        # Scope the kernel mark to the timed call rather than to the whole
+        # process, so it excludes the warm-up's compilation buffers -- the same
+        # thing recording the baseline after warm-up does for the sampled path.
+        reset_ok = reset_vm_hwm()
+        base = self.fetch_memory()
+        out, elapsed, sampled = super_measure(self, call)
+        hwm = max(0, vm_hwm() - base) if reset_ok else 0
+        self.sampled = sampled
+        self.hwm = hwm
+        # Absolute peak, no baseline subtracted: the process high-water mark is
+        # what has to fit in RAM.
+        self.absolute = vm_hwm()
+        return out, elapsed, (hwm if hwm > 0 else sampled)
+
+
+def super_measure(self, call):
+    """MemorySampler.measure's body, minus the baseline it already recorded."""
+    self.start()
+    start = time.perf_counter()
+    out = call()
+    elapsed = time.perf_counter() - start
+    time.sleep(0.1)  # let the sampler see the tail of the allocation
+    self.stop()
+    return out, elapsed, self.peak - self.baseline
 
 
 def get_gpu_processes():
@@ -272,6 +360,10 @@ class GPUMemorySampler(MemorySampler):
         out = call()
         elapsed = time.perf_counter() - start
         peak = self.device.memory_stats()[self.PEAK_KEY]
+        # Absolute device peak, baseline included: on a card, the CUDA context
+        # and the resident inputs are memory you must genuinely have free, the
+        # same sense in which the CPU's absolute figure includes the runtime.
+        self.absolute = peak
         return out, elapsed, peak - self.baseline
 
 
@@ -292,8 +384,11 @@ def tracer(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
 
     def call():
         out = fn_jit(dat)
-        if hasattr(out, "block_until_ready"):
-            out.block_until_ready()
+        # Block on the whole result, whatever shape it is. The hasattr check
+        # this replaces silently skipped blocking for anything that was not a
+        # single array -- a (value, gradient) pair, for instance -- and then
+        # timed JAX's asynchronous dispatch rather than the computation.
+        out = jax.block_until_ready(out)
         return out
 
     # Warm up (JIT compilation). Everything it allocates is released before
@@ -312,24 +407,149 @@ def tracer(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
     else:
         raise ValueError(f"Unknown machine type: {machine}")
 
+    # XLA's own buffer accounting: exact, static, and free of every runtime
+    # overhead. temp + output + argument is the computation's working set --
+    # scratch, result, and the input arrays. Available on both devices, and at
+    # every size, so it has no measurement floor. The lower() re-traces but the
+    # compile is served from JAX's cache, since fn_jit was just warmed up.
+    try:
+        stats = fn_jit.lower(dat).compile().memory_analysis()
+        xla_mem = (
+            stats.temp_size_in_bytes
+            + stats.output_size_in_bytes
+            + stats.argument_size_in_bytes
+        )
+    except Exception:  # noqa: BLE001 -- not worth failing a measurement over
+        xla_mem = float("nan")
+
     out, runtime, peak_mem = sampler.measure(call)
 
-    # Return both result (pickled) and stats
+    # Three numbers, deliberately:
+    #   peak_mem  -- peak above the post-warm-up baseline. The historical
+    #                quantity, kept so old and new points stay comparable.
+    #   abs_mem   -- absolute peak. What a user must actually have free,
+    #                including the interpreter and runtime, which is what the
+    #                figures are meant to communicate.
+    #   xla_mem   -- the computation alone, excluding all of that.
     return_pipe.send(
         {
             "output": pickle.dumps(out),
             "runtime": runtime,
             "peak_mem": peak_mem,
+            "abs_mem": getattr(sampler, "absolute", float("nan")),
+            "xla_mem": xla_mem,
+            "hwm_mem": getattr(sampler, "hwm", None),
+            "sampled_mem": getattr(sampler, "sampled", None),
         }
     )
     return_pipe.close()
 
 
+#: How many repeats a point gets, chosen from how long its first call took:
+#: ``(per-call seconds below which, repeats)``, ascending, last entry the
+#: fallback. Repeat-to-repeat scatter is a function of runtime, not of N --
+#: measured on the current results, std/mean is 5-7% below 10 ms but 0.9% in the
+#: 1-10 s band and 0.4% above 10 s -- so a slow call needs far fewer samples to
+#: pin its mean to well under a plot pixel. Adjust here if that changes.
+NREPEAT_SCHEDULE = ((1.0, 7), (10.0, 5), (60.0, 3), (float("inf"), 1))
+
+#: Print a per-repeat progress line once a point's calls are slower than this.
+#: Below it the repeats are quick enough that the per-point summary is timely
+#: and extra lines would only be noise; above it a single point can own the
+#: sweep for an hour in complete silence, which is indistinguishable from a
+#: wedged run. The remaining-time figure assumes each repeat costs 2t -- the
+#: untimed warm-up plus the timed call -- the same model the runtime table uses
+#: (see run/README.md).
+PROGRESS_ABOVE_SECONDS = 60.0
+
+
+def repeats_for(seconds):
+    """Repeats for a point whose first call took ``seconds`` (see NREPEAT_SCHEDULE)."""
+    for limit, n in NREPEAT_SCHEDULE:
+        if seconds < limit:
+            return n
+    return NREPEAT_SCHEDULE[-1][1]
+
+
+def _xla_child(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe):
+    """Compile one point and report XLA's buffer accounting. No execution."""
+    fn = pickle.loads(fn_bytes)
+    dat = pickle.loads(dat_bytes)
+    obj = pickle.loads(obj_bytes)
+    args = pickle.loads(args_bytes)
+
+    @jax.jit
+    def fn_jit(x):
+        return fn(x, obj, *args)
+
+    try:
+        st = fn_jit.lower(dat).compile().memory_analysis()
+        total = (st.temp_size_in_bytes + st.output_size_in_bytes
+                 + st.argument_size_in_bytes)
+    except Exception as exc:  # noqa: BLE001
+        return_pipe.send({"xla": float("nan"), "err": repr(exc)[:200]})
+    else:
+        return_pipe.send({"xla": total, "err": None})
+    return_pipe.close()
+
+
+def xla_footprint(fn, data, obj, *args, timeout=900.0):
+    """Bytes the computation reserves, from XLA's buffer assignment.
+
+    Static: it compiles but never executes, so it costs no timed run and has no
+    measurement floor -- exact from a few kB upward, where sampled RSS bottoms
+    out. Returns temp + output + argument, i.e. scratch, result and the input
+    arrays: the computation's working set, excluding the interpreter, the JAX
+    runtime, allocator slack and (on GPU) the CUDA context.
+
+    Runs in a subprocess for the same reason profiling does -- compilation of a
+    very large graph is not guaranteed to be well behaved, and a crash here
+    should cost one point rather than the sweep.
+
+    Returns NaN if compilation fails or the child dies.
+    """
+    parent_conn, child_conn = mp.Pipe()
+    p = mp.Process(
+        target=_xla_child,
+        args=(pickle.dumps(fn), pickle.dumps(data), pickle.dumps(obj),
+              pickle.dumps(args), child_conn),
+    )
+    p.start()
+    result = None
+    waited = 0.0
+    while result is None:
+        if parent_conn.poll(5.0):
+            result = parent_conn.recv()
+        elif not p.is_alive():
+            break
+        else:
+            waited += 5.0
+            if waited > timeout:
+                p.terminate()
+                break
+    p.join()
+    parent_conn.close()
+    if result is None:
+        return float("nan")
+    if result["err"]:
+        print(f"      (xla analysis failed: {result['err']})")
+    return result["xla"]
+
+
 def profile_jax_function(
-    fn, data, obj, *args, n_repeat=5, machine="cpu", drop_outliers=False, **kwargs
+    fn, data, obj, *args, n_repeat=None, machine="cpu", drop_outliers=False,
+    max_seconds=None, **kwargs
 ):
     """
     JAX profiler for time benchmarking and memory tracing a function.
+
+    ``n_repeat=None`` (the default) is adaptive: the first call is timed, and
+    :func:`repeats_for` decides how many more to run. An explicit integer is
+    taken literally at every size.
+
+    ``max_seconds`` also stops the repeats early, which matters when a fixed
+    ``n_repeat`` was requested -- adaptive already lands on 1 repeat for
+    anything that slow.
     """
     fn_bytes = pickle.dumps(fn)
     dat_bytes = pickle.dumps(data)
@@ -338,9 +558,15 @@ def profile_jax_function(
 
     runtimes = []
     peaks = []
+    absolutes = []   # absolute peak: what must be free to run this
+    xlas = []        # XLA buffer accounting: the computation alone
     output = None
 
-    for _ in range(n_repeat):
+    adaptive = n_repeat is None
+    max_repeats = max(n for _, n in NREPEAT_SCHEDULE) if adaptive else n_repeat
+    target = max_repeats
+
+    for _ in range(max_repeats):
         parent_conn, child_conn = mp.Pipe()
         p = mp.Process(
             target=tracer,
@@ -367,20 +593,83 @@ def profile_jax_function(
             code = p.exitcode
             why = f"signal {-code} ({SIGNAL_NAMES.get(-code, '?')})" if code and code < 0 else f"exit code {code}"
             print(f"      (subprocess died with {why}; recording this point as failed)")
-            return (np.nan, np.nan), (np.nan, np.nan), np.nan
+            return (np.nan, np.nan), (np.nan, np.nan, np.nan, np.nan), np.nan
 
         runtimes.append(result["runtime"])
         peaks.append(result["peak_mem"])
+        absolutes.append(result.get("abs_mem", float("nan")))
+        xlas.append(result.get("xla_mem", float("nan")))
+        # The kernel's own high-water mark, for comparison. Sampling a peak from
+        # a Python thread while 32 BLAS threads saturate the box can in
+        # principle miss it, and the dense curves' largest points look like
+        # exactly that -- 11 B/N^2 against a theoretical 16. Only reported when
+        # the two disagree materially, so a healthy sweep stays quiet.
+        hwm = result.get("hwm_mem")
+        sampled = result.get("sampled_mem")
+        if hwm and sampled and sampled > 0:
+            ratio = hwm / sampled
+            if ratio > 1.15 or ratio < 0.87:
+                print(
+                    f"      (VmHWM {format_bytes(hwm)} vs {format_bytes(sampled)}"
+                    f" sampled, {ratio:.2f}x -- VmHWM is recorded; sampling"
+                    " misses large peaks, see CPUMemorySampler)",
+                    flush=True,
+                )
         output = pickle.loads(result["output"])
+
+        if adaptive and len(runtimes) == 1:
+            target = repeats_for(result["runtime"])
+            if target < max_repeats:
+                print(
+                    f"      (first call {result['runtime']:.3g}s -> {target}"
+                    f" repeat{'s' if target > 1 else ''})"
+                )
+        if len(runtimes) >= target:
+            break
+        if runtimes[0] > PROGRESS_ABOVE_SECONDS:
+            left = (target - len(runtimes)) * 2 * result["runtime"] / 60
+            print(
+                f"      (repeat {len(runtimes)}/{target}, {result['runtime']:.3g}s;"
+                f" ~{left:.0f} min left on this point)",
+                flush=True,
+            )
+
+        # Over budget: stop, rather than paying for the rest. Only reachable
+        # with an explicit n_repeat; adaptive is already at 1 by here.
+        if max_seconds is not None and result["runtime"] > max_seconds:
+            print(
+                f"      ({result['runtime']:.1f}s > {max_seconds:g}s budget;"
+                f" skipping the remaining {target - len(runtimes)})"
+            )
+            break
     runtimes = np.array(runtimes)
     peaks = np.array(peaks)
-    if drop_outliers:
+    # Dropping the min and max costs two samples, so this only makes sense with
+    # enough left over to still be a mean: below 5 repeats it is skipped
+    # entirely. At 1 or 2 it would be outright broken -- argmin and argmax
+    # cover the whole array and the mean of what remains is NaN -- and at 3 or 4
+    # the one or two survivors are a mean in name only. Guarded here rather than
+    # at the call site because --nrepeat makes low counts reachable from every
+    # caller.
+    if drop_outliers and len(runtimes) >= 5:
         runtimes = np.delete(runtimes, [runtimes.argmin(), runtimes.argmax()])
         peaks = np.delete(peaks, [peaks.argmin(), peaks.argmax()])
 
+    # The memory entry is (mean, std, absolute, xla), widened from the original
+    # (mean, std). Readers index [0] and [1], so the extra fields ride along
+    # without touching the plotting code or invalidating older result files --
+    # those simply have a 2-tuple, and anything wanting the new fields must
+    # tolerate their absence.
+    absolutes = np.asarray(absolutes, dtype=float)
+    xlas = np.asarray(xlas, dtype=float)
     return (
         (np.mean(runtimes), np.std(runtimes)),
-        (np.mean(peaks), np.std(peaks)),
+        (
+            np.mean(peaks),
+            np.std(peaks),
+            float(np.nanmean(absolutes)) if absolutes.size else float("nan"),
+            float(np.nanmean(xlas)) if xlas.size else float("nan"),
+        ),
         output,
     )
 
@@ -392,6 +681,11 @@ def benchmark(
     *args,
     n_repeat=5,
     cutoffs={},
+    floors={},
+    keep_over_budget=False,
+    min_seconds=None,
+    xla_only=False,
+    no_checkpoint=False,
     drop_outliers=False,
     use_gpu_profiler=False,
     max_seconds=None,
@@ -425,8 +719,12 @@ def benchmark(
     memory = {name: [] for name in funcs}
     outputs = {name: [] for name in funcs}
     # Curves that have already blown the per-call time budget.
-    _too_slow = {}
+    _retired = {}
     Ns = []
+    # (N, seconds) per curve, this sweep only, for projecting the next point's
+    # cost before paying for it. Deliberately not seeded from earlier runs: a
+    # solver change is exactly when the old numbers stop applying.
+    history = {name: [] for name in funcs}
     machine = "gpu" if use_gpu_profiler else "cpu"
     for n in range(len(data)):
         if sizes is not None:
@@ -449,7 +747,7 @@ def benchmark(
             )
             for name in funcs:
                 runtime[name].append((jnp.nan, jnp.nan))
-                memory[name].append((jnp.nan, jnp.nan))
+                memory[name].append((jnp.nan, jnp.nan, jnp.nan, jnp.nan))
                 outputs[name].append(jnp.nan)
             continue
 
@@ -458,20 +756,83 @@ def benchmark(
             func = funcs[name]
             obj = objs[name]  # either kernel or gp
             cutoff = cutoffs.get(name, 3e4)
+            # A floor turns the usual "up to the cutoff" window into a band:
+            # (floor, cutoff]. --long-runs-only sets the floor to the
+            # production cutoff so a long run measures exactly the sizes a
+            # production sweep declines, and re-measures none of the ones it
+            # already has.
+            floor = floors.get(name, 0.0)
 
-            # Runtime grows monotonically with size, so once a curve blows the
-            # per-call budget every larger size will too: retire it rather than
-            # re-measuring something we already know is too slow.
-            if max_seconds and _too_slow.get(name):
-                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
-                print(f"    {name}: Skipped (exceeded {max_seconds:g}s budget at a smaller size)")
+            # Both cost and memory need grow monotonically with size, so a
+            # curve that has already blown the per-call budget or failed to
+            # allocate will do so at every larger size too. Retire it rather
+            # than re-measuring what is already known. _retired holds the
+            # reason, so the skip line says which of the two it was.
+            if _retired.get(name):
+                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
+                print(f"    {name}: Skipped ({_retired[name]} at a smaller size)")
                 runtime[name].append(t)
                 memory[name].append(mem)
                 outputs[name].append(val)
                 continue
 
-            measured = N <= cutoff
-            if measured:
+            measured = floor < N <= cutoff
+
+            # Project this point's cost from the two most recent measurements of
+            # the same curve, and skip it if the projection is over budget.
+            # size_cutoffs already applies a coarse version up front, from
+            # _COST's calibrated constants; this uses the sweep's own numbers,
+            # so it tracks the machine and the current code. It replaces
+            # measuring-then-discarding, which paid a point's full cost before
+            # deciding to throw it away -- 949 s, once.
+            #
+            # Under-projection is the safe failure: the point simply gets
+            # measured. Over-projection skips a feasible one, which is why the
+            # slope comes from the last two points rather than a nominal
+            # exponent -- a nominal N^3 read from inside a transition
+            # over-predicts badly.
+            if measured and max_seconds and len(history[name]) >= 2:
+                (n0, t0), (n1, t1) = history[name][-2], history[name][-1]
+                if n1 > n0 > 0 and t0 > 0 and t1 > 0:
+                    power = math.log(t1 / t0) / math.log(n1 / n0)
+                    projected = t1 * (N / n1) ** power
+                    if min_seconds is not None and projected < min_seconds:
+                        # Below the Tier 2 threshold: production's job, not
+                        # this run's. See LONG_RUN_MIN_SECONDS.
+                        print(
+                            f"    {name}: Skipped (projected {projected:.0f}s"
+                            f" < {min_seconds:g}s, belongs to the production"
+                            " suite)"
+                        )
+                        runtime[name].append((jnp.nan, jnp.nan))
+                        memory[name].append((jnp.nan, jnp.nan, jnp.nan, jnp.nan))
+                        outputs[name].append(jnp.nan)
+                        continue
+                    if projected > max_seconds:
+                        _retired[name] = (
+                            f"projected over the {max_seconds:g}s budget"
+                        )
+                        print(
+                            f"    {name}: Skipped (projected {projected:.0f}s"
+                            f" via N^{power:.2f} from the last two points,"
+                            f" over the {max_seconds:g}s budget)"
+                        )
+                        runtime[name].append((jnp.nan, jnp.nan))
+                        memory[name].append((jnp.nan, jnp.nan, jnp.nan, jnp.nan))
+                        outputs[name].append(jnp.nan)
+                        continue
+
+            if measured and xla_only:
+                # Static pass: compile only. The other slots stay NaN so a merge
+                # can tell "not measured this way" from "measured as zero", and
+                # the checkpoint guard below -- which keys on a finite runtime --
+                # will not overwrite a real per-point file.
+                x = xla_footprint(func, data[n], obj, *args)
+                t = (jnp.nan, jnp.nan)
+                mem = (jnp.nan, jnp.nan, jnp.nan, x)
+                val = jnp.nan
+                print(f"    {name}: xla = {format_bytes(x)}")
+            elif measured:
                 t, mem, val = profile_jax_function(
                     func,
                     data[n],
@@ -480,16 +841,46 @@ def benchmark(
                     n_repeat=n_repeat,
                     machine=machine,
                     drop_outliers=drop_outliers,
+                    max_seconds=max_seconds,
                 )
+                if not np.isfinite(t[0]):
+                    # profile_jax_function only returns NaN when the child died
+                    # -- OOM-killed, or RESOURCE_EXHAUSTED inside XLA. Retire.
+                    _retired[name] = "the subprocess died"
                 basestr = f"    {name}: time = {t[0]:.4f} ± {t[1]:.4f} s"
                 memstr = f", mem = {format_bytes(mem[0])} ± {format_bytes(mem[1])}"
                 print(basestr + memstr)
                 if max_seconds and t[0] > max_seconds:
-                    _too_slow[name] = True
-                    print(f"      (over the {max_seconds:g}s budget; retiring this curve)")
+                    # Flag first: the retirement decision needs the real time.
+                    _retired[name] = f"exceeded the {max_seconds:g}s budget"
+                    if keep_over_budget:
+                        # A long run exists to buy exactly these points, so the
+                        # one that finally goes over is the one worth keeping --
+                        # it is the measurement, not an accident. Retire the
+                        # curve so nothing larger is attempted, but bank it.
+                        print(
+                            f"      (over the {max_seconds:g}s budget; keeping"
+                            " the point and retiring this curve)"
+                        )
+                    else:
+                        print(
+                            f"      (over the {max_seconds:g}s budget; retiring"
+                            " this curve and discarding the point)"
+                        )
+                        # This is a size the sweep was told not to spend, so
+                        # record it the way a cutoff-retired size is recorded.
+                        # The measured value is still printed above.
+                        t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
+            elif N <= floor:
+                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
+                print(f"    {name}: Skipped (N={N} <= floor={floor:.3g}, already"
+                      " covered by the production sweep)")
             else:
-                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan), jnp.nan
+                t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
                 print(f"    {name}: Skipped (N={N} > cutoff={cutoff:.3g})")
+
+            if measured and np.isfinite(float(t[0])):
+                history[name].append((float(N), float(t[0])))
 
             runtime[name].append(t)
             memory[name].append(mem)
@@ -501,7 +892,10 @@ def benchmark(
             # what a --quick pass would otherwise do at every skipped size,
             # or a crashed subprocess at a size that succeeded on an earlier
             # run -- destroys exactly the thing that makes recovery possible.
-            if measured and not np.isnan(float(t[0])):
+            # no_checkpoint: a merge-only pass (--absolute-only) measures with
+            # a single repeat, so its numbers must not overwrite the averaged
+            # per-point files that --rebuild reconstructs from.
+            if measured and not no_checkpoint and not np.isnan(float(t[0])):
                 save_benchmark_data(
                     f"results/individual/{func.__name__}_{N}_{machine}{tag}.pkl",
                     [N],
@@ -579,7 +973,7 @@ def select_sizes(sizes, only_sizes=None, only_indices=None):
 
 
 def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
-                        logmin=1, logmax=7, curves=None):
+                        logmin=1, logmax=7, curves=None, tag=""):
     """Reassemble an aggregate result file from the per-point checkpoints.
 
     Every measured point is written to ``results/individual/`` as it completes,
@@ -589,12 +983,20 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
     than once.
 
     Missing points come back as NaN, exactly as a skipped size would.
+
+    ``tag`` selects which family of checkpoints to read -- ``"_quick"`` for an
+    abridged run, whose grid and per-point budget differ, so its points must not
+    be mixed with production ones.
     """
     import glob
 
     prefixes = {
         "llh": {"SSM": "ss_llh", "QSM": "qs_llh", "GP": "gp_llh",
                 "pSSM": "pss_llh", "pQSM": "pqs_llh"},
+        "llh_value_and_grad": {
+            "SSM": "ss_llh_vg", "QSM": "qs_llh_vg", "GP": "gp_llh_vg",
+            "pSSM": "pss_llh_vg", "pQSM": "pqs_llh_vg",
+        },
         "cond": {"SSM": "ss_cond", "QSM": "qs_cond", "GP": "gp_cond",
                  "pSSM": "pss_cond", "pQSM": "pqs_cond"},
         "pred": {"SSM": "ss_pred", "QSM": "qs_pred", "GP": "gp_pred"},
@@ -610,6 +1012,15 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
         logmax = logmax - round(math.log10(m_per_n))
     grid = [int(n) for n in np.logspace(logmin, logmax, n_sizes).astype(int)]
 
+    # The M-scaled kinds checkpoint by M, not by N. benchmark() is handed the
+    # test grid for those, so the size it sees -- and names the file after -- is
+    # M = m_per_n * N, while the aggregate's x axis stays in N. Looking up by N
+    # found only the three sizes that appear in both ladders (1000, 10000,
+    # 100000) and returned NaN for the other fourteen, silently replacing a full
+    # 17-point sweep with a 3-point file. Rebuild has never worked for pred or
+    # sample-post; it went unnoticed because those kinds had not needed it.
+    key_for = (lambda n: m_per_n * n) if kind in _M_SCALED else (lambda n: n)
+
     nan = (float("nan"), float("nan"))
     runtime, memory, outputs = {}, {}, {}
     found = 0
@@ -618,7 +1029,7 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
             continue
         runtime[name], memory[name], outputs[name] = [], [], []
         for N in grid:
-            f = f"results/individual/{pre}_{N}_{device}.pkl"
+            f = f"results/individual/{pre}_{key_for(N)}_{device}{tag}.pkl"
             if os.path.exists(f):
                 d = load_benchmark_data(f)
                 runtime[name].append(d["runtime"][name][0])
@@ -629,6 +1040,28 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
                 runtime[name].append(nan)
                 memory[name].append(nan)
                 outputs[name].append(float("nan"))
+    # Preserve the absolute and xla slots. Checkpoints written before the entry was
+    # widened to (mean, std, absolute, xla) carry only two fields, so rebuilding
+    # from them silently discards a column that --xla-only had filled -- and
+    # that column is static, so losing it means re-deriving it for no reason.
+    # Any value the checkpoints do supply wins, since it is the newer one.
+    prior = f"results/{device}_{kind}{'_int' if integrated else ''}{tag}_benchmark.pkl"
+    if os.path.exists(prior):
+        old_mem = load_benchmark_data(prior).get("memory", {})
+        kept = 0
+        for name, entries in memory.items():
+            was = old_mem.get(name, [])
+            for i, e in enumerate(entries):
+                e = tuple(e) + (float("nan"),) * (4 - len(e))
+                for slot in (2, 3):
+                    if (e[slot] != e[slot] and i < len(was)
+                            and len(was[i]) > slot and was[i][slot] == was[i][slot]):
+                        e = e[:slot] + (was[i][slot],) + e[slot + 1:]
+                        kept += 1
+                entries[i] = e
+        if kept:
+            print(f"  kept {kept} xla values the checkpoints do not carry")
+
     print(f"  rebuilt {kind}{'_int' if integrated else ''} ({device}) from "
           f"{found} per-point files across {len(grid)} sizes")
     return grid, runtime, memory, outputs
@@ -705,6 +1138,11 @@ def run_benchmark(
     logN_max=7,
     n_repeat=5,
     cutoffs={},
+    floors={},
+    keep_over_budget=False,
+    min_seconds=None,
+    xla_only=False,
+    no_checkpoint=False,
     drop_outliers=False,
     use_gpu_profiler=False,
     exposure_quantities=None,
@@ -729,6 +1167,9 @@ def run_benchmark(
     # grid across the whole baseline, needing N * cadence * 1.2 = 2.16e9 points,
     # past both int32 dimensions and any sane memory budget. Sixteen good sizes
     # were lost to the seventeenth.
+    # Note this is deliberately driven by cutoffs only, never by floors: a long
+    # run's targets are the sizes *above* the production cutoff, so folding
+    # floors in here would skip building exactly the data it needs.
     reachable = max(cutoffs.values()) if cutoffs else float("inf")
     data = []
     for N in Ns:
@@ -759,6 +1200,11 @@ def run_benchmark(
         kernels,
         n_repeat=n_repeat,
         cutoffs=cutoffs,
+        floors=floors,
+        keep_over_budget=keep_over_budget,
+        min_seconds=min_seconds,
+        xla_only=xla_only,
+        no_checkpoint=no_checkpoint,
         drop_outliers=drop_outliers,
         use_gpu_profiler=use_gpu_profiler,
         max_seconds=max_seconds,
@@ -779,6 +1225,11 @@ def run_pred_benchmark(
     logN_max=5,
     n_repeat=5,
     cutoffs={},  # in M
+    floors={},  # in M
+    keep_over_budget=False,
+    min_seconds=None,
+    xla_only=False,
+    no_checkpoint=False,
     drop_outliers=False,
     use_gpu_profiler=False,
     exposure_quantities=None,
@@ -799,13 +1250,14 @@ def run_pred_benchmark(
     for i, (N, M) in enumerate(zip(Ns, Ms), 1):
         skip = True
         for key in cutoffs:
-            if M <= cutoffs[key]:
+            if floors.get(key, 0.0) < M <= cutoffs[key]:
                 skip = False
         if skip:
-            print(f"  ({i}/{len(Ns)}):  N = {N}, M = {M} -- Skipped (M > all cutoffs)")
+            why = "M > all cutoffs" if not floors else "M outside every (floor, cutoff]"
+            print(f"  ({i}/{len(Ns)}):  N = {N}, M = {M} -- Skipped ({why})")
             for name in funcs:
                 runtime[name].append((jnp.nan, jnp.nan))
-                memory[name].append((jnp.nan, jnp.nan))
+                memory[name].append((jnp.nan, jnp.nan, jnp.nan, jnp.nan))
                 outputs[name].append(jnp.nan)
             continue
 
@@ -834,18 +1286,37 @@ def run_pred_benchmark(
         dt = 0.1 * (t_train.max() - t_train.min())  # how much to predict/retrodict
         t_test = jnp.linspace(t_train.min() - dt, t_train.max() + dt, M)
 
-        ## Prepare GP objects
+        ## Prepare GP objects -- but only for curves this size will measure.
+        #
+        # A dense tinygp.GaussianProcess factorises in its *constructor*, and
+        # un-jitted, so building one is not free bookkeeping: at N = 56234 it is
+        # a 56234^2 kernel matrix plus its Cholesky, and the eager construction
+        # peaks far above the 50 GB those two need. Doing that in the parent for
+        # a curve the cutoffs immediately skip used to consume ~340 GB and take
+        # the process out with a SIGSEGV -- which is how a --long-runs-only pred
+        # sweep died at grid point 16 of 17, having measured only SSM.
+        #
+        # The band is the same one benchmark() gates on, including the same
+        # default cutoff, so nothing that would be measured goes unbuilt. A
+        # skipped curve gets None, which benchmark() never dereferences.
+        def _in_band(curve):
+            return floors.get(curve, 0.0) < M <= cutoffs.get(curve, 3e4)
+
+        gp = {
+            "SSM": (
+                smolgp.GaussianProcess(kernels["SSM"], X_train, noise=yerr_train**2)
+                if _in_band("SSM") else None
+            ),
+            "GP": (
+                tinygp.GaussianProcess(kernels["GP"], X_train, diag=yerr_train**2)
+                if _in_band("GP") else None
+            ),
+        }
         if "QSM" in kernels:
-            gp_qs = tinygp.GaussianProcess(kernels["QSM"], X_train, diag=yerr_train**2)
-        gp_gp = tinygp.GaussianProcess(kernels["GP"], X_train, diag=yerr_train**2)
-        gp_ss = smolgp.GaussianProcess(kernels["SSM"], X_train, noise=yerr_train**2)
-        ## Pre-condition those that are compatible with it
-        # _, condGPss = gp_ss.condition(y_train)
-        ## Pack dict
-        # gp = {'SSM': condGPss, 'QSM': gp_qs, 'GP': gp_gp}
-        gp = {"SSM": gp_ss, "GP": gp_gp}
-        if "QSM" in kernels:
-            gp["QSM"] = gp_qs
+            gp["QSM"] = (
+                tinygp.GaussianProcess(kernels["QSM"], X_train, diag=yerr_train**2)
+                if _in_band("QSM") else None
+            )
 
         _, t, m, o = benchmark(
             funcs,
@@ -854,6 +1325,11 @@ def run_pred_benchmark(
             y_train,
             n_repeat=n_repeat,
             cutoffs=cutoffs,
+            floors=floors,
+            keep_over_budget=keep_over_budget,
+            min_seconds=min_seconds,
+            xla_only=xla_only,
+            no_checkpoint=no_checkpoint,
             drop_outliers=drop_outliers,
             use_gpu_profiler=use_gpu_profiler,
             max_seconds=max_seconds,
@@ -880,6 +1356,11 @@ def run_prior_sample_benchmark(
     logM_max=7,
     n_repeat=5,
     cutoffs={},  # in M
+    floors={},  # in M
+    keep_over_budget=False,
+    min_seconds=None,
+    xla_only=False,
+    no_checkpoint=False,
     drop_outliers=False,
     use_gpu_profiler=False,
     exposure_quantities=None,
@@ -910,13 +1391,14 @@ def run_prior_sample_benchmark(
     for i, M in enumerate(Ms, 1):
         skip = True
         for key in cutoffs:
-            if M <= cutoffs[key]:
+            if floors.get(key, 0.0) < M <= cutoffs[key]:
                 skip = False
         if skip:
-            print(f"  ({i}/{len(Ms)}):  M = {M} -- Skipped (M > all cutoffs)")
+            why = "M > all cutoffs" if not floors else "M outside every (floor, cutoff]"
+            print(f"  ({i}/{len(Ms)}):  M = {M} -- Skipped ({why})")
             for name in funcs:
                 runtime[name].append((jnp.nan, jnp.nan))
-                memory[name].append((jnp.nan, jnp.nan))
+                memory[name].append((jnp.nan, jnp.nan, jnp.nan, jnp.nan))
                 outputs[name].append(jnp.nan)
             continue
 
@@ -949,6 +1431,11 @@ def run_prior_sample_benchmark(
             kernels,
             n_repeat=n_repeat,
             cutoffs=cutoffs,
+            floors=floors,
+            keep_over_budget=keep_over_budget,
+            min_seconds=min_seconds,
+            xla_only=xla_only,
+            no_checkpoint=no_checkpoint,
             drop_outliers=drop_outliers,
             use_gpu_profiler=use_gpu_profiler,
             max_seconds=max_seconds,
@@ -988,22 +1475,41 @@ def run_prior_sample_benchmark(
 #      which Choleskys the full M x M posterior covariance. It is O(M^2).
 # ---------------------------------------------------------------------------
 
+# Memory coefficients recalibrated 2026-08-23 against the first complete suite
+# measured with the corrected profiler (see CPUMemorySampler), via
+# calibrate_costs.py. The dense GP entries were derived from first principles
+# and needed no change -- all measured at 1.00x. Everything that moved is an
+# O(N) state-space or quasisep curve whose constant was "the measured
+# asymptote" and had gone stale:
+#
+#   llh  SSM       72 -> 160    cond SSM        184 -> 320
+#   llh  QSM      153 -> 209    cond QSM        585 -> 633
+#   pred QSM       48 ->  64    pred SSM        445 -> 489
+#   llh  SSM int  352 -> 584    cond SSM int    904 -> 1344
+#   pred SSM int 10860 -> 1631
+#
+# The SSM drifts are most likely the split-scan log_probability changing the
+# footprint. pred QSM being 1.33x low is what admitted the M = 1e6 point that
+# then tried to allocate 560 GB; pred SSM int was 6.7x *high*, an extrapolated
+# guess that had been quietly costing that curve grid points. Re-run
+# calibrate_costs.py after any full sweep rather than waiting for an OOM.
+#
 # exponents are (n_pow, m_pow): cost = coeff * N**n_pow * M**m_pow
 _COST = {
     #                     memory (bytes)        time (seconds)
     #                     coeff   n,m           coeff     n,m
     ("llh", "GP"): ((16.0, (2, 0)), (2.7e-13, (3, 0))),
-    ("llh", "SSM"): ((72.0, (1, 0)), (1.5e-06, (1, 0))),
-    ("llh", "QSM"): ((153.0, (1, 0)), (5.4e-08, (1, 0))),
+    ("llh", "SSM"): ((160.0, (1, 0)), (1.5e-06, (1, 0))),
+    ("llh", "QSM"): ((209.0, (1, 0)), (5.4e-08, (1, 0))),
     ("cond", "GP"): ((24.0, (2, 0)), (9.9e-13, (3, 0))),
-    ("cond", "SSM"): ((184.0, (1, 0)), (2.7e-06, (1, 0))),
-    ("cond", "QSM"): ((585.0, (1, 0)), (7.8e-07, (1, 0))),
+    ("cond", "SSM"): ((320.0, (1, 0)), (2.7e-06, (1, 0))),
+    ("cond", "QSM"): ((633.0, (1, 0)), (7.8e-07, (1, 0))),
     ("pred", "GP"): ((24.0, (1, 1)), (1.04e-12, (2, 1))),
     # 48.0, not the 56 seen at N < 1e3: this constant only converges above
     # N ~ 1e3 (45.5 -> 50.8 -> 48.3 -> 48.00 across the production grid), and
     # the cutoff lives in the converged regime.
-    ("pred", "QSM"): ((48.0, (1, 1)), (2.55e-08, (1, 1))),
-    ("pred", "SSM"): ((445.0, (0, 1)), (1.74e-06, (0, 1))),
+    ("pred", "QSM"): ((64.0, (1, 1)), (2.55e-08, (1, 1))),
+    ("pred", "SSM"): ((489.0, (0, 1)), (1.74e-06, (0, 1))),
     # Time measured with smolgp.kernels.dense.SHOKernel, the kernel the
     # benchmark actually uses -- a generic tinygp.kernels.ExpSquared is ~7x
     # slower to build and gives a constant that truncates this curve at half
@@ -1026,11 +1532,11 @@ _COST = {
 # these cover SSM and GP only.
 _COST_INT = {
     ("llh", "GP"): ((16.0, (2, 0)), (6.4e-13, (3, 0))),
-    ("llh", "SSM"): ((352.0, (1, 0)), (1.9e-05, (1, 0))),
+    ("llh", "SSM"): ((584.0, (1, 0)), (1.9e-05, (1, 0))),
     ("cond", "GP"): ((72.0, (2, 0)), (2.2e-12, (3, 0))),
-    ("cond", "SSM"): ((904.0, (1, 0)), (2.6e-05, (1, 0))),
+    ("cond", "SSM"): ((1344.0, (1, 0)), (2.6e-05, (1, 0))),
     ("pred", "GP"): ((24.0, (1, 1)), (4.42e-12, (2, 1))),
-    ("pred", "SSM"): ((10860.0, (0, 1)), (1.44e-05, (0, 1))),
+    ("pred", "SSM"): ((1631.0, (0, 1)), (1.44e-05, (0, 1))),
     ("sample-prior", "GP"): ((16.0, (0, 2)), (1.2e-12, (0, 3))),
     ("sample-post", "GP"): ((24.0, (0, 2)), (4.8e-13, (0, 3))),
     ("sample-prior", "SSM"): ((1212.0, (0, 1)), (1.1e-05, (0, 1))),
@@ -1069,6 +1575,53 @@ RESERVE_FRAC = 0.10
 # in N^2, 23% off one in N -- which a flat haircut on the budget cannot do.
 _SAFETY = 1.3
 
+# ---------------------------------------------------------------------------
+# Reverse mode costs more memory than the forward pass it differentiates, so
+# _COST/_COST_INT -- both calibrated on the forward pass -- are optimistic for
+# --value-and-grad. Multipliers on the *memory* coefficient only, keyed by
+# (kind, curve, integrated). The time coefficient is left alone: the gradient is
+# slower too, but a bad time estimate only costs a wasted measurement, whereas a
+# bad memory estimate is an OOM kill on a swapless box.
+#
+# Measured 2026-08-21 from the paired forward and value-and-grad result files,
+# comparing B/N^exponent at the largest *reliable* point of each curve. The
+# single largest point of every GP curve is deliberately excluded: it reports
+# 11 B/N^2 against a theoretical exactly-16, i.e. the profiler under-reports
+# there (see MemorySampler -- its verification stops at N=23713, which is where
+# the discrepancy starts). Using it would build the factor out of a known-bad
+# number.
+#
+#   kind curve int   fwd model   fwd measured   vg measured   factor
+#   llh  SSM   no     72           159            553          3.5
+#   llh  QSM   no    153           185            537          2.9
+#   llh  GP    no     16            16             41          2.6
+#   llh  SSM   yes   352           577           2643          4.6
+#   llh  GP    yes    16            16          ~1570         98
+#
+# The integrated GP factor is the outlier that matters: the dense integrated
+# kernel is built through an expression whose N x N intermediates the tape all
+# retains, where the instantaneous kernel's is nearly free. At 16 B/N^2 the
+# model put GP's cutoff at N = 9.8e4; the real limit is ~1e4, and the two grid
+# points in between were spent on doomed 886 GB and 4.9 TB allocations.
+#
+# Note in passing that the forward SSM constants are themselves low by ~2x
+# (72 against 159 measured, 352 against 577). That is a separate drift, most
+# likely from the split-scan log_probability changing the footprint, and it is
+# not corrected here -- _SAFETY absorbs part of it and the curves are cap-bound
+# anyway, so nothing currently depends on it.
+_GRAD_MEM_FACTOR = {
+    ("llh", "SSM", False): 3.5,
+    ("llh", "QSM", False): 2.9,
+    ("llh", "GP", False): 2.6,
+    ("llh", "SSM", True): 4.6,
+    ("llh", "GP", True): 98.0,
+}
+
+#: Fallback for a (kind, curve) with no measurement yet. Deliberately on the
+#: high side of the instantaneous factors: over-estimating costs a grid point,
+#: under-estimating costs an OOM kill.
+GRAD_MEM_FACTOR_DEFAULT = 5.0
+
 
 def ram_budget(machine=None, device="cpu", max_ram_gb=None):
     """Memory budget for the size cutoffs, in bytes.
@@ -1105,18 +1658,57 @@ def _solve(coeff, powers, budget, m_per_n):
     return (budget / coeff) ** (1.0 / (n_pow + m_pow))
 
 
+def existing_floors(filename, curves, m_per_n=None):
+    """Per-curve floor: the largest size that already has a real measurement.
+
+    Used by ``--long-runs-only`` to define "the points a production sweep
+    declined" without having to reconstruct which budget that sweep ran under.
+    A curve with no finite point anywhere gets a floor of 0, so a long run also
+    covers a curve that has never been measured at all.
+
+    Args:
+        filename: results/*.pkl aggregate. A missing file means no curve has a
+            floor, which is the right answer -- everything is unmeasured.
+        curves: curve names to report on, so the result lines up with the
+            cutoffs dict whatever the file happens to contain.
+        m_per_n: for the M-scaled kinds, whose cutoffs are in M while the stored
+            ``Ns`` are in N. Pass the ratio to convert; ``None`` leaves the
+            sizes as stored.
+
+    Returns:
+        dict of curve name -> floor, in the same variable as ``cutoffs``.
+    """
+    floors = {name: 0.0 for name in curves}
+    if not os.path.exists(filename):
+        return floors
+    data = load_benchmark_data(filename)
+    Ns = np.asarray(data.get("Ns", []), dtype=float)
+    scale = 1.0 if m_per_n is None else float(m_per_n)
+    for name in curves:
+        points = data.get("runtime", {}).get(name)
+        if not points or len(Ns) == 0:
+            continue
+        t = np.array([q[0] for q in points], dtype=float)
+        n = min(len(t), len(Ns))
+        good = np.isfinite(t[:n])
+        if good.any():
+            floors[name] = float(Ns[:n][good].max()) * scale
+    return floors
+
+
 def size_cutoffs(
     max_ram_bytes,
     kind,
     max_seconds=None,
     max_N=1e7,
-    max_M=1e6,
+    max_M=1e7,
     m_per_n=100,
     gpu=False,
     gpu_serial=False,
     integrated=False,
     safety=None,
     data_ceiling=None,
+    value_and_grad=False,
     detail=False,
 ):
     """Per-curve size cutoffs from a memory budget and a time budget.
@@ -1144,6 +1736,10 @@ def size_cutoffs(
         safety: multiplier on the memory constants; defaults to _SAFETY. Pass
             1.0 alongside a hand-picked budget to take that budget literally
             -- the caller has then taken responsibility for the margin.
+        value_and_grad: the run measures value *and* gradient, so scale the
+            memory coefficients by _GRAD_MEM_FACTOR. Must match how the run is
+            actually invoked: the factors range from 2.6x to 98x, and getting
+            this wrong in the optimistic direction is an OOM kill.
         detail: also return, per curve, which bound was active.
 
     Returns:
@@ -1154,7 +1750,7 @@ def size_cutoffs(
 
     Note:
         The time constants were calibrated on the workstation CPU. On another
-        machine they are only indicative -- the ``_too_slow`` retirement in
+        machine they are only indicative -- the ``_retired`` retirement in
         ``benchmark()`` is the backstop that catches the difference.
         pSSM/pQSM are GPU-only and have no calibration data at all, so they
         get the flat cap.
@@ -1189,8 +1785,15 @@ def size_cutoffs(
             cuts[curve], bounds[curve] = 0, "skipped on GPU"
             continue
         (mem_coeff, mem_pow), (sec_coeff, sec_pow) = cost
+        grad = (
+            _GRAD_MEM_FACTOR.get(
+                (kind, curve, integrated), GRAD_MEM_FACTOR_DEFAULT
+            )
+            if value_and_grad
+            else 1.0
+        )
         options = [
-            (_solve(safety * mem_coeff, mem_pow, max_ram_bytes, ratio), "memory"),
+            (_solve(safety * grad * mem_coeff, mem_pow, max_ram_bytes, ratio), "memory"),
             (flat, "cap"),
         ]
         if data_ceiling is not None:

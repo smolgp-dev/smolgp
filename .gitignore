@@ -20,3 +20,4 @@ docs/jupyter_execute/
 tests/benchmark/results/
 tests/benchmark/data/
 tests/benchmark/logs/
+tests/benchmark/scratch_figures/
