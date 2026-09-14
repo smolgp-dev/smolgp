@@ -185,7 +185,11 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         Computes the submatrices Qaug12, Qaug21, and Qaug22
         needed to assemble the augmented process noise matrix.
 
-        By default uses the Van Loan method to compute these submatrices.
+        By default uses a short-step Van Loan calculation followed by
+        covariance doubling, avoiding overflow of the auxiliary Van Loan
+        blocks over long gaps.
+        The integrated coordinate is base state 0, matching this class's
+        design_matrix, observation_matrix, and transition_matrix conventions.
         Overload this method if you wish to define these submatrices analytically.
         """
 
@@ -196,18 +200,17 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         L = self.base_model.noise_effect_matrix()
         Qc = self.base_model.noise()
 
-        vanloan = smolgp.helpers.VanLoan(F, L, Qc, dt)
-        F3 = vanloan["F3"]
-        H2 = vanloan["H2"]
-        K1 = vanloan["K1"]
+        # One integral state is sufficient: process_noise replicates these
+        # blocks for instruments whose integrals have not yet been reset.
+        Faug = jnp.zeros((self.d + 1, self.d + 1), dtype=F.dtype)
+        Faug = Faug.at[: self.d, : self.d].set(F)
+        Faug = Faug.at[self.d, 0].set(1.0)
+        Laug = jnp.concatenate([L, jnp.zeros((1, L.shape[1]), dtype=L.dtype)])
+        _, Qaug = smolgp.helpers.discretize_with_doubling(Faug, Laug, Qc, dt)
 
-        M = F3.T @ H2
-        F3TK1 = F3.T @ K1
-        W = F3TK1 + F3TK1.T
-
-        Qaug12 = M[:, :1]
+        Qaug12 = Qaug[: self.d, self.d :]
         Qaug21 = Qaug12.T
-        Qaug22 = W[:1, :1]
+        Qaug22 = Qaug[self.d :, self.d :]
         return Qaug12, Qaug21, Qaug22
 
     # @partial(

@@ -164,6 +164,66 @@ def Q_from_VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> JAXA
     return F3.T @ G2
 
 
+def discretize_with_doubling(
+    F: JAXArray,
+    L: JAXArray,
+    Qc: JAXArray,
+    dt: JAXArray,
+    max_doublings: int = 32,
+) -> tuple[JAXArray, JAXArray]:
+    r"""Compute a transition and process covariance without long-step Van Loan overflow.
+
+    The Van Loan exponential contains both ``F`` and ``-F``. Its auxiliary
+    blocks can overflow even when the transition and covariance are finite.
+    Evaluate it over a short step, then compose physical transitions using
+    ``A(2h) = A(h) @ A(h)`` and ``Q(2h) = Q(h) + A(h) @ Q(h) @ A(h).T``.
+    This also supports integral states: no stationary covariance is assumed.
+
+    The short-step Van Loan matrix has 1-norm at most one. At most
+    ``max_doublings`` compositions are allowed; nonfinite inputs, negative
+    elapsed time, or a larger required scaling return NaN matrices. This is
+    a numerical budget, not a guarantee for arbitrary ill-conditioned systems
+    or processes whose physical covariance overflows.
+
+    ``max_doublings`` must be a static nonnegative integer. A fixed loop bound
+    preserves reverse-mode differentiation under JIT and vmap; the integer
+    scaling decision is not differentiated.
+    """
+    if not isinstance(max_doublings, int) or max_doublings < 0:
+        raise ValueError("max_doublings must be a static nonnegative integer")
+    QL = L @ Qc @ L.T
+    b = F.shape[0]
+    C = jnp.block([[-F, QL], [jnp.zeros_like(F), F.T]])
+    C = jnp.asarray(C, dtype=jnp.result_type(C, dt, 1.0))
+    size = jax.lax.stop_gradient(jnp.linalg.norm(C, ord=1) * jnp.abs(dt))
+    required = jnp.ceil(jnp.log2(jnp.maximum(size, 1.0)))
+    valid = jnp.isfinite(size) & (dt >= 0) & (required <= max_doublings)
+
+    def compute(_):
+        n = required.astype(jnp.int32)
+        h = dt * jnp.exp2(-required)
+        E = expm(C * h)
+        A = E[b:, b:].T
+        Q = A @ E[:b, b:]
+        Q = (Q + Q.T) / 2
+
+        def step(i, state):
+            def double(state):
+                A, Q = state
+                Q = Q + A @ Q @ A.T
+                return A @ A, (Q + Q.T) / 2
+
+            return lax.cond(i < n, double, lambda state: state, state)
+
+        return lax.fori_loop(0, max_doublings, step, (A, Q))
+
+    def invalid(_):
+        missing = jnp.full_like(C[:b, :b], jnp.nan)
+        return missing, missing
+
+    return lax.cond(valid, compute, invalid, operand=None)
+
+
 def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
     r"""Compute the integrated transition matrix via the Van Loan method.
 
