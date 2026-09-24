@@ -265,10 +265,16 @@ class StateSpaceModel(Kernel):
 
 
 class Sum(StateSpaceModel):
-    """The sum of two :class:`StateSpaceModel` kernels.
+    r"""The sum of two :class:`StateSpaceModel` kernels.
 
     The joint state dimension is :math:`d = d_1 + d_2`, and all matrices are
     assembled as block-diagonal combinations of the two component kernels.
+
+    TODO: for mixes of instantaneous and integrated kernels, the
+    end of the exposure is used by the integrated solver. Technically
+    wrong for instantaneous kernels which should be observed at the
+    exposure midpoint, which would require a midpoint state for every
+    data point (so K = 3N total states, starts/midpoints/ends)
     """
 
     kernel1: StateSpaceModel
@@ -378,6 +384,21 @@ class Product(StateSpaceModel):
     kernel2: StateSpaceModel
 
     def __init__(self, kernel1, kernel2):
+        from smolgp.kernels.integrated import IntegratedStateSpaceModel
+
+        integrated = [
+            k.name
+            for k in extract_all_components(kernel1) + extract_all_components(kernel2)
+            if isinstance(k, IntegratedStateSpaceModel)
+        ]
+        if integrated:
+            raise TypeError(
+                f"Integrated kernels cannot be multiplied (found {integrated} inside "
+                "a Product). The average of a product over an exposure is not the "
+                "product of the averages, and the Kronecker-product state has no "
+                "meaningful integral state. Multiply the instantaneous kernels and "
+                "integrate the product as a whole instead."
+            )
         self.kernel1 = kernel1
         self.kernel2 = kernel2
         self.name = f"Product({kernel1.name}, {kernel2.name})"
@@ -467,15 +488,6 @@ class Product(StateSpaceModel):
     def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         r"""
         :math:`k_{\mathrm{product}}(X_1, X_2) = k_1(X_1, X_2) \cdot k_2(X_1, X_2)`.
-
-        Delegates to each child's own :meth:`evaluate` rather than
-        evaluating the :class:`Sum`'s block-diagonal matrices directly.
-        Needed to handle mixtures of :class:`StateSpaceModel` and
-        :class:`IntegratedStateSpaceModel` kernels, which have different
-        :meth:`evaluate` implementations. The covariance of a product of
-        kernels is the product of the covariances of the individual kernels,
-        hence the covariance matrix is the elementwise product of the
-        individual covariance matrices.
         """
         return self.kernel1.evaluate(X1, X2) * self.kernel2.evaluate(X1, X2)
 
