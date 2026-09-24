@@ -425,26 +425,24 @@ def test_condition_batched_mean_matches_condition():
 
 
 def test_condition_batched_mean_is_faster_for_many_samples():
-    """At large enough N and M, condition_batched_mean(M residuals) must be
-    meaningfully faster than vmap(condition) over the same M residuals --
-    the whole point of sharing the covariance/gain recursion across samples.
+    """condition_batched_mean(M residuals) must run the covariance/gain
+    recursion once, not once per sample, so it must be much faster than
+    M independent condition() calls.
 
-    At small N/M (a few hundred/thousand), fixed JAX dispatch overhead
-    dominates and the two are roughly a wash (measured ratio ~0.8-1.0); the
-    asymptotic O(N*dim^3) vs O(N*dim^3 + M*N*dim*D) savings only becomes
-    visible once actual compute dominates -- measured ratio ~0.43-0.54 at
-    N=5000-10000, M=2000 in isolation. Using N=5000, M=1000 here with a
-    deliberately loose threshold (0.9, not the ~0.5 seen in isolated manual
-    benchmarking): this measurement is noticeably noisier when run as part
-    of the full suite (shared JIT cache/GC pressure from preceding tests),
-    so the assertion only needs to catch a real regression (e.g. the
-    optimization silently falling back to the slow path), not to pin down
-    the exact speedup -- see the benchmark harness / demo notebook for the
-    actual, more dramatic numbers at scale.
+    The baseline is lax.map(condition), which really does repeat the
+    covariance recursion M times. vmap(condition) is *not* a useful baseline:
+    JAX's scan batching rule leaves the y-independent covariance carry
+    unbatched, so vmap already shares that recursion across samples and runs
+    about as fast as condition_batched_mean (measured ratio ~0.9-1.0).
+
+    Measured ratio ~0.02 at N=2000, M=100; the 0.2 threshold leaves ~10x
+    headroom for timing noise in the full suite while still catching a real
+    regression (the batched path falling back to per-sample covariances,
+    which would give a ratio near 1).
     """
     import time
 
-    N, M = 5000, 1000
+    N, M = 2000, 100
     kernel = smolgp.kernels.SHO(omega=0.2, quality=2.0, sigma=1.3)
     t = jnp.linspace(0, 200, N)
     gp = smolgp.GaussianProcess(kernel=kernel, X=t, noise=jnp.full(N, 0.04))
@@ -455,7 +453,7 @@ def test_condition_batched_mean_is_faster_for_many_samples():
     # directly) -- jax.jit's caching otherwise ends up hashing the bound
     # method's __self__ (the solver, an eqx.Module with array leaves),
     # which fails since arrays aren't hashable.
-    old_fn = jax.jit(lambda rb: jax.vmap(gp.solver.condition)(rb))
+    old_fn = jax.jit(lambda rb: jax.lax.map(gp.solver.condition, rb))
     new_fn = jax.jit(lambda rb: gp.solver.condition_batched_mean(rb))
 
     jax.block_until_ready(old_fn(residual_batch))
@@ -476,9 +474,9 @@ def test_condition_batched_mean_is_faster_for_many_samples():
     t_new = _time_it(new_fn)
 
     print(
-        f"    ...old (vmap condition): {t_old:.4f}s, new (batched mean): {t_new:.4f}s"
+        f"    ...old (lax.map condition): {t_old:.4f}s, new (batched mean): {t_new:.4f}s"
     )
-    assert t_new < 0.9 * t_old, (
+    assert t_new < 0.2 * t_old, (
         f"expected batched-mean to be at least somewhat faster: old={t_old:.4f}s new={t_new:.4f}s"
     )
 

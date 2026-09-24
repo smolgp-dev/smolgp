@@ -468,7 +468,8 @@ def _long_gap_float32_error(solver=None):
 
     # smolgp in float32
     solver_kwargs = {} if solver is None else {"solver": solver}
-    with jax.enable_x64(False):
+    with jax.enable_x64(False), warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         kernel, X, y, t_test = build()
         gp = smolgp.GaussianProcess(
             kernel=kernel, X=X, noise=jnp.full(N, 0.04), **solver_kwargs
@@ -476,6 +477,26 @@ def _long_gap_float32_error(solver=None):
         _, condGP = gp.condition(y)
         mu = np.asarray(condGP.predict(t_test))
     assert mu.dtype == np.float32
+    assert any("jax_enable_x64" in str(w.message) for w in caught), (
+        "Expected a warning about running with 64-bit precision disabled"
+    )
+
+    # Report where any non-finite values come from, to diagnose failures
+    # that only show up on some platforms
+    assert np.all(np.isfinite(mu_dense)), "float64 dense reference is non-finite"
+    if not np.all(np.isfinite(mu)):
+        st = condGP.states
+        report = []
+        for name in ["predicted", "filtered", "smoothed"]:
+            for kind in ["mean", "cov"]:
+                arr = np.asarray(getattr(st, f"{name}_{kind}"))
+                bad = ~np.isfinite(arr.reshape(arr.shape[0], -1)).all(axis=1)
+                if bad.any():
+                    report.append(f"{name}_{kind}: first non-finite state {np.argmax(bad)}")
+        raise AssertionError(
+            f"{np.isnan(mu).sum()}/{mu.size} float32 predictions are non-finite; "
+            f"conditioned states: {report or 'all finite (NaN arises in predict)'}"
+        )
 
     return np.abs(mu - mu_dense).max()
 
