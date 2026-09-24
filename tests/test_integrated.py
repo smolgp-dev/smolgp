@@ -416,16 +416,18 @@ def test_smoothing_gain_badly_scaled_input():
     G = np.asarray(smoothing_gain(jnp.array(P), jnp.array(PAt)))
 
     relerr = np.abs(G - G_exact).max() / np.abs(G_exact).max()
-    assert relerr < 1e-10, f"smoothing gain inaccurate on badly scaled input: {relerr:.2e}"
+    assert relerr < 1e-10, (
+        f"smoothing gain inaccurate on badly scaled input: {relerr:.2e}"
+    )
     print("    ...smoothing_gain: accurate on a badly scaled P_pred_next")
 
 
-def test_long_gap_prediction_float32():
+def _long_gap_float32_error(solver=None):
     """
-    Predictions across a long gap must regress towards the data on the far
-    side of the gap (RTS smoothing), not just carry the last filtered state
-    forward. Checked in float32, where the old smoothing gain failed
-    catastrophically, against a float64 dense GP.
+    Max error of float32 predictions across a long gap, against a float64
+    dense GP. Predictions there must regress towards the data on the far side
+    of the gap (RTS smoothing), not just carry the last filtered state forward;
+    the old smoothing gain failed this catastrophically in float32.
 
     Uses a sum of two IntegratedSHO kernels: the analytic SHO process noise is
     accurate over long gaps, and an all-integrated sum avoids the known
@@ -465,16 +467,37 @@ def test_long_gap_prediction_float32():
     mu_dense = np.asarray(K_star @ jnp.linalg.solve(K + 0.04 * jnp.eye(N), y))
 
     # smolgp in float32
+    solver_kwargs = {} if solver is None else {"solver": solver}
     with jax.enable_x64(False):
         kernel, X, y, t_test = build()
-        gp = smolgp.GaussianProcess(kernel=kernel, X=X, noise=jnp.full(N, 0.04))
+        gp = smolgp.GaussianProcess(
+            kernel=kernel, X=X, noise=jnp.full(N, 0.04), **solver_kwargs
+        )
         _, condGP = gp.condition(y)
         mu = np.asarray(condGP.predict(t_test))
     assert mu.dtype == np.float32
 
-    err = np.abs(mu - mu_dense).max()
-    assert err < 0.02, f"float32 long-gap prediction off from dense GP by {err:.3g}"
-    print("    ...long-gap prediction (float32): matches dense GP")
+    return np.abs(mu - mu_dense).max()
+
+
+def test_long_gap_prediction_float32_serial():
+    """Long-gap float32 predictions with the serial IntegratedStateSpaceSolver."""
+    err = _long_gap_float32_error()
+    # Current error ~3.5e-4; the old smoothing gain gave ~0.16
+    assert err < 2e-3, f"float32 long-gap prediction off from dense GP by {err:.3g}"
+    print("    ...long-gap prediction (float32, serial): matches dense GP")
+
+
+def test_long_gap_prediction_float32_parallel():
+    """Same as test_long_gap_prediction_float32_serial, but for the parallel solver."""
+    err = _long_gap_float32_error(
+        solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
+    )
+    # Current error ~6.9e-3, looser than serial (float32 rounding in the
+    # associative scan; it matches serial in float64); the old smoothing gain
+    # gave ~0.16
+    assert err < 2e-2, f"float32 long-gap prediction off from dense GP by {err:.3g}"
+    print("    ...long-gap prediction (float32, parallel): matches dense GP")
 
 
 def _generic_tie_dataset(Ninst, tie_type, key):
@@ -650,6 +673,7 @@ if __name__ == "__main__":
     test_zero_length_transitions_parallel()
     test_smoothing_gain_singular_input()
     test_smoothing_gain_badly_scaled_input()
-    test_long_gap_prediction_float32()
+    test_long_gap_prediction_float32_serial()
+    test_long_gap_prediction_float32_parallel()
     test_smol_matches_tiny_all_tie_types()
     print("All integrated kernel tests passed.")
