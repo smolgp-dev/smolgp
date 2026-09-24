@@ -12,12 +12,12 @@ def count_min_instids(t: JAXArray, delta: JAXArray) -> int:
 
     This is the chromatic number of an interval graph, which equals its maximum
     clique. See https://en.wikipedia.org/wiki/Interval_graph.
-    
+
     Note for exposure windows,
     - :math:`b_i = a_j` is not an overlap and can use the same group id.
     - A zero-width window (``delta == 0``) strictly inside another window's
       span **must** conflict, since its readout would otherwise corrupt the
-      enclosing exposure's running integra. However, two *coincident* 
+      enclosing exposure's running integra. However, two *coincident*
       zero-width windows do not conflict with each other.
 
     So instead of a sweep, count for each window ``j`` the windows still open
@@ -64,12 +64,12 @@ def assign_instids(t: JAXArray, delta: JAXArray, num_insts: int) -> JAXArray:
     Unlike :func:`count_min_instids` this is fully jittable, provided
     ``num_insts`` is a static Python ``int``.
 
-    Since the count is already known, simply sweep the windows in order of start 
+    Since the count is already known, simply sweep the windows in order of start
     time and give each one *any* currently-free group. Optimal and vectorizes.
 
     Cost is :math:`O(M \log M)` for the sort plus :math:`O(M \cdot n)`, and beats
-    the :math:`O(M \log M)` for an eager heap because the heap's cost is Python 
-    interpreter overhead rather than its asymptotics, except only for very large 
+    the :math:`O(M \log M)` for an eager heap because the heap's cost is Python
+    interpreter overhead rather than its asymptotics, except only for very large
     ``M``, and the heap is not jittable.
 
     Args:
@@ -114,7 +114,7 @@ def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
     solved with the standard "reuse whichever group's window finished earliest,
     if it's  already finished" greedy sweep. Cost is :math:`O(M \log M)`.
 
-    For calls inside ``jit``, first call :func:`count_min_instids` once outside the 
+    For calls inside ``jit``, first call :func:`count_min_instids` once outside the
     trace and then call :func:`assign_instids` directly.
 
     Returns:
@@ -222,7 +222,7 @@ def transition_sequence(A, Q, t: JAXArray) -> tuple[JAXArray, JAXArray]:
     body even though the arithmetic is identical: both are matrix exponentials
     (or Van Loan blocks) of a fixed generator, so as a scan body they are a
     serial chain of small unfusable kernels, whereas vmapped they become one
-    batched kernel. The tradeoff is carrying two extra arrays of shape 
+    batched kernel. The tradeoff is carrying two extra arrays of shape
     ``(N, dim, dim)`` in memory, which is not a significant addition.
     """
     Deltas = jnp.concatenate([jnp.zeros((1,), t.dtype), jnp.diff(t)])
@@ -232,9 +232,9 @@ def transition_sequence(A, Q, t: JAXArray) -> tuple[JAXArray, JAXArray]:
 
 
 def kalman_gain(S: JAXArray, PHt: JAXArray) -> JAXArray:
-    r"""The Kalman gain 
-    
-    .. math:: 
+    r"""The Kalman gain
+
+    .. math::
         K_k = \mathbf{P}_k^- \mathbf{H}_k^T \mathbf{S}_k^{-1}.
 
     Args:
@@ -282,32 +282,43 @@ def smoothing_gain(P_pred_next: JAXArray, PAt: JAXArray) -> JAXArray:
     Checking ``Delta == 0`` only catches the first case, so we instead directly check for
     singularity in :math:`\mathbf{P}_{\mathrm{pred,next}}` itself.
 
-    The detection is via ``P_pred_next``'s (scale-normalized) log-determinant: dividing
-    by ``trace(P_pred_next) / n`` before taking ``slogdet`` makes the threshold
-    independent of the kernel's overall amplitude (a plain absolute threshold on the raw
-    determinant would not be, since determinant scales as amplitude\ :sup:`n`). A
-    genuinely singular matrix here shows up many orders of magnitude below this
-    threshold; typically ``-inf`` to around ``-40``, whereas well-conditioned states
-    have around ``-2`` to ``-24``. The threshold set here is ``-30``.
+    The covariance is first Jacobi-equilibrated, :math:`\tilde{\mathbf{P}} = D^{-1}
+    \mathbf{P}_{k+1}^{-} D^{-1}` with :math:`D = \mathrm{diag}(\mathbf{P}_{k+1}^{-})^{1/2}`,
+    so that :math:`G_k = (\mathbf{P}_k \mathbf{A}_k^T D^{-1})\, \tilde{\mathbf{P}}^{-1} D^{-1}`.
+    Otherwise, the state variances can span many orders of magnitude: e.g.
+    across a long gap between exposures, the (not-yet-reset) integral state's variance
+    grows without bound while the latent states stay at their stationary level. Without
+    equilibration that matrix is flagged as singular and ``lstsq``'s relative cutoff
+    (``~eps * n * sigma_max``) discards every latent-state direction, silently dropping
+    the smoother's correction (catastrophically so in float32). Zero diagonals
+    (exact resets) are left unscaled.
+
+    The detection is via the equilibrated covariance's log-determinant, which is
+    independent of the kernel's overall amplitude and of the relative scales of the
+    states. A genuinely singular matrix here shows up many orders of magnitude below
+    the threshold (typically ``-inf`` to around ``-40``). The threshold set here is ``-30``.
 
     Both branches compute the correct smoothing gain by inverting the predicted covariance, but with different methods:
     - The common (non-singular) case uses :func:`jnp.linalg.solve` (LU-based, cheap), which assumes invertibility.
     - The degenerate case uses :func:`jnp.linalg.lstsq` (SVD-based), which is more expensive but handles singular matrices correctly.
     """
-    n = P_pred_next.shape[0]
-    scale = jnp.trace(P_pred_next) / n
-    sign, logdet = jnp.linalg.slogdet(P_pred_next)
-    logdet_normalized = logdet - n * jnp.log(scale)
-    is_singular = (sign <= 0) | (logdet_normalized < -30.0)
+    d = jnp.sqrt(jnp.diagonal(P_pred_next))
+    d = jnp.where(d > 0, d, 1.0)
+    P_eq = P_pred_next / (d[:, None] * d[None, :])
+    PAt_eq = PAt / d[None, :]
+
+    sign, logdet = jnp.linalg.slogdet(P_eq)
+    is_singular = (sign <= 0) | (logdet < -30.0)
 
     def solve_generic(_):
-        return jnp.linalg.solve(P_pred_next.T, PAt.T).T
+        return jnp.linalg.solve(P_eq.T, PAt_eq.T).T
 
     def solve_degenerate(_):
-        Y, *_ = jnp.linalg.lstsq(P_pred_next.T, PAt.T)
+        Y, *_ = jnp.linalg.lstsq(P_eq.T, PAt_eq.T)
         return Y.T
 
-    return jax.lax.cond(is_singular, solve_degenerate, solve_generic, operand=None)
+    G_eq = jax.lax.cond(is_singular, solve_degenerate, solve_generic, operand=None)
+    return G_eq / d[None, :]
 
 
 def VanLoan(
