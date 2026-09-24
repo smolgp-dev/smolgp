@@ -2,6 +2,7 @@ import warnings
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import tinygp
 
 import smolgp
@@ -207,6 +208,32 @@ def test_instid_validation():
             print(f"    ...instid validation: correctly rejected {name}")
 
 
+def test_integrated_in_product_raises():
+    """
+    An integrated kernel anywhere inside a Product (directly, or nested in a
+    Scale/Sum) should raise a clear TypeError; scalar scaling stays allowed.
+    """
+    iexp = smolgp.kernels.IntegratedExp(scale=1.0)
+    exp = smolgp.kernels.Exp(scale=1.0)
+    bad_cases = {
+        "integrated * instantaneous": lambda: iexp * exp,
+        "instantaneous * integrated": lambda: exp * iexp,
+        "integrated * integrated": lambda: iexp * iexp,
+        "Scale-wrapped integrated": lambda: (2.0 * iexp) * exp,
+        "integrated inside a Sum": lambda: (iexp + exp) * exp,
+    }
+    for name, build in bad_cases.items():
+        try:
+            build()
+            raise AssertionError(f"Expected TypeError for {name}, but none was raised")
+        except TypeError:
+            print(f"    ...Product validation: correctly rejected {name}")
+
+    # Scalar multiplication is a Scale, not a Product, so it is still fine
+    assert isinstance(2.0 * iexp, smolgp.kernels.base.Scale)
+    print("    ...Product validation: scalar * integrated still allowed")
+
+
 def test_num_insts_preserved_on_subset_predict():
     """
     Predicting at test points that only cover a subset of instruments must
@@ -359,6 +386,95 @@ def test_smoothing_gain_singular_input():
     print(
         "    ...get_smoothing_gain: correctly falls back to lstsq on a singular P_pred_next"
     )
+
+
+def test_smoothing_gain_badly_scaled_input():
+    """
+    smoothing_gain must stay accurate when the state variances span many
+    orders of magnitude, even though the covariance itself is well-conditioned
+    once rescaled. This is the situation across a long gap between exposures,
+    where the (not-yet-reset) integral state's variance grows without bound
+    while the latent states stay at their stationary level.
+
+    Regression test: a raw-matrix singularity check sent this to lstsq,
+    whose relative cutoff discarded every direction except the largest,
+    so the gain lost all of its latent-state columns.
+    """
+    from smolgp.helpers import smoothing_gain
+
+    rng = np.random.default_rng(0)
+    n = 6
+    B = rng.normal(size=(n, n))
+    C = B @ B.T + n * np.eye(n)
+    C = C / np.outer(np.sqrt(np.diag(C)), np.sqrt(np.diag(C)))  # correlation matrix
+    s = np.array([1e9, 1.0, 1e-3, 1.0, 1e-2, 1.0])  # std devs spanning 12 decades
+    P = np.outer(s, s) * C  # cond(P) ~ 1e24, but cond(C) ~ 2
+    PAt = rng.normal(size=(n, n)) * s[None, :]
+
+    # Exact reference via the well-conditioned C: P^-1 = D^-1 C^-1 D^-1
+    G_exact = PAt @ (np.linalg.inv(C) / np.outer(s, s))
+    G = np.asarray(smoothing_gain(jnp.array(P), jnp.array(PAt)))
+
+    relerr = np.abs(G - G_exact).max() / np.abs(G_exact).max()
+    assert relerr < 1e-10, f"smoothing gain inaccurate on badly scaled input: {relerr:.2e}"
+    print("    ...smoothing_gain: accurate on a badly scaled P_pred_next")
+
+
+def test_long_gap_prediction_float32():
+    """
+    Predictions across a long gap must regress towards the data on the far
+    side of the gap (RTS smoothing), not just carry the last filtered state
+    forward. Checked in float32, where the old smoothing gain failed
+    catastrophically, against a float64 dense GP.
+
+    Uses a sum of two IntegratedSHO kernels: the analytic SHO process noise is
+    accurate over long gaps, and an all-integrated sum avoids the known
+    exposure-end readout of instantaneous components (see the Sum docstring),
+    so the dense comparison isolates the smoother.
+    """
+    day = 86400.0
+
+    def build():
+        kernel = smolgp.kernels.IntegratedSHO(
+            omega=0.02, quality=7.6, sigma=0.6, name="fast"
+        ) + smolgp.kernels.IntegratedSHO(
+            omega=2 * jnp.pi / (20 * day), quality=1.0, sigma=1.5, name="slow"
+        )
+        night = jnp.arange(100) * 80.0
+        t = jnp.concatenate([night, 4 * day + night])  # 4-day gap between nights
+        X = (t, jnp.full_like(t, 55.0), jnp.zeros_like(t, dtype=int))
+        y = 1.5 * jnp.sin(2 * jnp.pi * t / (20 * day) + 1.0) + 0.3 * jnp.sin(0.02 * t)
+        t_test = jnp.linspace(night[-1] + 600, 4 * day - 600, 40)  # inside the gap
+        return kernel, X, y, t_test
+
+    # Dense reference in float64
+    kernel, X, y, t_test = build()
+    t, delta, _ = X
+    N, M = len(t), len(t_test)
+    zeros = jnp.zeros_like(t_test)
+    K = jax.vmap(
+        lambda i: jax.vmap(
+            lambda j: kernel.evaluate((t[i], delta[i], 0), (t[j], delta[j], 0))
+        )(jnp.arange(N))
+    )(jnp.arange(N))
+    K_star = jax.vmap(
+        lambda i: jax.vmap(
+            lambda j: kernel.evaluate((t_test[i], zeros[i], 0), (t[j], delta[j], 0))
+        )(jnp.arange(N))
+    )(jnp.arange(M))
+    mu_dense = np.asarray(K_star @ jnp.linalg.solve(K + 0.04 * jnp.eye(N), y))
+
+    # smolgp in float32
+    with jax.enable_x64(False):
+        kernel, X, y, t_test = build()
+        gp = smolgp.GaussianProcess(kernel=kernel, X=X, noise=jnp.full(N, 0.04))
+        _, condGP = gp.condition(y)
+        mu = np.asarray(condGP.predict(t_test))
+    assert mu.dtype == np.float32
+
+    err = np.abs(mu - mu_dense).max()
+    assert err < 0.02, f"float32 long-gap prediction off from dense GP by {err:.3g}"
+    print("    ...long-gap prediction (float32): matches dense GP")
 
 
 def _generic_tie_dataset(Ninst, tie_type, key):
@@ -528,9 +644,12 @@ if __name__ == "__main__":
     test_num_insts_mismatch_reinit()
     test_num_insts_wrapped_kernel()
     test_instid_validation()
+    test_integrated_in_product_raises()
     test_num_insts_preserved_on_subset_predict()
     test_zero_length_transitions_serial()
     test_zero_length_transitions_parallel()
     test_smoothing_gain_singular_input()
+    test_smoothing_gain_badly_scaled_input()
+    test_long_gap_prediction_float32()
     test_smol_matches_tiny_all_tie_types()
     print("All integrated kernel tests passed.")
