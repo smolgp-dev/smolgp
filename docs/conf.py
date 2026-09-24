@@ -67,11 +67,11 @@ html_theme_options = {
     "path_to_docs": "docs",
     "repository_url": "https://github.com/smolgp-dev/smolgp/",
     "repository_branch": "main",
-    # "launch_buttons": {
+    "launch_buttons": {
     #     "binderhub_url": "https://mybinder.org",
     #     "notebook_interface": "jupyterlab",
-    #     "colab_url": "https://colab.research.google.com/",
-    # },
+        "colab_url": "https://colab.research.google.com/",
+    },
     "use_edit_page_button": True,
     "use_issues_button": True,
     "use_repository_button": True,
