@@ -35,3 +35,22 @@ try:
     __version__ = _version("smolgp")
 except _PackageNotFoundError:
     __version__ = "unknown"
+
+
+def enable_x64(use_x64: bool = True) -> None:
+    """Enable (or disable) 64-bit precision in JAX.
+
+    State space GPs can lose accuracy in 32-bit precision, especially with
+    integrated kernels or long gaps between observations, so 64-bit is
+    recommended. This is a shorthand for
+    ``jax.config.update("jax_enable_x64", use_x64)``. It is process-wide, so
+    it also affects any other JAX code, and should be called before creating
+    any arrays.
+
+    Args:
+        use_x64: If ``True`` (default), use 64-bit precision; if ``False``,
+            revert to JAX's default 32-bit precision.
+    """
+    import jax
+
+    jax.config.update("jax_enable_x64", use_x64)

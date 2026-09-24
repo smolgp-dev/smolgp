@@ -385,6 +385,19 @@ class GaussianProcess(eqx.Module):
         use_unique_names: bool = True,
         **solver_kwargs: Any,
     ):
+        # Checked here rather than at import, since x64 is usually enabled
+        # after `import smolgp`. canonicalize_dtype respects jax.enable_x64().
+        # Skipped for the conditioned GP that condition() builds internally.
+        if states is None and jax.dtypes.canonicalize_dtype(jnp.float64) != jnp.float64:
+            warnings.warn(
+                "JAX is running in 32-bit precision (jax_enable_x64 is off). "
+                "State space GPs, especially with integrated kernels or long gaps "
+                "between observations, can have severe accuracy issues in float32. "
+                "Enable 64-bit precision with `smolgp.enable_x64()` (equivalent to "
+                "`jax.config.update('jax_enable_x64', True)`).",
+                stacklevel=2,
+            )
+
         # First, assign unique kernel names if needed
         if use_unique_names:
             self.kernel = assign_unique_kernel_names(kernel)
@@ -652,14 +665,14 @@ class GaussianProcess(eqx.Module):
         return jax.vmap(project)(H, C_data)
 
     def log_probability(self, y: JAXArray) -> JAXArray:
-        """Compute the log probability of this Gaussian Process, given the 
+        """Compute the log probability of this Gaussian Process, given the
         observed data ``y``.
 
         Args:
             y (JAXArray): The observed data. This should have the shape
                 ``(N_data, D)``, where ``N_data`` is the number of data
                 coordinates in ``X`` and ``D`` is the observation dimension.
-                
+
         Returns:
             The marginal log probability of the GP, evaluated at ``y``.
         """
