@@ -556,9 +556,11 @@ class Scale(Wrapper):
     def stationary_covariance(self) -> JAXArray:
         return self.scale * self.kernel.stationary_covariance()
 
-    # TODO: also scale Qc?
     def noise(self) -> JAXArray:
         return self.scale * self.kernel.noise()
+
+    def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        return self.scale * self.kernel.process_noise(X1, X2)
 
     def evaluate(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         r""":math:`k_{\mathrm{scale}}(X_1, X_2) = c \cdot k(X_1, X_2)` -- delegates

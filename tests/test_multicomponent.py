@@ -168,6 +168,37 @@ def test_multicomponent():
     # # kernel = assign_unique_kernel_names(kernel) # TODO: add this check if it isn't covered naturally by other tests
 
 
+def test_scaled_kernel_matches_dense():
+    """
+    A scalar times a kernel (a Scale wrapper) must match the dense scaled
+    kernel. Regression test: Scale scaled Pinf but not the process noise, which
+    the wrapped kernel computes from its own parameters, so c * kernel had an
+    inconsistent state space model (log-likelihood off by ~5-10 here).
+    """
+    t = jnp.linspace(0, 100, 60)
+    y = jnp.sin(t / 7.0)
+    noise = jnp.full(t.shape, 0.01)
+    pairs = {
+        "SHO": (
+            smolgp.kernels.SHO(omega=0.2, quality=2.0),
+            tinygp.kernels.quasisep.SHO(omega=0.2, quality=2.0),
+        ),
+        "Matern32": (
+            smolgp.kernels.Matern32(scale=5.0),
+            tinygp.kernels.quasisep.Matern32(scale=5.0),
+        ),
+    }
+    for name, (k_smol, k_tiny) in pairs.items():
+        gp_smol = smolgp.GaussianProcess(kernel=1.5 * k_smol, X=t, noise=noise)
+        llh_dense = jax.scipy.stats.multivariate_normal.logpdf(
+            y, jnp.zeros_like(t), 1.5 * k_tiny(t, t) + jnp.diag(noise)
+        )
+        diff = float(jnp.abs(gp_smol.log_probability(y) - llh_dense))
+        assert diff < 1e-9, f"1.5 * {name}: likelihood off from dense by {diff:.3e}"
+    print("    ...scaled kernels: match dense GP")
+
+
 if __name__ == "__main__":
     test_multicomponent()
+    test_scaled_kernel_matches_dense()
     print("All multicomponent kernel tests passed.")
