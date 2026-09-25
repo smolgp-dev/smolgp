@@ -65,7 +65,8 @@ def integrated_kalman_filter(
     """
 
     H = jax.vmap(H_aug)(X)
-    A_all, Q_all = transition_sequence(A_aug, Q_aug, t_states)
+    # map_noise: see transition_sequence; IntegratedSHO's Q switches per step
+    A_all, Q_all = transition_sequence(A_aug, Q_aug, t_states, map_noise=True)
 
     @jax.jit
     def step(carry, data):

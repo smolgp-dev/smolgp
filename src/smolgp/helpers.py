@@ -192,6 +192,56 @@ def Phibar_from_VanLoan(F: JAXArray, dt: JAXArray) -> JAXArray:
     return G3
 
 
+def _rescale(F, QL, T, rate):
+    """F and L Qc L^T in rescaled units x = T x_tilde, tau = rate * t."""
+    Fs = F * (T[None, :] / T[:, None]) / rate
+    QLs = QL / (T[:, None] * T[None, :]) / rate
+    return Fs, QLs
+
+
+def _unscale(Qs, Phibar_s, T, rate):
+    """Transform Q and Phibar computed in rescaled units back."""
+    Q = Qs * (T[:, None] * T[None, :])
+    Phibar = Phibar_s * (T[:, None] / T[None, :]) / rate
+    return Q, Phibar
+
+
+def scaled_VanLoan(
+    F: JAXArray, QL: JAXArray, dt: JAXArray, T: JAXArray, rate: JAXArray
+) -> tuple[JAXArray, JAXArray]:
+    r"""The process noise and integrated transition matrix via Van Loan, evaluated
+    in rescaled units for a badly scaled :math:`F`.
+
+    With a slow process in fast time units (e.g. a 28-day SHO in seconds),
+    :math:`F` mixes entries of order 1 and :math:`\omega^2`, so a direct Van Loan
+    evaluation loses accuracy and overflows once :math:`\Delta t` is large in
+    absolute terms, even when :math:`\omega \Delta t` is small. Instead, change
+    variables to :math:`x = T \tilde{x}` and :math:`\tau = \mathrm{rate} \cdot t`,
+    where :math:`\tilde{F} = T^{-1} F T / \mathrm{rate}` is of order one, then
+    transform back:
+
+    .. math::
+
+        Q = T\, \tilde{Q}(\mathrm{rate}\,\Delta t)\, T^T, \qquad
+        \bar{\Phi} = T\, \tilde{\bar{\Phi}}(\mathrm{rate}\,\Delta t)\, T^{-1} / \mathrm{rate}.
+
+    Args:
+        F: Feedback (design) matrix :math:`F`.
+        QL: The noise covariance :math:`L Q_c L^T`.
+        dt: Time step :math:`\Delta t`.
+        T: Diagonal state scaling, as a vector.
+        rate: Time scaling, e.g. the kernel's fastest rate.
+
+    Returns:
+        ``(Q, Phibar)`` over time step :math:`\Delta t`.
+    """
+    Fs, QLs = _rescale(F, QL, T, rate)
+    I = jnp.eye(F.shape[0])
+    Qs = Q_from_VanLoan(Fs, I, QLs, rate * dt)
+    Phibar_s = Phibar_from_VanLoan(Fs, rate * dt)
+    return _unscale(Qs, Phibar_s, T, rate)
+
+
 def robust_sqrt(M: JAXArray) -> JAXArray:
     r"""Symmetric-PSD matrix square root via eigendecomposition.
 
@@ -210,7 +260,9 @@ def robust_sqrt(M: JAXArray) -> JAXArray:
     return V * jnp.sqrt(jnp.clip(w, min=0.0))[None, :]
 
 
-def transition_sequence(A, Q, t: JAXArray) -> tuple[JAXArray, JAXArray]:
+def transition_sequence(
+    A, Q, t: JAXArray, map_noise: bool = False
+) -> tuple[JAXArray, JAXArray]:
     r"""Per-step transition matrices and process noise, for precomputing.
 
     Returns ``A(0, Delta_k)`` and ``Q(0, Delta_k)`` for every step ``k``, with
@@ -224,10 +276,19 @@ def transition_sequence(A, Q, t: JAXArray) -> tuple[JAXArray, JAXArray]:
     serial chain of small unfusable kernels, whereas vmapped they become one
     batched kernel. The tradeoff is carrying two extra arrays of shape
     ``(N, dim, dim)`` in memory, which is not a significant addition.
+
+    ``map_noise=True`` builds ``Q`` with :func:`jax.lax.map` instead, for process
+    noise that switches between an analytic and a numerical form per step (e.g.
+    :class:`~smolgp.kernels.IntegratedSHO` for short steps). Under ``vmap`` such a
+    ``lax.cond`` evaluates both branches for every step; ``lax.map`` runs only
+    the one taken, which is much cheaper when the numerical branch is rare.
     """
     Deltas = jnp.concatenate([jnp.zeros((1,), t.dtype), jnp.diff(t)])
     A_all = jax.vmap(lambda d: A(0, d))(Deltas)
-    Q_all = jax.vmap(lambda d: Q(0, d))(Deltas)
+    if map_noise:
+        Q_all = jax.lax.map(lambda d: Q(0, d), Deltas)
+    else:
+        Q_all = jax.vmap(lambda d: Q(0, d))(Deltas)
     return A_all, Q_all
 
 

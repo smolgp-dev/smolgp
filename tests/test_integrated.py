@@ -10,9 +10,10 @@ from tests.test_kernels import (
     condition,
     kernel_function,
     likelihood,
+    offset,
     predict,
 )
-from tests.utils import generate_integrated_data
+from tests.utils import allclose, generate_integrated_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -422,103 +423,166 @@ def test_smoothing_gain_badly_scaled_input():
     print("    ...smoothing_gain: accurate on a badly scaled P_pred_next")
 
 
-def _long_gap_float32_error(solver=None):
+def test_integrated_sho_process_noise_short_steps():
     """
-    Max error of float32 predictions across a long gap, against a float64
-    dense GP. Predictions there must regress towards the data on the far side
-    of the gap (RTS smoothing), not just carry the last filtered state forward;
-    the old smoothing gain failed this catastrophically in float32.
+    IntegratedSHO's analytic process noise must match the Van Loan result for
+    all omega*dt. Regression test: the closed form loses precision like
+    eps / (omega*dt)^4 and returned exactly 0 for the integral-state variance
+    of slow kernels over short steps (e.g. a rotation-like SHO over one
+    exposure), which an absolute 1e-14 clip then made permanent.
+    """
+    from smolgp.kernels.integrated import IntegratedStateSpaceModel
 
-    Uses a sum of two IntegratedSHO kernels: the analytic SHO process noise is
-    accurate over long gaps, and an all-integrated sum avoids the known
-    exposure-end readout of instantaneous components (see the Sum docstring),
-    so the dense comparison isolates the smoother.
+    for quality in [0.3, 0.5, 0.6, 1 / jnp.sqrt(2.0), 1.0, 7.63]:
+        kernel = smolgp.kernels.IntegratedSHO(omega=1.0, quality=quality, sigma=1.0)
+        wdts = [1e-4, 1e-3, 1e-2, 0.1, 0.999, 1.001, 3.0]
+        if quality > 0.5:
+            # Critically/overdamped kernels have no closed form, so every step
+            # uses Van Loan, which overflows over long steps (the reference
+            # here too); see PR #7
+            wdts.append(30.0)
+        for wdt in wdts:
+            Q = np.asarray(kernel.process_noise(0.0, wdt))
+            Q_ref = np.asarray(
+                IntegratedStateSpaceModel.process_noise(
+                    kernel, 0.0, wdt, force_numerical=True
+                )
+            )
+            relerr = np.abs(Q - Q_ref).max() / np.abs(Q_ref).max()
+            assert relerr < 1e-12, f"Q={quality}, w*dt={wdt}: rel err {relerr:.1e}"
+            assert Q[-1, -1] > 0, f"Q={quality}, w*dt={wdt}: Q_zz={Q[-1, -1]}"
+
+    # A slow kernel in seconds, where plain Van Loan is badly scaled: it used
+    # to return NaN over multi-day steps, and the closed form 0 over one exposure
+    day = 86400.0
+    kernel = smolgp.kernels.IntegratedSHO(omega=2 * jnp.pi / (28 * day), quality=1.0)
+    for dt in [55.0, 3600.0, 0.99 * 28 * day / (2 * jnp.pi), 4 * day, 20 * day]:
+        Q = np.asarray(kernel.process_noise(0.0, dt))
+        A = np.asarray(kernel.transition_matrix(0.0, dt))
+        assert np.all(np.isfinite(Q)) and np.all(np.isfinite(A)), f"dt={dt}: non-finite"
+        assert Q[-1, -1] > 0, f"dt={dt}: Q_zz={Q[-1, -1]}"
+    print("    ...IntegratedSHO process noise: matches Van Loan for all omega*dt")
+
+
+def test_slow_sho_process_noise_stationary():
+    """
+    The SHO process noise must satisfy the exact stationarity identity
+    A Pinf A^T + Q = Pinf for all omega*dt, including slow kernels in fast
+    time units. Regression test: the closed form lost all precision for
+    short steps (omega*dt << 1), and an absolute 1e-14 clip zeroed it.
     """
     day = 86400.0
+    for quality in [0.3, 0.5, 1 / jnp.sqrt(2.0), 1.0, 7.63]:
+        for omega in [1.0, 2 * jnp.pi / (28 * day)]:
+            kernel = smolgp.kernels.SHO(omega=omega, quality=quality, sigma=1.4)
+            Pinf = np.asarray(kernel.stationary_covariance())
+            for wdt in [1e-4, 1e-2, 0.99, 1.01, 30.0]:
+                dt = wdt / omega
+                A = np.asarray(kernel.transition_matrix(0.0, dt))
+                Q = np.asarray(kernel.process_noise(0.0, dt))
+                # Normalize entrywise, since Pinf mixes scales (1 and omega^2)
+                scale = np.sqrt(np.outer(np.diag(Pinf), np.diag(Pinf)))
+                resid = np.abs(A @ Pinf @ A.T + Q - Pinf) / scale
+                assert resid.max() < 1e-10, (
+                    f"Q={quality}, omega={omega:.2g}, w*dt={wdt}: resid {resid.max():.1e}"
+                )
+                assert np.all(np.diag(Q) >= 0), f"negative variance: {np.diag(Q)}"
+    print("    ...SHO process noise: stationary for all omega*dt")
 
-    def build():
-        kernel = smolgp.kernels.IntegratedSHO(
-            omega=0.02, quality=7.6, sigma=0.6, name="fast"
-        ) + smolgp.kernels.IntegratedSHO(
-            omega=2 * jnp.pi / (20 * day), quality=1.0, sigma=1.5, name="slow"
-        )
-        night = jnp.arange(100) * 80.0
-        t = jnp.concatenate([night, 4 * day + night])  # 4-day gap between nights
-        X = (t, jnp.full_like(t, 55.0), jnp.zeros_like(t, dtype=int))
-        y = 1.5 * jnp.sin(2 * jnp.pi * t / (20 * day) + 1.0) + 0.3 * jnp.sin(0.02 * t)
-        t_test = jnp.linspace(night[-1] + 600, 4 * day - 600, 40)  # inside the gap
-        return kernel, X, y, t_test
 
-    # Dense reference in float64
-    kernel, X, y, t_test = build()
-    t, delta, _ = X
-    N, M = len(t), len(t_test)
-    zeros = jnp.zeros_like(t_test)
-    K = jax.vmap(
-        lambda i: jax.vmap(
-            lambda j: kernel.evaluate((t[i], delta[i], 0), (t[j], delta[j], 0))
-        )(jnp.arange(N))
-    )(jnp.arange(N))
-    K_star = jax.vmap(
-        lambda i: jax.vmap(
-            lambda j: kernel.evaluate((t_test[i], zeros[i], 0), (t[j], delta[j], 0))
-        )(jnp.arange(N))
-    )(jnp.arange(M))
-    mu_dense = np.asarray(K_star @ jnp.linalg.solve(K + 0.04 * jnp.eye(N), y))
+def test_slow_sho_likelihood_matches_dense():
+    """
+    A slow (28-day) SHO sampled at exposure cadence, with multi-day gaps,
+    against tinygp's quasiseparable SHO evaluated densely. The closed-form
+    process noise made this off by ~0.05.
+    """
+    day = 86400.0
+    omega = 2 * jnp.pi / (28 * day)
+    nights = jnp.array([0.0, 1.0, 5.0, 6.0, 12.0]) * day
+    t = (nights[:, None] + jnp.arange(80) * 82.0).ravel()
+    y = jax.random.normal(jax.random.PRNGKey(3), t.shape)
+    noise = jnp.full_like(t, 0.3**2)
+    kernel_smol = smolgp.kernels.SHO(omega=omega, quality=1.0, sigma=1.4)
+    kernel_tiny = tinygp.kernels.quasisep.SHO(omega=omega, quality=1.0, sigma=1.4)
+    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=t, noise=noise)
+    llh_dense = jax.scipy.stats.multivariate_normal.logpdf(
+        y, jnp.zeros_like(t), kernel_tiny(t, t) + jnp.diag(noise)
+    )
+    allclose("likelihood", gp_smol.log_probability(y) - llh_dense, tol=1e-8, atol=1e-10)
+    print("    ...slow SHO likelihood: matches dense GP")
 
-    # smolgp in float32
+
+def _long_gap_gps(solver=None):
+    """
+    smolgp and dense (tinygp) GPs for simulated data with multi-day gaps.
+
+    Several nights of solar-like RV data (55 s exposures at 82 s cadence)
+    separated by gaps of 1 to 6 days, modeled with a sum of IntegratedSHO
+    kernels (oscillation, granulation, supergranulation). Across each gap the
+    not-yet-reset integral states' variances grow enormous next to the latent
+    states', which is the regime where the old smoothing gain lost the RTS
+    correction and predictions stalled across gaps instead of regressing
+    towards the data on the far side.
+    """
+    day = 86400.0
+    params = [  # (omega, quality, sigma)
+        (0.0195, 7.63, 0.59),
+        (2 * jnp.pi / (0.031 * day), 1 / jnp.sqrt(2.0), 0.33),
+        (2 * jnp.pi / (1.05 * day), 1 / jnp.sqrt(2.0), 0.75),
+        # No slow (e.g. 28-day rotation) term: the dense IntegratedSHOKernel
+        # reference loses ~1e-8 accuracy for slow kernels (its closed form
+        # cancels like the analytic process noise did), so it can't serve as
+        # a reference there. See test_slow_sho_* for those.
+    ]
+    smol, tiny = [], []
+    for w, Q, s in params:
+        smol.append(smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=s))
+        tiny.append(smolgp.kernels.dense.IntegratedSHOKernel(S=s**2 / (w * Q), w=w, Q=Q))
+    kernel_smol = smol[0] + smol[1] + smol[2]
+    kernel_tiny = tiny[0] + tiny[1] + tiny[2]
+
+    nights = jnp.array([0.0, 1.0, 5.0, 6.0, 12.0]) * day
+    t = (nights[:, None] + jnp.arange(80) * 82.0).ravel()
+    X = (t, jnp.full_like(t, 55.0), jnp.zeros_like(t, dtype=int))
+    noise = jnp.full_like(t, 0.3**2)
+
     solver_kwargs = {} if solver is None else {"solver": solver}
-    with jax.enable_x64(False), warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        kernel, X, y, t_test = build()
-        gp = smolgp.GaussianProcess(
-            kernel=kernel, X=X, noise=jnp.full(N, 0.04), **solver_kwargs
-        )
-        _, condGP = gp.condition(y)
-        mu = np.asarray(condGP.predict(t_test))
-    assert mu.dtype == np.float32
-    assert any("jax_enable_x64" in str(w.message) for w in caught), (
-        "Expected a warning about running with 64-bit precision disabled"
+    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X, noise=noise, **solver_kwargs)
+    gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X, diag=noise)
+    y = gp_tiny.sample(jax.random.PRNGKey(3))
+    return gp_smol, gp_tiny, y
+
+
+def _check_long_gap(solver=None):
+    gp_smol, gp_tiny, y = _long_gap_gps(solver)
+    likelihood(gp_smol, gp_tiny, y, tol=1e-7, atol=1e-10)
+    condition(gp_smol, gp_tiny, y, tol=1e-8, atol=1e-10)
+    # Instantaneous predictions at 1000 test points spanning the data, most
+    # of them inside the gaps. The old smoothing gain was off by ~0.1 here.
+    # Plain times rather than tests.test_kernels.predict's (t, 0, 0) tuples,
+    # which fail for Sum kernels in the integrated solvers (predict_exposure
+    # is traced even for zero exposure times and needs kernel.num_insts).
+    t_train = gp_smol.X[0]
+    t_test = jnp.linspace(t_train.min() - 3600.0, t_train.max() + 3600.0, 1000)
+    zeros = jnp.zeros_like(t_test)
+    mu_tiny, var_tiny = gp_tiny.predict(
+        y, (t_test, zeros, zeros.astype(int)), return_var=True
     )
-
-    # Report where any non-finite values come from, to diagnose failures
-    # that only show up on some platforms
-    assert np.all(np.isfinite(mu_dense)), "float64 dense reference is non-finite"
-    if not np.all(np.isfinite(mu)):
-        st = condGP.states
-        report = []
-        for name in ["predicted", "filtered", "smoothed"]:
-            for kind in ["mean", "cov"]:
-                arr = np.asarray(getattr(st, f"{name}_{kind}"))
-                bad = ~np.isfinite(arr.reshape(arr.shape[0], -1)).all(axis=1)
-                if bad.any():
-                    report.append(f"{name}_{kind}: first non-finite state {np.argmax(bad)}")
-        raise AssertionError(
-            f"{np.isnan(mu).sum()}/{mu.size} float32 predictions are non-finite; "
-            f"conditioned states: {report or 'all finite (NaN arises in predict)'}"
-        )
-
-    return np.abs(mu - mu_dense).max()
+    mu_smol, var_smol = gp_smol.predict(t_test, y, return_var=True)
+    allclose("predicted means", mu_tiny - mu_smol, tol=1e-8, atol=1e-10)
+    allclose("predicted variances", (var_tiny - offset) - var_smol, tol=1e-8, atol=1e-10)
 
 
-def test_long_gap_prediction_float32_serial():
-    """Long-gap float32 predictions with the serial IntegratedStateSpaceSolver."""
-    err = _long_gap_float32_error()
-    # Current error ~3.5e-4; the old smoothing gain gave ~0.16
-    assert err < 2e-3, f"float32 long-gap prediction off from dense GP by {err:.3g}"
-    print("    ...long-gap prediction (float32, serial): matches dense GP")
+def test_long_gap_matches_dense_serial():
+    """Simulated data with multi-day gaps, serial solver, against a dense GP."""
+    _check_long_gap()
+    print("    ...long gaps (serial): matches dense GP")
 
 
-def test_long_gap_prediction_float32_parallel():
-    """Same as test_long_gap_prediction_float32_serial, but for the parallel solver."""
-    err = _long_gap_float32_error(
-        solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver
-    )
-    # Current error ~6.9e-3, looser than serial (float32 rounding in the
-    # associative scan; it matches serial in float64); the old smoothing gain
-    # gave ~0.16
-    assert err < 2e-2, f"float32 long-gap prediction off from dense GP by {err:.3g}"
-    print("    ...long-gap prediction (float32, parallel): matches dense GP")
+def test_long_gap_matches_dense_parallel():
+    """Same as test_long_gap_matches_dense_serial, but for the parallel solver."""
+    _check_long_gap(solver=smolgp.solvers.ParallelIntegratedStateSpaceSolver)
+    print("    ...long gaps (parallel): matches dense GP")
 
 
 def _generic_tie_dataset(Ninst, tie_type, key):
@@ -694,7 +758,10 @@ if __name__ == "__main__":
     test_zero_length_transitions_parallel()
     test_smoothing_gain_singular_input()
     test_smoothing_gain_badly_scaled_input()
-    test_long_gap_prediction_float32_serial()
-    test_long_gap_prediction_float32_parallel()
+    test_integrated_sho_process_noise_short_steps()
+    test_slow_sho_process_noise_stationary()
+    test_slow_sho_likelihood_matches_dense()
+    test_long_gap_matches_dense_serial()
+    test_long_gap_matches_dense_parallel()
     test_smol_matches_tiny_all_tie_types()
     print("All integrated kernel tests passed.")

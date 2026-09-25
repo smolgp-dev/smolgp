@@ -446,6 +446,29 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
 
+    def _numerical(self, dt: JAXArray) -> tuple[JAXArray, JAXArray]:
+        """The augmented ``[x; z]`` process noise and the base Phibar, computed
+        numerically in time units of the process's fastest rate.
+
+        Rescaling keeps these accurate, and free of overflow, for slow kernels,
+        where ``F`` in the caller's time units is badly scaled.
+        """
+        d = self.d
+        F = self.base_model.design_matrix()
+        L = self.base_model.noise_effect_matrix()
+        Qc = self.base_model.noise()
+        Faug = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(F).at[d, 0].set(1.0)
+        QL = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(L @ Qc @ L.T)
+        rate = self._rate
+        T = jnp.array([1.0, rate, 1.0 / rate])  # state [x, dx/dt, z = int x dt]
+        Qaug, Phibar_aug = smolgp.helpers.scaled_VanLoan(Faug, QL, dt, T, rate)
+        return Qaug, Phibar_aug[:d, :d]
+
+    @property
+    def _rate(self) -> JAXArray:
+        """The fastest rate of the process, for rescaling time"""
+        return self.omega * jnp.maximum(1.0, 1.0 / self.quality)
+
     def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The integrated transition matrix Phibar for the SHO process"""
 
@@ -460,10 +483,8 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         B = 1 / (n * w)  # = 1/b
         C = -w / n
 
-        def critical(t1: JAXArray, t2: JAXArray) -> JAXArray:
-            ## TODO: returning numerical result until we do this integral by hand
-            F = self.base_model.design_matrix()
-            return Phibar_from_VanLoan(F, t2 - t1)
+        def numerical(t1: JAXArray, t2: JAXArray) -> JAXArray:
+            return self._numerical(t2 - t1)[1]
 
         def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
             ## General integral from t1->t2:
@@ -496,19 +517,14 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             Phibar22 = exp * (Ic - A * Is) - (a + A * b)
             return jnp.array([[Phibar11, Phibar12], [Phibar21, Phibar22]]) / a2plusb2
 
-        def overdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
-            ## TODO: returning numerical result until we do this integral by hand
-            F = self.base_model.design_matrix()
-            return Phibar_from_VanLoan(F, t2 - t1)
-
         # Return the appropriate form based on quality factor
         t1 = self.coord_to_sortable(X1)
         t2 = self.coord_to_sortable(X2)
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),
-            critical,
-            lambda t1, t2: jax.lax.cond(q > 0.5, underdamped, overdamped, t1, t2),
+            numerical,  # critical damping; TODO: derive analytically
+            lambda t1, t2: jax.lax.cond(q > 0.5, underdamped, numerical, t1, t2),
             t1,
             t2,
         )
@@ -525,10 +541,6 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         b = n * w
         sigma2 = jnp.square(self.sigma)
         A = 1 / (2 * n * q)
-
-        def critical(dt: JAXArray) -> JAXArray:
-            # TODO: returning numerical result until we do this integral by hand
-            return super(type(self), self).integrated_process_noise(0, dt)
 
         def underdamped(dt: JAXArray) -> JAXArray:
             x = a * dt
@@ -554,24 +566,30 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             part3_2 = exp2 * ((1 - 3 * A2) / A * sin2 - 3 * cos2)
             part3 = part3_1 + part3_2
             iQ22 = 1 / (4 * q2 * w2) * (part1 + part2 + part3)
-            iQ22 = jnp.maximum(iQ22, 0.0)  # prevent underflows at dt=0
 
             Qaug12 = sigma2 * jnp.array([[iQ12_1], [iQ12_2]])
             Qaug22 = sigma2 * jnp.array([[iQ22]])
-            # Prevent underflows
-            Qaug12 = jnp.where(jnp.abs(Qaug12) < 1e-14, jnp.zeros_like(Qaug12), Qaug12)
-            Qaug22 = jnp.where(jnp.abs(Qaug22) < 1e-14, jnp.zeros_like(Qaug22), Qaug22)
             Qaug21 = Qaug12.T
             return Qaug12, Qaug21, Qaug22
 
-        def overdamped(dt: JAXArray) -> JAXArray:
-            ## TODO: returning numerical result until we do this integral by hand
-            return super(type(self), self).integrated_process_noise(0, dt)
+        def numerical(dt: JAXArray) -> JAXArray:
+            Qaug, _ = self._numerical(dt)
+            d = self.d
+            Qaug12 = Qaug[:d, d:]
+            return Qaug12, Qaug12.T, Qaug[d:, d:]
+
+        def underdamped_or_short(dt: JAXArray) -> JAXArray:
+            # The closed form for Qaug22 subtracts O(1) terms that must cancel
+            # to O((w*dt)^4), so its relative error grows like eps / (w*dt)^4:
+            # ~1e-8 at rate*dt = 0.05, but useless below ~1e-3 (e.g. a slow,
+            # rotation-like SHO over one exposure). Van Loan in rescaled units
+            # is accurate for short steps.
+            return jax.lax.cond(self._rate * jnp.abs(dt) < 0.05, numerical, underdamped, dt)
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),
-            critical,
-            lambda dt: jax.lax.cond(q > 0.5, underdamped, overdamped, dt),
+            numerical,  # critical damping; TODO: derive analytically
+            lambda dt: jax.lax.cond(q > 0.5, underdamped_or_short, numerical, dt),
             dt,
         )
 
