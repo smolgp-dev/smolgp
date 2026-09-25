@@ -355,6 +355,12 @@ class IntegratedStateSpaceSolver(Solver):
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)
-        (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
+        if delta_test is not None and y is not None:
+            # Exposure predictions carry an extended state through a loop, and
+            # vmapping all test points at once scales superlinearly (~6x slower
+            # per point at M ~ 3000 on CPU), so process them in chunks.
+            (pred_mean, pred_var) = jax.lax.map(predict_point, ktests, batch_size=256)
+        else:
+            (pred_mean, pred_var) = jax.vmap(predict_point)(ktests)
 
         return pred_mean, pred_var

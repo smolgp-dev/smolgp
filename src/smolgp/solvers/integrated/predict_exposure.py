@@ -4,8 +4,51 @@ import dataclasses
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from smolgp.helpers import smoothing_gain
+from smolgp.kernels.base import Sum, Wrapper, extract_all_components
+from smolgp.kernels.integrated import IntegratedStateSpaceModel
+
+
+def _extend_kernel(kernel):
+    """Add one virtual instrument slot to every integrated leaf of ``kernel``.
+
+    Returns ``(kernel_ext, E, zslots)``:
+
+    - ``kernel_ext``: the kernel with ``num_insts + 1`` on every integrated leaf.
+    - ``E``: the ``(n_ext, n)`` 0/1 embedding of the base state into the
+      extended state, so ``m_ext = E @ m``. Its columns are orthonormal.
+    - ``zslots``: for each integrated leaf, ``(z0, virtual)``: the base-state
+      index of that leaf's first integral state, and the extended-state index
+      of its virtual (test exposure) integral state.
+    """
+    if isinstance(kernel, Sum):
+        k1, E1, z1 = _extend_kernel(kernel.kernel1)
+        k2, E2, z2 = _extend_kernel(kernel.kernel2)
+        n1, n1_ext = E1.shape[1], E1.shape[0]
+        E = np.zeros((E1.shape[0] + E2.shape[0], E1.shape[1] + E2.shape[1]))
+        E[:n1_ext, :n1] = E1
+        E[n1_ext:, n1:] = E2
+        z2 = [(z0 + n1, v + n1_ext) for z0, v in z2]
+        return Sum(k1, k2), E, z1 + z2
+    if isinstance(kernel, Wrapper):
+        inner, E, zslots = _extend_kernel(kernel.kernel)
+        if not zslots:
+            return kernel, E, zslots
+        updated = dataclasses.replace(kernel, kernel=inner)
+        if updated.kernel is not inner:
+            raise NotImplementedError(
+                f"Cannot add an exposure slot inside a {type(kernel).__name__} wrapper"
+            )
+        return updated, E, zslots
+    if isinstance(kernel, IntegratedStateSpaceModel):
+        n = kernel.dimension
+        E = np.eye(n + 1, n)  # virtual slot is the new last state
+        kernel_ext = dataclasses.replace(kernel, num_insts=kernel.num_insts + 1)
+        return kernel_ext, E, [(kernel.d, n)]
+    # Instantaneous leaves (and Products, which cannot contain integrated kernels)
+    return kernel, np.eye(kernel.dimension), []
 
 
 def predict_exposure(
@@ -26,9 +69,17 @@ def predict_exposure(
     Returns the raw, unprojected augmented state (mean of shape ``(n,)`` and
     covariance of shape ``(n, n)``, where ``n = kernel.dimension``), matching
     the signature of :meth:`IntegratedStateSpaceSolver.predict` for
-    instantaneous queries. That is, the returned result has the test point's
-    exposure-integrated mean/variance staged at state index ``kernel.d + instid_star``.
-    The ``kernel.observation_model`` is applied afterward in GaussianProcess.predict().
+    instantaneous queries. Every real state is the smoothed state at the end
+    of the test exposure, except that each integrated component's integral
+    state for ``instid_star`` holds that component's integral over the test
+    exposure. The ``kernel.observation_model`` is applied afterward in
+    GaussianProcess.predict(), which gives the total and per-component
+    exposure averages (instantaneous components of a mixed Sum are read at
+    the end of the exposure, as in training; see the Sum docstring).
+
+    Works for any kernel tree (e.g. a Sum of integrated and instantaneous
+    kernels): each integrated leaf gets its own virtual integral state, mapped
+    into place by an embedding matrix.
 
     The algorithm mirrors the instantaneous predict algorithm (Algorithm 1 in Rubenzahl
     & Hattori et al. 2026) but includes replaying the Kalman steps for any data points
@@ -37,13 +88,14 @@ def predict_exposure(
 
     1. Treat the test exposure as a new, *unobserved* measurement on a
        virtual extra instrument index ``num_insts`` (one past the real
-       ones), by building ``kernel_ext`` with ``num_insts + 1``. Let the
+       ones), by building ``kernel_ext`` with ``num_insts + 1`` on every
+       integrated component. Let the
        test exposure span the interval :math:`[a, b) = [t_* - \delta_*/2, t_* + \delta_*/2)`.
     2. **Phase A**: Transition from the filtered data point (or the prior,
        if retrodictive) immedietely before the test exposure start to the
        test state :math:`a`, then apply ``kernel_ext.reset_matrix`` to zero
        the virtual instrument there.
-    3. **Phase B**: scan over every real state strictly inside :math:`[a, b)`
+    3. **Phase B**: loop over every real state inside :math:`[a, b)`
        and replay the Kalman filter predict/reset/update steps. This correctly
        updates the etst prediction with overlapping real observations.
     4. **Phase C**: one final predict-only transition from wherever Phase B
@@ -54,9 +106,9 @@ def predict_exposure(
 
     Because the test point is computed on a fully private index throughout,
     ``instid_star`` colliding with a real training instrument's id is harmless.
-    ``instid_star`` is only used to choose where in the returned ``(n,)``/``(n, n)``
-    arrays to stage the final probe mean/variance, so that the GP applies the
-    observation model for the correct instrument.
+    ``instid_star`` is only used to choose which integral state in the returned
+    ``(n,)``/``(n, n)`` arrays holds the test exposure, so that the GP applies
+    the observation model for the correct instrument.
     """
     t_states, instid, obsid, stateid = (
         state_coords.t_states,
@@ -69,9 +121,15 @@ def predict_exposure(
     )
     K = t_states.shape[0]
     n = kernel.dimension
-    kernel_ext = dataclasses.replace(kernel, num_insts=kernel.num_insts + 1)
-    n_ext = n + 1
-    probe_idx = n
+    kernel_ext, E, zslots = _extend_kernel(kernel)
+    E = jnp.asarray(E)
+    Pr = E @ E.T  # projector onto the real (non-virtual) states
+    # The virtual instrument index, one past the real ones
+    num_insts = next(
+        k.num_insts
+        for k in extract_all_components(kernel)
+        if isinstance(k, IntegratedStateSpaceModel)
+    )
 
     Pinf = kernel.stationary_covariance()
     m0 = jnp.zeros(n)
@@ -91,8 +149,8 @@ def predict_exposure(
     # (the prior m0/Pinf is the stationary distribution, valid at any time).
     t_anchor = jnp.where(use_prior, a, t_states[idx_anchor])
 
-    m_anchor_ext = jnp.concatenate([m_anchor, jnp.zeros(1)])
-    P_anchor_ext = jnp.zeros((n_ext, n_ext)).at[:n, :n].set(P_anchor)
+    m_anchor_ext = E @ m_anchor
+    P_anchor_ext = E @ P_anchor @ E.T
 
     dt_a = a - t_anchor
     A1 = kernel_ext.transition_matrix(0, dt_a)
@@ -100,21 +158,22 @@ def predict_exposure(
     m_at_a_pred = A1 @ m_anchor_ext
     P_at_a_pred = A1 @ P_anchor_ext @ A1.T + Q1
 
-    Reset0 = kernel_ext.reset_matrix(probe_idx)
+    Reset0 = kernel_ext.reset_matrix(num_insts)
     m_init = Reset0 @ m_at_a_pred
     P_init = Reset0 @ P_at_a_pred @ Reset0.T
 
-    # ---- Phase B: masked walk through any real states inside [a, b) ----
-    # H, padded with one zero column for the probe (which never appears in
-    # any real observation).
-    H_all_ext = jnp.pad(jax.vmap(kernel.observation_model)(X), ((0, 0), (0, 0), (0, 1)))
+    # ---- Phase B: walk through the real states inside [a, b) ----
+    # H for the extended kernel; real observations never touch the virtual
+    # integral states, since their instids are all < num_insts.
+    H_all_ext = jax.vmap(kernel_ext.observation_model)(X)
 
-    def step(carry, j):
-        m_carry, P_carry, t_ref = carry
-        is_active = (j >= k_a) & (j < k_b)
-        is_first = j == k_a
-        t_from = jnp.where(is_first, a, t_ref)
-        dt_j = jnp.where(is_active, t_states[j] - t_from, 0.0)
+    # A while_loop over j in [k_a, k_b) only, rather than a masked scan over all
+    # K states: under vmap it runs as many iterations as the fullest window in
+    # the batch (typically a handful), not K per test point.
+    def step(carry):
+        j, m_carry, P_carry, t_ref = carry
+        t_from = jnp.where(j == k_a, a, t_ref)
+        dt_j = t_states[j] - t_from
 
         Aj = kernel_ext.transition_matrix(0, dt_j)
         Qj = kernel_ext.process_noise(0, dt_j)
@@ -136,17 +195,16 @@ def predict_exposure(
 
         m_k, P_k = jax.lax.cond(stateid[j] == 0, do_start, do_end, operand=None)
 
-        # Snap the real (non-probe) block to the already-validated arrays --
-        # a no-op in exact arithmetic, and a guard against any drift.
-        m_k = m_k.at[:n].set(m_filtered[j])
-        P_k = P_k.at[:n, :n].set(P_filtered[j])
+        # Snap the real (non-probe) block to the already-validated arrays
+        # A no-op in exact arithmetic, and a guard against any drift.
+        m_k = m_k - Pr @ m_k + E @ m_filtered[j]
+        P_k = P_k - Pr @ P_k @ Pr + E @ P_filtered[j] @ E.T
 
-        new_m = jnp.where(is_active, m_k, m_carry)
-        new_P = jnp.where(is_active, P_k, P_carry)
-        new_t_ref = jnp.where(is_active, t_states[j], t_ref)
-        return (new_m, new_P, new_t_ref), None
+        return j + 1, m_k, P_k, t_states[j]
 
-    (m_walk, P_walk, t_ref), _ = jax.lax.scan(step, (m_init, P_init, a), jnp.arange(K))
+    _, m_walk, P_walk, t_ref = jax.lax.while_loop(
+        lambda carry: carry[0] < k_b, step, (k_a, m_init, P_init, a)
+    )
 
     # ---- Phase C: close the window, hop from t_ref to b (predict-only) ----
     dt_b = b - t_ref
@@ -159,7 +217,7 @@ def predict_exposure(
     idx_next = jnp.clip(k_b, 0, K - 1)
     dt_next = t_states[idx_next] - b
     A_real = kernel.transition_matrix(0, dt_next)
-    A_rect = jnp.zeros((n, n_ext)).at[:, :n].set(A_real)
+    A_rect = A_real @ E.T
     numerator = P_star_pred @ A_rect.T
     G_k = smoothing_gain(P_predicted[idx_next], numerator)
     m_smooth_res = m_star_pred + G_k @ (m_smoothed[idx_next] - m_predicted[idx_next])
@@ -171,10 +229,12 @@ def predict_exposure(
     m_final = jnp.where(is_extrapolate, m_star_pred, m_smooth_res)
     P_final = jnp.where(is_extrapolate, P_star_pred, P_smooth_res)
 
-    # ---- Readout: stage the probe result into the (n,)-dim base state ----
-    z_mean = m_final[probe_idx]
-    z_var = P_final[probe_idx, probe_idx]
-    slot = kernel.d + instid_star
-    m_out = jnp.zeros(n).at[slot].set(z_mean)
-    P_out = jnp.zeros((n, n)).at[slot, slot].set(z_var)
+    # ---- Readout: map back to the (n,)-dim base state, with each integrated
+    # component's instid_star integral state replaced by its virtual one ----
+    S = E.T
+    for z0, virtual in zslots:
+        row = z0 + instid_star
+        S = S.at[row].set(0.0).at[row, virtual].set(1.0)
+    m_out = S @ m_final
+    P_out = S @ P_final @ S.T
     return m_out, P_out

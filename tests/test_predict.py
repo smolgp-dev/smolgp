@@ -314,6 +314,94 @@ def test_predict_exposure_parallel_solver():
     _assert_matches_tiny(d, X_test, label="parallel solver, mixed batch")
 
 
+def _dense_cov(integrated, instantaneous, X1, X2):
+    """Dense covariance matching smolgp's convention for a mixed Sum: integrated
+    components are exposure-averaged (their exact .evaluate), and instantaneous
+    components are read at the exposure end, t + delta/2 (see the Sum docstring).
+    """
+    t1, d1, _ = X1
+    t2, d2, _ = X2
+
+    def k(i, j):
+        a = (t1[i], d1[i], 0)
+        b = (t2[j], d2[j], 0)
+        c = sum(kern.evaluate(a, b) for kern in integrated)
+        c += sum(
+            kern.evaluate(t1[i] + d1[i] / 2, t2[j] + d2[j] / 2)
+            for kern in instantaneous
+        )
+        return c
+
+    rows, cols = jnp.arange(len(t1)), jnp.arange(len(t2))
+    return jax.vmap(lambda i: jax.vmap(lambda j: k(i, j))(cols))(rows)
+
+
+def test_predict_exposure_sum_product_wrapper():
+    """
+    Exposure-time predictions with a kernel tree containing a Sum, a Wrapper
+    (Scale, and Quasiperiodic) and a Product (inside Quasiperiodic), against a
+    dense GP. Checks the total and each component's mean and variance, for test
+    points with and without exposure times. Regression test: predict_exposure
+    assumed a single integrated kernel, and failed with
+    "'Sum' object has no attribute 'num_insts'" for any (t, delta, instid) test
+    points, even with delta = 0.
+    """
+    d = _build_dataset(Ninst=2, key=jax.random.PRNGKey(11))
+    X_train, y, yerr = (d["t"], d["texp"], d["instid"]), d["y"], d["yerr"]
+
+    k_fast = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, name="fast")
+    k_slow = smolgp.kernels.IntegratedSHO(
+        omega=0.05, quality=1 / jnp.sqrt(2.0), sigma=0.7, name="slow"
+    )
+    k_qp = smolgp.kernels.Quasiperiodic(
+        sigma=0.5, period=30.0, gamma=1.0, scale=60.0, name="qp"
+    )
+    k_scaled = smolgp.kernels.base.Scale(kernel=k_fast, scale=1.5, name="scaled")
+    kernel = k_scaled + k_slow + k_qp
+
+    gp = smolgp.GaussianProcess(
+        kernel=kernel, X=X_train, noise=jnp.full(y.shape, yerr**2)
+    )
+    _, condgp = gp.condition(y)
+
+    t_stars = jnp.array([5.0, 10.0, 10.0, 50.0, 2.0, 99.0, -10.0, 115.0, 20.0, 30.0])
+    delta_stars = jnp.array([1.0, 8.0, 8.0, 20.0, 6.0, 10.0, 4.0, 4.0, 0.0, 0.0])
+    instid_stars = jnp.array([0, 0, 1, 1, 0, 0, 0, 0, 0, 1], dtype=int)
+    X_test = (t_stars, delta_stars, instid_stars)
+
+    # Dense reference, component by component
+    integrated = {"scaled": [k_scaled], "slow": [k_slow], "qp": []}
+    instantaneous = {"scaled": [], "slow": [], "qp": [k_qp]}
+    all_int = [k_scaled, k_slow]
+    all_inst = [k_qp]
+    K = _dense_cov(all_int, all_inst, X_train, X_train) + yerr**2 * jnp.eye(len(y))
+    alpha = jnp.linalg.solve(K, y)
+
+    def dense(names):
+        comp_int = [k for n in names for k in integrated[n]]
+        comp_inst = [k for n in names for k in instantaneous[n]]
+        K_star = _dense_cov(comp_int, comp_inst, X_test, X_train)
+        K_ss = jnp.diag(_dense_cov(comp_int, comp_inst, X_test, X_test))
+        mean = K_star @ alpha
+        var = K_ss - jnp.sum(K_star * jnp.linalg.solve(K, K_star.T).T, axis=1)
+        return mean, var
+
+    checks = {"total": (None, ["scaled", "slow", "qp"])}
+    checks.update({name: (name, [name]) for name in ["scaled", "slow", "qp"]})
+    for label, (component, names) in checks.items():
+        mu, var = condgp.predict(X_test, kernel=component, return_var=True)
+        mu_dense, var_dense = dense(names)
+        assert jnp.all(jnp.isfinite(mu)) and jnp.all(jnp.isfinite(var)), label
+        diff_m = float(jnp.max(jnp.abs(mu - mu_dense)))
+        diff_v = float(jnp.max(jnp.abs(var - var_dense)))
+        assert diff_m < 1e-8, f"[{label}] mean mismatch vs dense: {diff_m:.3e}"
+        assert diff_v < 1e-8, f"[{label}] var mismatch vs dense: {diff_v:.3e}"
+        print(
+            f"    ...[{label}] Sum/Product/Wrapper exposure predict matches dense: "
+            f"max|dmean|={diff_m:.2e}, max|dvar|={diff_v:.2e}"
+        )
+
+
 def test_predict_exposure_is_integral():
     """
     Independent check that the prediction represents the exposure-average of the
@@ -441,5 +529,6 @@ if __name__ == "__main__":
     test_predict_exposure_matches_tiny()
     test_predict_exposure_parallel_solver()
     test_predict_exposure_is_integral()
+    test_predict_exposure_sum_product_wrapper()
     test_condition_with_X_test_matches_condition_then_predict()
     print("All predict() exposure tests passed.")

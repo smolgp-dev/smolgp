@@ -10,7 +10,6 @@ from tests.test_kernels import (
     condition,
     kernel_function,
     likelihood,
-    offset,
     predict,
 )
 from tests.utils import allclose, generate_integrated_data
@@ -233,6 +232,46 @@ def test_integrated_in_product_raises():
     # Scalar multiplication is a Scale, not a Product, so it is still fine
     assert isinstance(2.0 * iexp, smolgp.kernels.base.Scale)
     print("    ...Product validation: scalar * integrated still allowed")
+
+
+def test_overlapping_exposures_same_instid_raise():
+    """
+    Overlapping exposures on the same instid cannot be modeled (one running
+    integral per instid) and must raise a clear error pointing to
+    assign_min_instids. Regression test: they silently gave wrong results.
+    With the suggested reassignment, the GP must match the dense kernel.
+    """
+    S, w, Q = 2.5, 0.2, 2.0
+    kernel_smol = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=jnp.sqrt(S * w * Q))
+    kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
+    t = jnp.array([0.0, 2.8, 5.6, 10.0, 13.0])  # first three 3-unit exposures overlap
+    texp = jnp.full_like(t, 3.0)
+    y = jnp.sin(t)
+    noise = jnp.full_like(t, 0.01)
+
+    try:
+        smolgp.GaussianProcess(
+            kernel=kernel_smol, X=(t, texp, jnp.zeros_like(t, dtype=int)), noise=noise
+        )
+        raise AssertionError("Expected ValueError for overlapping exposures")
+    except ValueError as e:
+        assert "assign_min_instids" in str(e), str(e)
+
+    # Touching exposures (b_i == a_j) are fine
+    t_touch = jnp.array([0.0, 3.0, 6.0])
+    smolgp.GaussianProcess(
+        kernel=kernel_smol,
+        X=(t_touch, jnp.full_like(t_touch, 3.0), jnp.zeros_like(t_touch, dtype=int)),
+    )
+
+    # The suggested fix gives the right answer
+    instid, num_insts = smolgp.helpers.assign_min_instids(t, texp)
+    assert num_insts == 2
+    X = (t, texp, instid)
+    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X, noise=noise)
+    gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X, diag=noise)
+    likelihood(gp_smol, gp_tiny, y, tol=1e-9, atol=1e-12)
+    print("    ...overlapping same-instid exposures: raise, and assign_min_instids fixes them")
 
 
 def test_num_insts_preserved_on_subset_predict():
@@ -529,15 +568,13 @@ def _long_gap_gps(solver=None):
         (0.0195, 7.63, 0.59),
         (2 * jnp.pi / (0.031 * day), 1 / jnp.sqrt(2.0), 0.33),
         (2 * jnp.pi / (1.05 * day), 1 / jnp.sqrt(2.0), 0.75),
-        # No slow (e.g. 28-day rotation) term: the dense IntegratedSHOKernel
-        # reference loses ~1e-8 accuracy for slow kernels (its closed form
-        # cancels like the analytic process noise did), so it can't serve as
-        # a reference there. See test_slow_sho_* for those.
     ]
     smol, tiny = [], []
     for w, Q, s in params:
         smol.append(smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=s))
-        tiny.append(smolgp.kernels.dense.IntegratedSHOKernel(S=s**2 / (w * Q), w=w, Q=Q))
+        tiny.append(
+            smolgp.kernels.dense.IntegratedSHOKernel(S=s**2 / (w * Q), w=w, Q=Q)
+        )
     kernel_smol = smol[0] + smol[1] + smol[2]
     kernel_tiny = tiny[0] + tiny[1] + tiny[2]
 
@@ -547,7 +584,9 @@ def _long_gap_gps(solver=None):
     noise = jnp.full_like(t, 0.3**2)
 
     solver_kwargs = {} if solver is None else {"solver": solver}
-    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X, noise=noise, **solver_kwargs)
+    gp_smol = smolgp.GaussianProcess(
+        kernel=kernel_smol, X=X, noise=noise, **solver_kwargs
+    )
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X, diag=noise)
     y = gp_tiny.sample(jax.random.PRNGKey(3))
     return gp_smol, gp_tiny, y
@@ -557,20 +596,7 @@ def _check_long_gap(solver=None):
     gp_smol, gp_tiny, y = _long_gap_gps(solver)
     likelihood(gp_smol, gp_tiny, y, tol=1e-7, atol=1e-10)
     condition(gp_smol, gp_tiny, y, tol=1e-8, atol=1e-10)
-    # Instantaneous predictions at 1000 test points spanning the data, most
-    # of them inside the gaps. The old smoothing gain was off by ~0.1 here.
-    # Plain times rather than tests.test_kernels.predict's (t, 0, 0) tuples,
-    # which fail for Sum kernels in the integrated solvers (predict_exposure
-    # is traced even for zero exposure times and needs kernel.num_insts).
-    t_train = gp_smol.X[0]
-    t_test = jnp.linspace(t_train.min() - 3600.0, t_train.max() + 3600.0, 1000)
-    zeros = jnp.zeros_like(t_test)
-    mu_tiny, var_tiny = gp_tiny.predict(
-        y, (t_test, zeros, zeros.astype(int)), return_var=True
-    )
-    mu_smol, var_smol = gp_smol.predict(t_test, y, return_var=True)
-    allclose("predicted means", mu_tiny - mu_smol, tol=1e-8, atol=1e-10)
-    allclose("predicted variances", (var_tiny - offset) - var_smol, tol=1e-8, atol=1e-10)
+    predict(gp_smol, gp_tiny, y, tol=1e-8, atol=1e-10)
 
 
 def test_long_gap_matches_dense_serial():
@@ -752,6 +778,7 @@ if __name__ == "__main__":
     test_num_insts_mismatch_reinit()
     test_num_insts_wrapped_kernel()
     test_instid_validation()
+    test_overlapping_exposures_same_instid_raise()
     test_integrated_in_product_raises()
     test_num_insts_preserved_on_subset_predict()
     test_zero_length_transitions_serial()
