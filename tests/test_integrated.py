@@ -234,6 +234,47 @@ def test_integrated_in_product_raises():
     print("    ...Product validation: scalar * integrated still allowed")
 
 
+def test_float32_warning():
+    """GaussianProcess warns once when JAX runs in 32-bit precision, not in 64-bit."""
+    t = jnp.arange(5.0)
+    for x64, expected in [(False, 1), (True, 0)]:
+        with jax.enable_x64(x64), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            gp = smolgp.GaussianProcess(
+                kernel=smolgp.kernels.SHO(omega=1.0, quality=2.0), X=t
+            )
+            gp.condition(jnp.ones_like(t))  # its internal conditioned GP must not warn again
+        # (match smolgp's own message: JAX's dtype warnings also mention x64)
+        n = sum("running in 32-bit precision" in str(w.message) for w in caught)
+        assert n == expected, f"x64={x64}: expected {expected} warning(s), got {n}"
+    print("    ...float32 warning: raised once in 32-bit, not in 64-bit")
+
+
+def test_two_tuple_coordinates_default_instid():
+    """
+    X = (t, texp) must mean a single instrument, identical to passing
+    instid = 0 explicitly. Regression test: it failed with an unpacking error.
+    """
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0)
+    t = jnp.linspace(0.0, 50.0, 12)
+    texp = jnp.full_like(t, 3.0)
+    y = jnp.sin(t / 5.0)
+    noise = jnp.full_like(t, 0.01)
+
+    gp2 = smolgp.GaussianProcess(kernel=kernel, X=(t, texp), noise=noise)
+    gp3 = smolgp.GaussianProcess(
+        kernel=kernel, X=(t, texp, jnp.zeros_like(t, dtype=int)), noise=noise
+    )
+    assert len(gp2.X) == 3 and jnp.all(gp2.X[2] == 0)
+    assert jnp.allclose(gp2.log_probability(y), gp3.log_probability(y))
+
+    _, cond2 = gp2.condition(y)
+    _, cond3 = gp3.condition(y)
+    t_test = jnp.linspace(-5.0, 55.0, 30)
+    assert jnp.allclose(cond2.predict(t_test), cond3.predict(t_test))
+    print("    ...X = (t, texp) defaults to instid = 0")
+
+
 def test_overlapping_exposures_same_instid_raise():
     """
     Overlapping exposures on the same instid cannot be modeled (one running
@@ -778,6 +819,8 @@ if __name__ == "__main__":
     test_num_insts_mismatch_reinit()
     test_num_insts_wrapped_kernel()
     test_instid_validation()
+    test_float32_warning()
+    test_two_tuple_coordinates_default_instid()
     test_overlapping_exposures_same_instid_raise()
     test_integrated_in_product_raises()
     test_num_insts_preserved_on_subset_predict()

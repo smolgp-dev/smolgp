@@ -103,13 +103,13 @@ def check_exposure_overlaps(t: JAXArray, texp: JAXArray, instid: JAXArray) -> No
         mask = instid == inst
         if count_min_instids(t[mask], texp[mask]) > 1:
             raise ValueError(
-                f"Exposures with instid={inst} overlap in time. An integrated kernel "
-                "tracks one running integral per instid, so overlapping exposures "
-                "on the same instid cannot be modeled, and usually indicate "
-                "mislabeled instids, timestamps, or exposure times. If the data are "
-                "correct and need not be treated as separate instruments, assign "
-                "non-overlapping instids with:\n"
-                "    instid, num_insts = smolgp.helpers.assign_min_instids(t, texp)"
+                f"Exposures with instid={inst} overlap in time.\n"
+                "\tAn integrated kernel tracks one running integral per instid,\n"
+                "\tso overlapping exposures on the same instid cannot be modeled,\n"
+                "\tand usually indicate mislabeled instids, timestamps, or exposure times.\n"
+                "\tIf the data are correct and need not be treated as separate instruments,\n"
+                "\tassign non-overlapping instids with:\n"
+                "\t    instid, num_insts = smolgp.helpers.assign_min_instids(t, texp)"
             )
 
 
@@ -363,7 +363,10 @@ class GaussianProcess(eqx.Module):
     :param X: The input coordinates — any PyTree compatible with ``kernel``
         whose leading dimension has size ``N_data``.
         For integrated kernels, pass ``(t, texp)`` where ``t`` is the array of
-        exposure midpoints and ``texp`` is the array of exposure durations.
+        exposure midpoints and ``texp`` is the array of exposure durations, or
+        ``(t, texp, instid)`` with an integer instrument id per measurement
+        (``(t, texp)`` means a single instrument, ``instid = 0``). Exposures
+        with the same ``instid`` must not overlap.
     :type X: JAXArray
     :param noise: Observation noise covariance matrices with shape
         ``(N, D, D)``, where ``N`` is the number of data points and ``D`` is
@@ -444,8 +447,13 @@ class GaussianProcess(eqx.Module):
                 " (i.e. each measurement is over the interval [t - texp/2, t + texp/2])."
             )
 
-            # If instid is provided (X = (t, texp, instid)), validate its format
-            # and reconcile num_insts across any integrated kernel components.
+            # X = (t, texp): all measurements come from a single instrument
+            if len(X) == 2:
+                t_coord, texp = X
+                X = (t_coord, texp, jnp.zeros(jnp.shape(t_coord)[0], dtype=int))
+
+            # Validate instid's format and reconcile num_insts across any
+            # integrated kernel components.
             if len(X) > 2:
                 t_coord, _texp, instid = X
                 instid = jnp.asarray(instid)
