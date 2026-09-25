@@ -125,6 +125,131 @@ def assign_min_instids(t: JAXArray, delta: JAXArray) -> tuple[JAXArray, int]:
     return assign_instids(t, delta, num_insts), num_insts
 
 
+def find_exposure_overlaps(t: JAXArray, delta: JAXArray, instid=None, return_indices=False):
+    r"""Return the same-``instid`` exposure-window pairs that overlap.
+
+    Windows are :math:`(t_i - \delta_i/2,\; t_i + \delta_i/2)`, using the same
+    convention as :func:`count_min_instids` and
+    :func:`~smolgp.gp.check_exposure_overlaps`: touching windows
+    (:math:`b_i = a_j`) do **not** overlap, and a zero-width window strictly
+    inside another's span does (while two coincident zero-width windows do not).
+
+    An integrated kernel keeps one running integral per instid, so overlapping
+    same-instid exposures corrupt each other. Where :func:`count_min_instids`
+    only reports *that* a conflict exists and
+    :func:`~smolgp.gp.check_exposure_overlaps` only raises, this locates
+    *which* exposures conflict — the usual sign of a mislabeled exposure time,
+    timestamp, or instid — so they can be inspected, dropped, or relabeled.
+
+    Cost is :math:`O(M \log M + P)` for ``P`` overlapping pairs. Deliberately
+    numpy (concrete coordinates), like :func:`count_min_instids`.
+
+    Args:
+        t: Exposure midpoints, length ``M``.
+        delta: Exposure widths, length ``M`` (>= 0).
+        instid: Optional length-``M`` group labels; only windows sharing an
+            instid are compared. ``None`` treats all windows as one group.
+        return_indices: If ``True``, also return the flat sorted array of unique
+            data-array indices of every exposure that appears in any overlapping
+            pair (the "offenders").
+
+    Returns:
+        An ``(P, 2)`` int array of overlapping index pairs ``(i, j)``, ``i < j``,
+        in the ORIGINAL input order and lexicographically sorted; an empty
+        ``(0, 2)`` array when nothing overlaps. If ``return_indices`` is ``True``,
+        a ``(pairs, offenders)`` tuple, where ``offenders`` is the length-``K``
+        sorted array of unique offending data-array indices (empty when none).
+    """
+    if isinstance(t, jax.core.Tracer) or isinstance(delta, jax.core.Tracer):
+        raise TypeError("find_exposure_overlaps needs concrete coordinates.")
+    t = np.asarray(t, dtype=float)
+    delta = np.asarray(delta, dtype=float)
+    a = t - delta / 2
+    b = t + delta / 2
+    M = t.shape[0]
+    if instid is None:
+        groups = [np.arange(M)]
+    else:
+        instid = np.asarray(instid)
+        groups = [np.where(instid == g)[0] for g in np.unique(instid)]
+    pairs = []
+    for idx in groups:
+        if idx.size < 2:
+            continue
+        order = idx[np.argsort(a[idx], kind="stable")]  # by window start
+        active: list[int] = []  # windows still open at the current start
+        for k in order:
+            ak = a[k]
+            active = [j for j in active if b[j] > ak]  # drop closed/touching (b <= a)
+            for j in active:  # every still-open window overlaps this one
+                pairs.append((j, k) if j < k else (k, j))
+            active.append(k)
+    if not pairs:
+        pairs = np.empty((0, 2), dtype=int)
+    else:
+        pairs = np.unique(np.asarray(pairs, dtype=int), axis=0)
+    if return_indices:
+        offenders = np.unique(pairs) if pairs.size else np.empty(0, dtype=int)
+        return pairs, offenders
+    return pairs
+
+
+def resolve_exposure_overlaps(t: JAXArray, delta: JAXArray, instid=None, return_dropped=False):
+    r"""Boolean keep-mask dropping the FEWEST same-``instid`` exposures so that no
+    two remaining same-instid windows overlap.
+
+    This is interval scheduling (activity selection): within each instid, keep a
+    maximum set of pairwise non-overlapping windows by sweeping in order of end
+    time and keeping each window that starts at or after the last kept window's
+    end. It is optimal in the number kept, and because ties favor the
+    earlier-ending window, an over-long (typically mislabeled) exposure is the
+    one dropped. Windows and the touching rule match
+    :func:`find_exposure_overlaps`; afterwards ``count_min_instids`` is 1 for
+    each instid among the kept windows.
+
+    Cost is :math:`O(M \log M)`. Numpy (concrete coordinates).
+
+    Args:
+        t: Exposure midpoints, length ``M``.
+        delta: Exposure widths, length ``M`` (>= 0).
+        instid: Optional length-``M`` group labels; scheduling is done per
+            instid. ``None`` treats all windows as one group.
+        return_dropped: If ``True``, also return the sorted array of dropped
+            data-array indices (the offenders removed).
+
+    Returns:
+        Length-``M`` boolean array, ``True`` for windows to keep. If
+        ``return_dropped`` is ``True``, a ``(keep, dropped)`` tuple, where
+        ``dropped`` is the sorted array of removed data-array indices.
+    """
+    if isinstance(t, jax.core.Tracer) or isinstance(delta, jax.core.Tracer):
+        raise TypeError("resolve_exposure_overlaps needs concrete coordinates.")
+    t = np.asarray(t, dtype=float)
+    delta = np.asarray(delta, dtype=float)
+    a = t - delta / 2
+    b = t + delta / 2
+    M = t.shape[0]
+    keep = np.ones(M, dtype=bool)
+    if instid is None:
+        groups = [np.arange(M)]
+    else:
+        instid = np.asarray(instid)
+        groups = [np.where(instid == g)[0] for g in np.unique(instid)]
+    for idx in groups:
+        if idx.size < 2:
+            continue
+        order = idx[np.argsort(b[idx], kind="stable")]  # earliest end first
+        last_end = -np.inf
+        for k in order:
+            if a[k] >= last_end:  # non-overlapping with last kept (touching allowed)
+                last_end = b[k]
+            else:
+                keep[k] = False
+    if return_dropped:
+        return keep, np.where(~keep)[0]
+    return keep
+
+
 def block_view(A, b):
     Nb, Mb = A.shape
     assert Nb % b == 0 and Mb % b == 0

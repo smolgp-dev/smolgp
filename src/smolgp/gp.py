@@ -17,7 +17,12 @@ import numpy as np
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
-from smolgp.helpers import assign_instids, count_min_instids, robust_sqrt
+from smolgp.helpers import (
+    assign_instids,
+    count_min_instids,
+    find_exposure_overlaps,
+    robust_sqrt,
+)
 from smolgp.kernels import Product, StateSpaceModel, Sum, Wrapper
 from smolgp.kernels.base import extract_all_components, extract_leaf_kernels
 from smolgp.kernels.integrated import IntegratedStateSpaceModel
@@ -97,18 +102,35 @@ def check_exposure_overlaps(t: JAXArray, texp: JAXArray, instid: JAXArray) -> No
     instid would corrupt each other. Uses the same notion of overlap as
     :func:`~smolgp.helpers.assign_min_instids` (touching windows, ``b_i == a_j``,
     are fine). Requires concrete (non-traced) coordinates.
+
+    The message names a few offending exposures (see
+    :func:`~smolgp.helpers.find_exposure_overlaps` to list them all, and
+    :func:`~smolgp.helpers.resolve_exposure_overlaps` for a minimal-drop mask).
     """
     t, texp, instid = np.asarray(t), np.asarray(texp), np.asarray(instid)
     for inst in np.unique(instid):
         mask = instid == inst
         if count_min_instids(t[mask], texp[mask]) > 1:
+            where = np.where(mask)[0]
+            pairs, offenders = find_exposure_overlaps(
+                t[mask], texp[mask], return_indices=True
+            )  # offenders index into this instid's windows; where[] maps to the full arrays
+            examples = "\n".join(
+                f"\t    idx {where[i]}: t={t[where[i]]:.6g}, texp={texp[where[i]]:.6g}"
+                for i in offenders[:5]
+            )
+            more = "" if offenders.size <= 5 else f"\n\t    ... and {offenders.size - 5} more"
             raise ValueError(
-                f"Exposures with instid={inst} overlap in time.\n"
+                f"Exposures with instid={inst} overlap in time "
+                f"({offenders.size} exposure(s) in {len(pairs)} overlapping pair(s)).\n"
                 "\tAn integrated kernel tracks one running integral per instid,\n"
                 "\tso overlapping exposures on the same instid cannot be modeled,\n"
                 "\tand usually indicate mislabeled instids, timestamps, or exposure times.\n"
-                "\tIf the data are correct and need not be treated as separate instruments,\n"
-                "\tassign non-overlapping instids with:\n"
+                f"\tFirst offenders (index into the full input arrays):\n{examples}{more}\n"
+                "\tList them all with smolgp.helpers.find_exposure_overlaps(t, texp, instid);\n"
+                "\tget a minimal-drop keep-mask with\n"
+                "\t    keep = smolgp.helpers.resolve_exposure_overlaps(t, texp, instid)\n"
+                "\tor, if the data are correct and need not be separate instruments,\n"
                 "\t    instid, num_insts = smolgp.helpers.assign_min_instids(t, texp)"
             )
 

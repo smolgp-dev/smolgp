@@ -315,6 +315,90 @@ def test_overlapping_exposures_same_instid_raise():
     print("    ...overlapping same-instid exposures: raise, and assign_min_instids fixes them")
 
 
+def test_find_and_resolve_exposure_overlaps():
+    """find_exposure_overlaps / resolve_exposure_overlaps on a hand-built dataset
+    with KNOWN overlaps of every kind, checked against the exact expected answer.
+
+    Windows are the centered convention (t +/- delta/2), and are laid out by
+    [lo, hi] below. instids are interleaved so a correct result must return
+    *data-array* indices (not group-local ones), and same-time windows on
+    different instids must NOT be flagged.
+
+    idx  instid  window [lo,hi]   note
+      0    0      [ 0,  2]        clean; touches idx1 (b==a, not an overlap)
+      1    0      [ 2,  4]        clean
+      2    0      [10, 12]        isolated
+      3    1      [ 0, 10]        big; contains idx4 and idx5
+      4    1      [ 1,  3]        inside idx3 (overlaps 3, not 5)
+      5    1      [ 4,  6]        inside idx3 (overlaps 3, not 4)
+      6    1      [20, 21]        clean
+      7    2      [ 0, 10]        big; contains the two zero-width readouts
+      8    2      [ 5,  5]        zero-width strictly inside idx7 (overlaps 7)
+      9    2      [ 5,  5]        zero-width coincident with idx8 (overlaps 7, not 8)
+     10    3      [ 0,  2]        short
+     11    3      [ 1,  9]        long; overlaps idx10 -> resolver drops the longer one
+    """
+    from smolgp.gp import check_exposure_overlaps
+    from smolgp.helpers import (
+        count_min_instids,
+        find_exposure_overlaps,
+        resolve_exposure_overlaps,
+    )
+
+    lo = np.array([0, 2, 10, 0, 1, 4, 20, 0, 5, 5, 0, 1], dtype=float)
+    hi = np.array([2, 4, 12, 10, 3, 6, 21, 10, 5, 5, 2, 9], dtype=float)
+    instid = np.array([0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3])
+    t = (lo + hi) / 2
+    delta = hi - lo
+
+    # --- find: exact overlapping pairs, in DATA-array indices, lexicographically sorted ---
+    expected_pairs = [[3, 4], [3, 5], [7, 8], [7, 9], [10, 11]]
+    pairs = find_exposure_overlaps(t, delta, instid)
+    assert pairs.tolist() == expected_pairs, pairs.tolist()
+
+    # touching (idx0/idx1) and cross-instid same-time windows are NOT overlaps
+    assert [0, 1] not in pairs.tolist()
+
+    # --- find(..., return_indices=True): the flat unique offender DATA indices ---
+    pairs2, offenders = find_exposure_overlaps(t, delta, instid, return_indices=True)
+    assert pairs2.tolist() == expected_pairs
+    assert offenders.tolist() == [3, 4, 5, 7, 8, 9, 10, 11]
+
+    # --- resolve: minimal-drop keep-mask (drops the big/long exposure in each group) ---
+    expected_keep = [True, True, True, False, True, True, True, False, True, True, True, False]
+    keep = resolve_exposure_overlaps(t, delta, instid)
+    assert keep.dtype == bool and keep.tolist() == expected_keep, keep.tolist()
+
+    keep2, dropped = resolve_exposure_overlaps(t, delta, instid, return_dropped=True)
+    assert keep2.tolist() == expected_keep
+    assert dropped.tolist() == [3, 7, 11]
+
+    # after resolving, every instid is conflict-free and the GP-level check passes
+    for g in np.unique(instid):
+        m = keep & (instid == g)
+        assert count_min_instids(t[m], delta[m]) == 1
+    check_exposure_overlaps(t[keep], delta[keep], instid[keep])  # must not raise
+
+    # the full (unresolved) set still trips the guard, naming the offenders of the
+    # first conflicting instid (the guard raises on the earliest conflicting instid)
+    try:
+        check_exposure_overlaps(t, delta, instid)
+        raise AssertionError("Expected ValueError for overlapping exposures")
+    except ValueError as e:
+        assert "instid=1" in str(e), str(e)
+        assert "idx 3" in str(e) and "idx 4" in str(e), str(e)
+
+    # no-overlap dataset: empty pairs/offenders, keep-all, nothing dropped
+    tc = np.array([0.0, 5.0, 10.0])
+    dc = np.array([1.0, 1.0, 1.0])
+    p0, off0 = find_exposure_overlaps(tc, dc, return_indices=True)
+    assert p0.shape == (0, 2) and off0.tolist() == []
+    k0, d0 = resolve_exposure_overlaps(tc, dc, return_dropped=True)
+    assert k0.all() and d0.tolist() == []
+
+    print("    ...find/resolve_exposure_overlaps: known overlaps found & resolved correctly")
+
+
 def test_num_insts_preserved_on_subset_predict():
     """
     Predicting at test points that only cover a subset of instruments must
