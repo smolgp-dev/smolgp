@@ -177,13 +177,13 @@ def test_state_coords_data_order_indices_roundtrip():
 
     S, w, Q = 2.5, 0.2, 2.0
     kernel = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=jnp.sqrt(S * w * Q), num_insts=2
+        omega=w, quality=Q, sigma=jnp.sqrt(S * w * Q), num_insts=4
     )
     # Deliberately interleaved/overlapping so the sorted timeline is NOT
-    # simply blocked by observation
+    # simply blocked by observation (overlapping exposures need distinct instids)
     tt = jnp.array([10.0, 12.0, 14.0, 16.0])
     texp = jnp.array([6.0, 6.0, 6.0, 6.0])
-    inst = jnp.array([0, 1, 0, 1])
+    inst = jnp.array([0, 1, 2, 3])
     N = 4
     gp = smolgp.GaussianProcess(kernel, X=(tt, texp, inst), noise=jnp.full(N, 0.01))
     sc_i = gp.solver.state_coords

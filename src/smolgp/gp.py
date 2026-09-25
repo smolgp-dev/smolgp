@@ -13,6 +13,7 @@ from typing import (
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from tinygp import kernels, means
 from tinygp.helpers import JAXArray
 
@@ -86,6 +87,30 @@ def assign_unique_kernel_names(kernel: StateSpaceModel) -> StateSpaceModel:
             return k
 
     return _rename(kernel)
+
+
+def check_exposure_overlaps(t: JAXArray, texp: JAXArray, instid: JAXArray) -> None:
+    """Raise a ValueError if exposures with the same ``instid`` overlap.
+
+    An integrated kernel keeps one integral state per instid, reset at each
+    exposure start and read at its end, so overlapping exposures on the same
+    instid would corrupt each other. Uses the same notion of overlap as
+    :func:`~smolgp.helpers.assign_min_instids` (touching windows, ``b_i == a_j``,
+    are fine). Requires concrete (non-traced) coordinates.
+    """
+    t, texp, instid = np.asarray(t), np.asarray(texp), np.asarray(instid)
+    for inst in np.unique(instid):
+        mask = instid == inst
+        if count_min_instids(t[mask], texp[mask]) > 1:
+            raise ValueError(
+                f"Exposures with instid={inst} overlap in time. An integrated kernel "
+                "tracks one running integral per instid, so overlapping exposures "
+                "on the same instid cannot be modeled, and usually indicate "
+                "mislabeled instids, timestamps, or exposure times. If the data are "
+                "correct and need not be treated as separate instruments, assign "
+                "non-overlapping instids with:\n"
+                "    instid, num_insts = smolgp.helpers.assign_min_instids(t, texp)"
+            )
 
 
 def assign_num_insts(kernel: StateSpaceModel, num_insts: int) -> StateSpaceModel:
@@ -457,6 +482,12 @@ class GaussianProcess(eqx.Module):
                     ]
                     if building_fresh_solver:
                         self.kernel = assign_num_insts(self.kernel, num_insts)
+
+                    # Training data only: condition() builds a GP at the test
+                    # points (with states given), where overlapping test
+                    # exposures are fine since each is predicted separately.
+                    if states is None:
+                        check_exposure_overlaps(t_coord, _texp, instid)
 
         # Data coordinates (or tuple of coordinates)
         self.X = X
