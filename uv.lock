@@ -2942,6 +2942,7 @@ test = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "tinygp" },
 ]
 
 [package.metadata]
@@ -2974,6 +2975,7 @@ test = [
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "pytest-xdist" },
+    { name = "tinygp", git = "https://github.com/dfm/tinygp.git?branch=main" },
 ]
 
 [[package]]
