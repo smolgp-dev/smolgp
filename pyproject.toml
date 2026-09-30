@@ -23,7 +23,7 @@ classifiers = [
 dependencies = [
     "equinox>=0.13.1",
     "jax>=0.6.2",
-    "tinygp>=0.3.2.dev0",
+    "tinygp>=0.3.1",
 ]
 
 [tool.uv.sources]
@@ -37,7 +37,7 @@ dev = [
     "matplotlib>=3.10.6",
     "sphinx-autobuild>=2025.8.25",
 ]
-test = ["pytest", "pytest-xdist", "pytest-cov"]
+test = ["pytest", "pytest-xdist", "pytest-cov", "tinygp>=0.3.2.dev0"]
 docs = [
     "myst-nb",
     "myst-parser>=4.0.1",
