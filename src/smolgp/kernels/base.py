@@ -737,9 +737,19 @@ class SHO(StateSpaceModel):
         def overdamped(dt: JAXArray) -> JAXArray:
             f = 2 * n * q
             x = n * w * dt
-            sinh = jnp.sinh(x)
-            cosh = jnp.cosh(x)
-            return jnp.exp(-0.5 * w * dt / q) * jnp.array(
+            ## Original form, which overflows (inf * 0) for w * dt > ~700:
+            # sinh = jnp.sinh(x)
+            # cosh = jnp.cosh(x)
+            # return jnp.exp(-0.5 * w * dt / q) * jnp.array(
+            #     [[cosh + sinh / f, sinh / (w * n)], [-w * sinh / n, cosh - sinh / f]]
+            # )
+            a = 0.5 * w * dt / q
+            ## More stable: Rewrite as decaying exponentials
+            ## since for overdamped systems, x < a, these forms will not overflow over long steps
+            ep, em = jnp.exp(x - a), jnp.exp(-x - a)
+            cosh = 0.5 * (ep + em)
+            sinh = 0.5 * (ep - em)
+            return jnp.array(
                 [[cosh + sinh / f, sinh / (w * n)], [-w * sinh / n, cosh - sinh / f]]
             )
 
@@ -793,14 +803,23 @@ class SHO(StateSpaceModel):
             w2 = jnp.square(w)
             a = w * dt / q  # argument in exponential
             x = n * w * dt  # argument in sin/cos
-            sinh = jnp.sinh(x)
-            sinh2 = jnp.sinh(2 * x)
-            sinhsq = jnp.square(sinh)
-            exp = jnp.exp(-a)
             expm1 = jnp.expm1(-a)  # exp(-a) - 1
-            Q11 = -expm1 - (sinh2 / f + sinhsq / (2 * n2 * q2)) * exp
-            Q12 = Q21 = exp * (w * sinhsq / (n2 * q))
-            Q22 = w2 * (-expm1 + exp * (sinh2 / f - sinhsq / (2 * n2 * q2)))
+            ## Original form, which overflows (inf * 0) for w * dt > ~350:
+            # sinh = jnp.sinh(x)
+            # sinh2 = jnp.sinh(2 * x)
+            # sinhsq = jnp.square(sinh)
+            # exp = jnp.exp(-a)
+            # Q11 = -expm1 - (sinh2 / f + sinhsq / (2 * n2 * q2)) * exp
+            # Q12 = Q21 = exp * (w * sinhsq / (n2 * q))
+            # Q22 = w2 * (-expm1 + exp * (sinh2 / f - sinhsq / (2 * n2 * q2)))
+            ## More stable: Rewrite sinh as decaying exponentials:
+            ## since for overdamped 2x < a, these forms will not overflow over long steps
+            ep, e0, em = jnp.exp(2 * x - a), jnp.exp(-a), jnp.exp(-2 * x - a)
+            sinh2 = 0.5 * (ep - em)
+            sinhsq = 0.25 * (ep - 2 * e0 + em)
+            Q11 = -expm1 - (sinh2 / f + sinhsq / (2 * n2 * q2))
+            Q12 = Q21 = w * sinhsq / (n2 * q)
+            Q22 = w2 * (-expm1 + (sinh2 / f - sinhsq / (2 * n2 * q2)))
             return jnp.square(self.sigma) * jnp.array([[Q11, Q12], [Q21, Q22]])
 
         return jax.lax.cond(
@@ -873,7 +892,7 @@ class Exp(StateSpaceModel):
         t1 = self.coord_to_sortable(X1)
         t2 = self.coord_to_sortable(X2)
         dt = t2 - t1
-        return jnp.exp(-dt[None, None] / self.scale)
+        return jnp.exp(-jnp.asarray(dt)[None, None] / self.scale)
 
     def process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """The process noise Q_k for the Exp process"""
