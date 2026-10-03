@@ -367,6 +367,79 @@ def scaled_VanLoan(
     return _unscale(Qs, Phibar_s, T, rate)
 
 
+def rescaled_solve(
+    F: JAXArray, B: JAXArray, T: JAXArray, rate: JAXArray
+) -> JAXArray:
+    r"""Solve :math:`F X = B` in rescaled units, for a badly scaled :math:`F`.
+
+    With :math:`F = \mathrm{rate} \cdot D \tilde F D^{-1}`, where :math:`D = \mathrm{diag}(T)`
+    and :math:`\tilde F` is of order one, :math:`F^{-1} B = D \tilde F^{-1} (D^{-1} B) / \mathrm{rate}`.
+    This keeps the solve well conditioned when :math:`F` mixes very different scales
+    (e.g. a slow process in fast time units).
+
+    Args:
+        F: Feedback (design) matrix :math:`F`.
+        B: Right-hand side.
+        T: Diagonal state scaling, as a vector.
+        rate: Time scaling, e.g. the kernel's fastest rate.
+    """
+    Fs = F * (T[None, :] / T[:, None]) / rate
+    return T[:, None] * jnp.linalg.solve(Fs, B / T[:, None]) / rate
+
+
+def integrated_short_step_Phibar(
+    F: JAXArray, dt: JAXArray, T: JAXArray, rate: JAXArray
+) -> JAXArray:
+    r"""The integrated transition matrix :math:`\bar\Phi = \int_0^{\Delta t} e^{Fs} ds` for a
+    short step, via Van Loan in rescaled units (see :func:`scaled_VanLoan`).
+
+    Accurate for ``rate * dt`` up to about one.
+
+    Args:
+        F: The base feedback (design) matrix :math:`F`.
+        dt: Time step :math:`\Delta t`.
+        T: Diagonal state scaling, as a vector.
+        rate: Time scaling, e.g. the kernel's fastest rate.
+    """
+    Fs = F * (T[None, :] / T[:, None]) / rate
+    Phibar_s = Phibar_from_VanLoan(Fs, rate * dt)
+    return Phibar_s * (T[:, None] / T[None, :]) / rate
+
+
+def integrated_short_step_noise(
+    F: JAXArray,
+    L: JAXArray,
+    Qc: JAXArray,
+    dt: JAXArray,
+    T: JAXArray,
+    rate: JAXArray,
+) -> tuple[JAXArray, JAXArray]:
+    r"""The integral-state blocks of the augmented process noise, :math:`\tilde Q_{12}` and
+    :math:`\tilde Q_{22}`, for a short step, via Van Loan in rescaled units.
+
+    The augmented system is :math:`[x; z]` with :math:`dz/dt = x_0`. Its Van Loan
+    exponential contains :math:`-F`, so it is only used for short steps (``rate * dt``
+    up to about one), where it is accurate; see :func:`scaled_VanLoan`.
+
+    Args:
+        F: The base feedback (design) matrix :math:`F`.
+        L: The base noise effect matrix :math:`L`.
+        Qc: The base spectral density :math:`Q_c`.
+        dt: Time step :math:`\Delta t`.
+        T: Diagonal scaling of the base states, as a vector.
+        rate: Time scaling, e.g. the kernel's fastest rate.
+
+    Returns:
+        ``(Qaug12, Qaug22)``, of shapes ``(d, 1)`` and ``(1, 1)``.
+    """
+    d = F.shape[0]
+    Faug = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(F).at[d, 0].set(1.0)
+    QLaug = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(L @ Qc @ L.T)
+    Taug = jnp.concatenate([T, jnp.ones(1) / rate])  # z = int x dt scales as x / rate
+    Qaug, _ = scaled_VanLoan(Faug, QLaug, dt, Taug, rate)
+    return Qaug[:d, d:], Qaug[d:, d:]
+
+
 def robust_sqrt(M: JAXArray) -> JAXArray:
     r"""Symmetric-PSD matrix square root via eigendecomposition.
 

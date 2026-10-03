@@ -10,35 +10,11 @@ or this page to launch the notebook using [Binder](https://mybinder.org),
 [Colab](https://colab.research.google.com), or download the `.ipynb` file
 directly. -->
 
-## Getting Started
-
 ```{toctree}
-:maxdepth: 1
-tutorials/quickstart
-```
+:maxdepth: 2
 
-## Introductory Topics
-
-```{toctree}
-:maxdepth: 1
-
-tutorials/introssm
-tutorials/integrated
-tutorials/kernels
-tutorials/optimizing
-tutorials/parallel
-tutorials/sample
-```
-
-## Advanced Topics
-
-```{toctree}
-:maxdepth: 1
-
-tutorials/derivative
-tutorials/multicomponent
-tutorials/multiinstrument
-tutorials/multivariate
-tutorials/multidimensional
-tutorials/spatiotemporal
+tutorials/getting_started
+tutorials/introductory
+tutorials/advanced
+tutorials/derivations
 ```

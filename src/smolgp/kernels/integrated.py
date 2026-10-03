@@ -28,6 +28,7 @@ __all__ = [
     "IntegratedMatern32",
     "IntegratedMatern52",
     "IntegratedSHO",
+    "IntegratedStateSpaceModel",
 ]
 
 import dataclasses
@@ -38,7 +39,6 @@ import jax.numpy as jnp
 from tinygp.helpers import JAXArray
 
 import smolgp.kernels
-from smolgp.helpers import Phibar_from_VanLoan
 from smolgp.kernels import StateSpaceModel
 
 
@@ -152,19 +152,51 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         L_aug = jnp.vstack([L] + [0.0] * self.num_insts)
         return L_aug
 
+    @property
+    def rate(self) -> JAXArray:
+        """The fastest rate of the base process, i.e. one over its shortest timescale.
+
+        Used to rescale time (to units of ``1 / rate``) for numerical stability, and
+        to switch between the short- and long-step methods in
+        :meth:`integrated_transition_matrix` and :meth:`integrated_process_noise`.
+        Defaults to 1 (no rescaling); override it in subclasses.
+        """
+        return jnp.ones(())
+
+    def state_scales(self) -> JAXArray:
+        """The typical size of each base state relative to the first, for rescaling.
+
+        Defaults to the derivative convention (state ``k`` is the ``k``-th time
+        derivative, so it scales as ``rate**k``). Override for other conventions.
+        """
+        return self.rate ** jnp.arange(self.d)
+
     def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
-        The integrated transition matrix between two states at coordinates X1 and X2, $A_k$
+        r"""The integrated transition matrix :math:`\bar{\Phi} = \int_0^\Delta \Phi(t)\, dt`.
 
-        By default uses the Van Loan method to compute Phibar = ∫0^dt exp(F s) ds
+        Since :math:`\frac{d}{dt} e^{Ft} = F e^{Ft}`, :math:`\bar{\Phi} = F^{-1}(\Phi - I)`,
+        which reuses the base transition matrix and does not degrade over long
+        steps. For short steps (``rate * dt < 1``) that subtraction loses precision,
+        so Van Loan is used instead. Both are evaluated in rescaled units (see
+        :attr:`rate`). See the "Integrated process noise" tutorial for details.
 
-        Overload this method if you wish to define the integrated transition matrix analytically.
+        Overload this method if you wish to define the integrated transition matrix
+        analytically.
         """
-        F = self.base_model.design_matrix()
         t1 = self.coord_to_sortable(X1)
         t2 = self.coord_to_sortable(X2)
         dt = t2 - t1
-        return Phibar_from_VanLoan(F, dt)
+        F = self.base_model.design_matrix()
+        T, rate = self.state_scales(), self.rate
+
+        def closed_form(dt):
+            A = self.base_model.transition_matrix(jnp.zeros(()), dt)
+            return smolgp.helpers.rescaled_solve(F, A - jnp.eye(self.d), T, rate)
+
+        def short_step(dt):
+            return smolgp.helpers.integrated_short_step_Phibar(F, dt, T, rate)
+
+        return jax.lax.cond(rate * jnp.abs(dt) < 1.0, short_step, closed_form, dt)
 
     def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
         """
@@ -181,34 +213,54 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         return PHIAUG
 
     def integrated_process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
-        """
+        r"""
         Computes the submatrices Qaug12, Qaug21, and Qaug22
         needed to assemble the augmented process noise matrix.
 
-        By default uses the Van Loan method to compute these submatrices.
+        By default, uses a closed form from the stationary covariance, analogous
+        to :math:`Q = P_\infty - A P_\infty A^T` for the base process.
+        With ``z`` integrating ``h x`` (``h`` picks base state 0),
+
+        .. math::
+
+            \tilde Q_{12} = \bar\Phi P_\infty h^T - A P_\infty \bar\Phi^T h^T, \qquad
+            \tilde Q_{22} = 2\, h \bar{\bar\Phi} P_\infty h^T - h \bar\Phi P_\infty \bar\Phi^T h^T,
+
+        with :math:`\bar\Phi = F^{-1}(A - I)` and :math:`\bar{\bar\Phi} = F^{-1}(\bar\Phi - \Delta I)`.
+        This only exponentiates :math:`F` (through the base transition matrix), never
+        :math:`-F`, so it does not overflow over long steps. For short steps
+        (``rate * dt < 1``) :math:`\tilde Q_{22}` loses precision to cancellation, so
+        Van Loan is used instead. See the "Integrated process noise" tutorial for the
+        derivation.
+
         Overload this method if you wish to define these submatrices analytically.
         """
-
         t1 = self.coord_to_sortable(X1)
         t2 = self.coord_to_sortable(X2)
         dt = t2 - t1
-        F = self.base_model.design_matrix()
-        L = self.base_model.noise_effect_matrix()
-        Qc = self.base_model.noise()
+        b = self.base_model
+        F = b.design_matrix()
+        T, rate = self.state_scales(), self.rate
 
-        vanloan = smolgp.helpers.VanLoan(F, L, Qc, dt)
-        F3 = vanloan["F3"]
-        H2 = vanloan["H2"]
-        K1 = vanloan["K1"]
+        def closed_form(dt):
+            A = b.transition_matrix(jnp.zeros(()), dt)
+            Pinf = b.stationary_covariance()
+            I = jnp.eye(self.d)
+            h = I[:, :1]  # z integrates base state 0
+            Phibar = smolgp.helpers.rescaled_solve(F, A - I, T, rate)
+            Phibarbar = smolgp.helpers.rescaled_solve(F, Phibar - dt * I, T, rate)
+            Qaug12 = Phibar @ Pinf @ h - A @ Pinf @ Phibar.T @ h
+            Qaug22 = 2 * h.T @ Phibarbar @ Pinf @ h - h.T @ Phibar @ Pinf @ Phibar.T @ h
+            return Qaug12, Qaug22
 
-        M = F3.T @ H2
-        F3TK1 = F3.T @ K1
-        W = F3TK1 + F3TK1.T
+        def short_step(dt):
+            L, Qc = b.noise_effect_matrix(), b.noise()
+            return smolgp.helpers.integrated_short_step_noise(F, L, Qc, dt, T, rate)
 
-        Qaug12 = M[:, :1]
-        Qaug21 = Qaug12.T
-        Qaug22 = W[:1, :1]
-        return Qaug12, Qaug21, Qaug22
+        Qaug12, Qaug22 = jax.lax.cond(
+            rate * jnp.abs(dt) < 1.0, short_step, closed_form, dt
+        )
+        return Qaug12, Qaug12.T, Qaug22
 
     # @partial(
     #     jax.jit,
@@ -231,8 +283,8 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         t2 = self.coord_to_sortable(X2)
         dt = t2 - t1
         if force_numerical:
-            Qaug12, Qaug21, Qaug22 = super(type(self), self).integrated_process_noise(
-                X1, X2
+            Qaug12, Qaug21, Qaug22 = IntegratedStateSpaceModel.integrated_process_noise(
+                self, X1, X2
             )
         else:
             Qaug12, Qaug21, Qaug22 = self.integrated_process_noise(X1, X2)
@@ -446,27 +498,9 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             omega=self.omega, quality=self.quality, sigma=self.sigma
         )
 
-    def _numerical(self, dt: JAXArray) -> tuple[JAXArray, JAXArray]:
-        """The augmented ``[x; z]`` process noise and the base Phibar, computed
-        numerically in time units of the process's fastest rate.
-
-        Rescaling keeps these accurate, and free of overflow, for slow kernels,
-        where ``F`` in the caller's time units is badly scaled.
-        """
-        d = self.d
-        F = self.base_model.design_matrix()
-        L = self.base_model.noise_effect_matrix()
-        Qc = self.base_model.noise()
-        Faug = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(F).at[d, 0].set(1.0)
-        QL = jnp.zeros((d + 1, d + 1)).at[:d, :d].set(L @ Qc @ L.T)
-        rate = self._rate
-        T = jnp.array([1.0, rate, 1.0 / rate])  # state [x, dx/dt, z = int x dt]
-        Qaug, Phibar_aug = smolgp.helpers.scaled_VanLoan(Faug, QL, dt, T, rate)
-        return Qaug, Phibar_aug[:d, :d]
-
     @property
-    def _rate(self) -> JAXArray:
-        """The fastest rate of the process, for rescaling time"""
+    def rate(self) -> JAXArray:
+        """The fastest rate of the SHO, ``omega * max(1, 1 / Q)``"""
         return self.omega * jnp.maximum(1.0, 1.0 / self.quality)
 
     def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
@@ -484,7 +518,8 @@ class IntegratedSHO(IntegratedStateSpaceModel):
         C = -w / n
 
         def numerical(t1: JAXArray, t2: JAXArray) -> JAXArray:
-            return self._numerical(t2 - t1)[1]
+            # Short-step Van Loan / long-step closed form from the base class
+            return IntegratedStateSpaceModel.integrated_transition_matrix(self, t1, t2)
 
         def underdamped(t1: JAXArray, t2: JAXArray) -> JAXArray:
             ## General integral from t1->t2:
@@ -573,10 +608,20 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             return Qaug12, Qaug21, Qaug22
 
         def numerical(dt: JAXArray) -> JAXArray:
-            Qaug, _ = self._numerical(dt)
-            d = self.d
-            Qaug12 = Qaug[:d, d:]
-            return Qaug12, Qaug12.T, Qaug[d:, d:]
+            # Short-step Van Loan / long-step closed form from the base class
+            return IntegratedStateSpaceModel.integrated_process_noise(
+                self, jnp.zeros(()), dt
+            )
+
+        def short_step(dt: JAXArray) -> JAXArray:
+            # Rescaled Van Loan directly, not the base class's hybrid: under
+            # vmap a nested cond would evaluate its closed form too
+            b = self.base_model
+            F, L, Qc = b.design_matrix(), b.noise_effect_matrix(), b.noise()
+            Qaug12, Qaug22 = smolgp.helpers.integrated_short_step_noise(
+                F, L, Qc, dt, self.state_scales(), self.rate
+            )
+            return Qaug12, Qaug12.T, Qaug22
 
         def underdamped_or_short(dt: JAXArray) -> JAXArray:
             # The closed form for Qaug22 subtracts O(1) terms that must cancel
@@ -584,7 +629,9 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             # ~1e-8 at rate*dt = 0.05, but useless below ~1e-3 (e.g. a slow,
             # rotation-like SHO over one exposure). Van Loan in rescaled units
             # is accurate for short steps.
-            return jax.lax.cond(self._rate * jnp.abs(dt) < 0.05, numerical, underdamped, dt)
+            return jax.lax.cond(
+                self.rate * jnp.abs(dt) < 0.05, short_step, underdamped, dt
+            )
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),
@@ -633,6 +680,11 @@ class IntegratedExp(IntegratedStateSpaceModel):
         self.base_model = smolgp.kernels.Exp(scale=self.scale, sigma=self.sigma)
         self.lam = self.base_model.lam
 
+    @property
+    def rate(self) -> JAXArray:
+        """The base process's rate, ``1 / scale`` up to a constant"""
+        return self.lam
+
 
 class IntegratedMatern32(IntegratedStateSpaceModel):
     r"""The :class:`~smolgp.kernels.Matern32` kernel integrated over a finite time range :math:`\delta`.
@@ -667,6 +719,11 @@ class IntegratedMatern32(IntegratedStateSpaceModel):
         self.num_insts = num_insts
         self.base_model = smolgp.kernels.Matern32(scale=self.scale, sigma=self.sigma)
         self.lam = self.base_model.lam
+
+    @property
+    def rate(self) -> JAXArray:
+        """The base process's rate, ``1 / scale`` up to a constant"""
+        return self.lam
 
 
 class IntegratedMatern52(IntegratedStateSpaceModel):
@@ -703,6 +760,11 @@ class IntegratedMatern52(IntegratedStateSpaceModel):
         self.base_model = smolgp.kernels.Matern52(scale=self.scale, sigma=self.sigma)
         self.lam = self.base_model.lam
 
+    @property
+    def rate(self) -> JAXArray:
+        """The base process's rate, ``1 / scale`` up to a constant"""
+        return self.lam
+
 
 class IntegratedCosine(IntegratedStateSpaceModel):
     r"""The :class:`~smolgp.kernels.Cosine` kernel integrated over a finite time range :math:`\delta`.
@@ -737,3 +799,12 @@ class IntegratedCosine(IntegratedStateSpaceModel):
         self.num_insts = num_insts
         self.base_model = smolgp.kernels.Cosine(scale=self.scale, sigma=self.sigma)
         self.omega = self.base_model.omega
+
+    @property
+    def rate(self) -> JAXArray:
+        """The cosine's angular frequency"""
+        return self.omega
+
+    def state_scales(self) -> JAXArray:
+        """The cosine's two states are a rotating pair of equal size"""
+        return jnp.ones(self.d)

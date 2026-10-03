@@ -4,7 +4,6 @@ import jax
 import jax.numpy as jnp
 
 from smolgp.helpers import kalman_gain, transition_sequence
-from smolgp.solvers.base import log_prob_from_v_S
 
 
 def IntegratedKalmanFilter(
@@ -65,8 +64,7 @@ def integrated_kalman_filter(
     """
 
     H = jax.vmap(H_aug)(X)
-    # map_noise: see transition_sequence; IntegratedSHO's Q switches per step
-    A_all, Q_all = transition_sequence(A_aug, Q_aug, t_states, map_noise=True)
+    A_all, Q_all = transition_sequence(A_aug, Q_aug, t_states)
 
     @jax.jit
     def step(carry, data):
@@ -129,7 +127,9 @@ def integrated_kalman_filter(
 
 
 @jax.jit
-def integrated_kalman_gains(A_aug, H_aug, RESET, R, X, t_states, obsid, instid, stateid, P_predicted):
+def integrated_kalman_gains(
+    A_aug, H_aug, RESET, R, X, t_states, obsid, instid, stateid, P_predicted
+):
     """
     The `y`-independent per-state quantities needed to replay
     integrated_kalman_filter's mean-path recursion for many different
