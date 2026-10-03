@@ -59,6 +59,7 @@ release = smolgp.__version__
 
 html_theme = "sphinx_book_theme"
 html_static_path = ["_static"]
+html_js_files = ["scroll-to-hash.js"]  # re-scroll to #targets after MathJax
 html_title = "smolgp"
 html_logo = "_static/smolgp-logo.png"
 html_favicon = "_static/favicon.png"
@@ -68,8 +69,8 @@ html_theme_options = {
     "repository_url": "https://github.com/smolgp-dev/smolgp/",
     "repository_branch": "main",
     "launch_buttons": {
-    #     "binderhub_url": "https://mybinder.org",
-    #     "notebook_interface": "jupyterlab",
+        #     "binderhub_url": "https://mybinder.org",
+        #     "notebook_interface": "jupyterlab",
         "colab_url": "https://colab.research.google.com/",
     },
     "use_edit_page_button": True,
