@@ -37,7 +37,13 @@ dev = [
     "matplotlib>=3.10.6",
     "sphinx-autobuild>=2025.8.25",
 ]
-test = ["pytest", "pytest-xdist", "pytest-cov", "tinygp>=0.3.2.dev0"]
+test = [
+    "pytest", 
+    "pytest-xdist", 
+    "pytest-cov", 
+    "pytest-shard", 
+    "tinygp>=0.3.2.dev0"
+    ]
 docs = [
     "myst-nb",
     "myst-parser>=4.0.1",

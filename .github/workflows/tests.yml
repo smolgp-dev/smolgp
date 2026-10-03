@@ -6,19 +6,26 @@ on:
       - main
     tags:
       - "*"
+    # Skip tests when a push/PR only touches docs
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".readthedocs.y*ml"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - ".readthedocs.y*ml"
 
 jobs:
   tests:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false  # let the other shards finish if one fails
       matrix:
-        # Python versions to test, and which to use x64 with
-        python-version: ["3.11"]
-        x64: ["0"]
-        include:
-          - python-version: "3.13"
-            x64: "1"
+        python-version: ["3.11", "3.13"]
+        # Split the suite across runners (4 cores each) to cut wall time
+        shard: [0, 1, 2, 3]
     steps:
       # Setup uv: https://docs.astral.sh/uv/guides/integration/github/#using-uv-pip
       - uses: actions/checkout@v5
@@ -28,7 +35,9 @@ jobs:
       # Run tests
       - name: Run tests
         run: |
-          uv run --group test --python ${{ matrix.python-version }} -m pytest --cov --cov-branch --cov-report=xml -n auto tests
+          uv run --group test --python ${{ matrix.python-version }} -m pytest \
+            --shard-id=${{ matrix.shard }} --num-shards=4 \
+            --cov --cov-branch --cov-report=xml -n auto tests
         env:
           # JAX_ENABLE_X64: ${{ matrix.x64 }}
           JAX_ENABLE_X64: 1
