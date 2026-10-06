@@ -3,11 +3,12 @@ import jax.numpy as jnp
 import tinygp
 
 import smolgp
+from tests.utils import allclose
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
 
-OFFSET = float(jnp.sqrt(jnp.finfo(jnp.array([0.0])).eps))  # tinygp variance jitter
+OFFSET = float(jnp.sqrt(jnp.finfo(jnp.float64).eps))  # tinygp variance jitter
 
 
 def _build_dataset(Ninst, key, solver=None, Nobs=None):
@@ -22,9 +23,7 @@ def _build_dataset(Ninst, key, solver=None, Nobs=None):
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
     true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
-    kernel_smol = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
-    )
+    kernel_smol = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
     kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
     if Nobs is None:
@@ -71,9 +70,7 @@ def _build_dataset(Ninst, key, solver=None, Nobs=None):
     gp_smol = smolgp.GaussianProcess(
         kernel=kernel_smol, X=X_train, noise=jnp.full(t.shape, yerr**2), **kwargs
     )
-    gp_tiny = tinygp.GaussianProcess(
-        kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2)
-    )
+    gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2))
     return {
         "t": t,
         "texp": texp,
@@ -101,9 +98,7 @@ def _assert_matches_tiny(d, X_test, tol=1e-8, label=""):
     diff_v = float(jnp.max(jnp.abs(var_smol - var_tiny)))
     assert diff_m < tol, f"[{label}] mean mismatch vs tinygp: {diff_m:.3e}"
     assert diff_v < tol, f"[{label}] var mismatch vs tinygp: {diff_v:.3e}"
-    print(
-        f"    ...[{label}] matches tinygp: max|dmean|={diff_m:.2e}, max|dvar|={diff_v:.2e}"
-    )
+    print(f"    ...[{label}] matches tinygp: max|dmean|={diff_m:.2e}, max|dvar|={diff_v:.2e}")
     return mu_smol, var_smol
 
 
@@ -174,9 +169,7 @@ def test_predict_exposure_instids_noeffect_in_shared_model():
         mu, var = condgp.predict(X_test, y=y, return_var=True)
         mus.append(mu)
         varss.append(var)
-    assert jnp.allclose(mus[0], mus[1], atol=1e-12), (
-        "instid_star changed the predicted mean"
-    )
+    assert jnp.allclose(mus[0], mus[1], atol=1e-12), "instid_star changed the predicted mean"
     assert jnp.allclose(varss[0], varss[1], atol=1e-12), (
         "instid_star changed the predicted variance"
     )
@@ -218,9 +211,7 @@ def test_predict_exposure_reproduces_training_point():
         mu_pred, var_pred = condgp.predict(X_test, y=y, return_var=True)
 
         mu_at_data, var_at_data = condgp.loc, condgp.variance
-        assert jnp.allclose(mu_pred, mu_at_data[idx], atol=1e-8), (
-            "doesn't reproduce training mean"
-        )
+        assert jnp.allclose(mu_pred, mu_at_data[idx], atol=1e-8), "doesn't reproduce training mean"
         assert jnp.allclose(var_pred, var_at_data[idx], atol=1e-8), (
             "doesn't reproduce training variance"
         )
@@ -255,9 +246,7 @@ def test_predict_exposure_zero_delta_matches_instantaneous():
         mu_exp, var_exp = condgp.predict(X_exp, y=y, return_var=True)
         diff_m = float(jnp.abs(mu_exp - mu_inst))
         diff_v = float(jnp.abs(var_exp - var_inst))
-        print(
-            f"    ...delta={tiny_delta:.0e}: |dmean|={diff_m:.2e}, |dvar|={diff_v:.2e}"
-        )
+        print(f"    ...delta={tiny_delta:.0e}: |dmean|={diff_m:.2e}, |dvar|={diff_v:.2e}")
         assert diff_m < 10 * tiny_delta, (
             f"mean doesn't converge to instantaneous as delta->0 ({diff_m:.3e})"
         )
@@ -281,9 +270,7 @@ def test_predict_exposure_recalls_y_automatically():
 
     assert jnp.all(jnp.isfinite(mu_recalled)), "recalled y prediction has NaN/Inf"
     assert jnp.array_equal(mu_explicit, mu_recalled), "recalled y gave a different mean"
-    assert jnp.array_equal(var_explicit, var_recalled), (
-        "recalled y gave a different variance"
-    )
+    assert jnp.array_equal(var_explicit, var_recalled), "recalled y gave a different variance"
     print("    ...predict() correctly recalls y from ConditionedStates")
 
 
@@ -326,10 +313,7 @@ def _dense_cov(integrated, instantaneous, X1, X2):
         a = (t1[i], d1[i], 0)
         b = (t2[j], d2[j], 0)
         c = sum(kern.evaluate(a, b) for kern in integrated)
-        c += sum(
-            kern.evaluate(t1[i] + d1[i] / 2, t2[j] + d2[j] / 2)
-            for kern in instantaneous
-        )
+        c += sum(kern.evaluate(t1[i] + d1[i] / 2, t2[j] + d2[j] / 2) for kern in instantaneous)
         return c
 
     rows, cols = jnp.arange(len(t1)), jnp.arange(len(t2))
@@ -353,15 +337,11 @@ def test_predict_exposure_sum_product_wrapper():
     k_slow = smolgp.kernels.IntegratedSHO(
         omega=0.05, quality=1 / jnp.sqrt(2.0), sigma=0.7, name="slow"
     )
-    k_qp = smolgp.kernels.Quasiperiodic(
-        sigma=0.5, period=30.0, gamma=1.0, scale=60.0, name="qp"
-    )
+    k_qp = smolgp.kernels.Quasiperiodic(sigma=0.5, period=30.0, gamma=1.0, scale=60.0, name="qp")
     k_scaled = smolgp.kernels.base.Scale(kernel=k_fast, scale=1.5, name="scaled")
     kernel = k_scaled + k_slow + k_qp
 
-    gp = smolgp.GaussianProcess(
-        kernel=kernel, X=X_train, noise=jnp.full(y.shape, yerr**2)
-    )
+    gp = smolgp.GaussianProcess(kernel=kernel, X=X_train, noise=jnp.full(y.shape, yerr**2))
     _, condgp = gp.condition(y)
 
     t_stars = jnp.array([5.0, 10.0, 10.0, 50.0, 2.0, 99.0, -10.0, 115.0, 20.0, 30.0])
@@ -431,9 +411,7 @@ def test_predict_exposure_is_integral():
 
     diff = float(jnp.abs(jnp.asarray(mu_exp).reshape(()) - mu_quad))
     print(f"    ...predict_exposure is the integral of predict: |dmean|={diff:.2e}")
-    assert diff < 1e-6, (
-        f"predict_exposure does not match the integral of predict: {diff:.3e}"
-    )
+    assert diff < 1e-6, f"predict_exposure does not match the integral of predict: {diff:.3e}"
 
 
 def test_condition_with_X_test_matches_condition_then_predict():
@@ -471,9 +449,7 @@ def test_condition_with_X_test_matches_condition_then_predict():
             t = jnp.sort(jax.random.uniform(k1, (N,), minval=0.0, maxval=50.0))
             y = jax.random.normal(k2, (N,))
             kwargs = {} if solver is None else {"solver": solver}
-            gp = smolgp.GaussianProcess(
-                kernel_plain, X=t, noise=jnp.full(N, 0.01), **kwargs
-            )
+            gp = smolgp.GaussianProcess(kernel_plain, X=t, noise=jnp.full(N, 0.01), **kwargs)
             t_test = jnp.linspace(-10.0, 60.0, 13)
 
             _, condgp_two_step = gp.condition(y)
@@ -517,6 +493,31 @@ def test_condition_with_X_test_matches_condition_then_predict():
         assert dv < 1e-10, f"[{sname}] inline vs two-step var: {dv:.3e}"
 
 
+def test_integrated_predict_two_tuple_X_test():
+    """(t, texp) test points must behave like (t, texp, zeros) for a single instrument"""
+    t = jnp.arange(30) * 10.0
+    texp = jnp.full(30, 3.0)
+    y = jnp.sin(t / 20.0)
+    t_test = jnp.linspace(5.0, 280.0, 7)
+    texp_test = jnp.full(7, 3.0)
+    X2 = (t_test, texp_test)
+    X3 = (t_test, texp_test, jnp.zeros_like(t_test, dtype=int))
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.3, quality=3.0, sigma=1.0)
+    for solver in [
+        smolgp.solvers.IntegratedStateSpaceSolver,
+        smolgp.solvers.ParallelIntegratedStateSpaceSolver,
+    ]:
+        gp = smolgp.GaussianProcess(kernel, (t, texp), noise=0.1, solver=solver)
+        _, cond = gp.condition(y)
+        mu2, var2 = cond.predict(X2, return_var=True)
+        mu3, var3 = cond.predict(X3, return_var=True)
+        allclose("predict mean", mu2 - mu3, tol=1e-12)
+        allclose("predict var", var2 - var3, tol=1e-12)
+        _, cond2 = gp.condition(y, X_test=X2)
+        _, cond3 = gp.condition(y, X_test=X3)
+        allclose("condition(X_test) mean", cond2.loc - cond3.loc, tol=1e-12)
+
+
 if __name__ == "__main__":
     test_predict_exposure_within_one_gap()
     test_predict_exposure_spans_multiple_states()
@@ -531,4 +532,5 @@ if __name__ == "__main__":
     test_predict_exposure_is_integral()
     test_predict_exposure_sum_product_wrapper()
     test_condition_with_X_test_matches_condition_then_predict()
+    test_integrated_predict_two_tuple_X_test()
     print("All predict() exposure tests passed.")
