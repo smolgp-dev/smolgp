@@ -8,7 +8,7 @@ from tests.test_kernels import (
     likelihood,
     predict,
 )
-from tests.utils import generate_data, generate_integrated_data
+from tests.utils import allclose, generate_data, generate_integrated_data
 
 key = jax.random.PRNGKey(0)
 jax.config.update("jax_enable_x64", True)
@@ -80,6 +80,40 @@ def test_parallel():
     predict(gp_smol, gp_tiny, y_train, tol=1e-9, atol=1e-12)
 
 
+def test_parallel_1d_state():
+    """Kernels with 1 state dimension (e.g., Exp) must match the sequential solver"""
+    t = jnp.sort(jax.random.uniform(key, (50,), maxval=20.0))
+    y = jnp.sin(t)
+    kernels = {
+        "Exp": smolgp.kernels.Exp(scale=1.0, sigma=1.2),
+        "2*Exp": 2.0 * smolgp.kernels.Exp(scale=1.0),
+        "Constant": smolgp.kernels.Constant(sigma=1.5),
+    }
+    for name, kernel in kernels.items():
+        gp_seq = smolgp.GaussianProcess(kernel, t, noise=0.1)
+        gp_par = smolgp.GaussianProcess(
+            kernel,
+            t,
+            noise=0.1,
+            solver=smolgp.solvers.ParallelStateSpaceSolver,
+        )
+        allclose(
+            f"{name} likelihood",
+            gp_par.log_probability(y) - gp_seq.log_probability(y),
+            tol=1e-10,
+            atol=1e-13,
+        )
+        _, cond_seq = gp_seq.condition(y)
+        _, cond_par = gp_par.condition(y)
+        allclose(f"{name} conditioned mean", cond_par.loc - cond_seq.loc, tol=1e-10)
+        allclose(
+            f"{name} conditioned variance",
+            cond_par.variance - cond_seq.variance,
+            tol=1e-10,
+        )
+
+
 if __name__ == "__main__":
     test_parallel()
+    test_parallel_1d_state()
     print("All parallel solver tests passed.")
