@@ -448,6 +448,14 @@ class GaussianProcess(eqx.Module):
                 stacklevel=2,
             )
 
+        # Ensure t and texp in the X tuple are floats to avoid a later bug
+        # instid which is optional and needs to be an integer is handled slightly separately
+        X = (
+            jnp.asarray(X, float)
+            if not isinstance(X, tuple)
+            else (jnp.asarray(X[0], float), jnp.asarray(X[1], float), *X[2:])
+        )
+
         # First, assign unique kernel names if needed
         if use_unique_names:
             self.kernel = assign_unique_kernel_names(kernel)
@@ -480,9 +488,7 @@ class GaussianProcess(eqx.Module):
                 t_coord, _texp, instid = X
                 instid = jnp.asarray(instid)
                 if not jnp.issubdtype(instid.dtype, jnp.integer):
-                    raise ValueError(
-                        f"instid must be an integer array, got dtype {instid.dtype}"
-                    )
+                    raise ValueError(f"instid must be an integer array, got dtype {instid.dtype}")
                 if instid.shape[0] != jnp.shape(t_coord)[0]:
                     raise ValueError(
                         "instid must have the same length as the data coordinates "
@@ -796,9 +802,7 @@ class GaussianProcess(eqx.Module):
         # convoluted since we need to support arbitrary pytrees.
         if X_test is not None:
             matches = jax.tree_util.tree_map(
-                lambda a, b: (
-                    jnp.ndim(a) == jnp.ndim(b) and jnp.shape(a)[1:] == jnp.shape(b)[1:]
-                ),
+                lambda a, b: jnp.ndim(a) == jnp.ndim(b) and jnp.shape(a)[1:] == jnp.shape(b)[1:],
                 self.X,
                 X_test,
             )
@@ -852,9 +856,7 @@ class GaussianProcess(eqx.Module):
         else:
             # Otherwise use the observation model of the passed
             # kernel, where we zero out all the other components
-            observation_model = lambda X: self.kernel.observation_model(
-                X, component=kernel.name
-            )
+            observation_model = lambda X: self.kernel.observation_model(X, component=kernel.name)
 
         if X_test is not None:
             # If X_test was given, also predict at those points.
@@ -970,9 +972,7 @@ class GaussianProcess(eqx.Module):
                     else:
                         # extract component kernel & project
                         name = kernel if isinstance(kernel, str) else kernel.name
-                        H_comp = lambda X: self.kernel.observation_model(
-                            X, component=name
-                        )
+                        H_comp = lambda X: self.kernel.observation_model(X, component=name)
                         mu, var = self.states.project_at_data(H_comp)
             else:
                 # Predicting at new test points
@@ -993,20 +993,14 @@ class GaussianProcess(eqx.Module):
                 if return_full_state:
                     mu = mean
                     var = variance
-                    return PredictedStates(
-                        t_states=X_test, m=mu, P=var, kernel=self.kernel
-                    )
+                    return PredictedStates(t_states=X_test, m=mu, P=var, kernel=self.kernel)
                 else:
                     if kernel is not None:
                         name = kernel if isinstance(kernel, str) else kernel.name
-                        H_test = lambda X: self.kernel.observation_model(
-                            X, component=name
-                        )
+                        H_test = lambda X: self.kernel.observation_model(X, component=name)
                     H = jax.vmap(H_test)(X_test)
                     mu = jax.vmap(lambda H_i, m: H_i @ m)(H, mean).squeeze()
-                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(
-                        H, variance
-                    ).squeeze()
+                    var = jax.vmap(lambda H_i, P: H_i @ P @ H_i.T)(H, variance).squeeze()
 
         if return_var:
             return mu, var
@@ -1092,9 +1086,7 @@ class GaussianProcess(eqx.Module):
             )
             instid_group = assign_instids(t_test, delta_test, n_probe)
             instid_proj = (
-                jnp.asarray(X_test[2])
-                if len(X_test) > 2
-                else jnp.zeros_like(instid_group)
+                jnp.asarray(X_test[2]) if len(X_test) > 2 else jnp.zeros_like(instid_group)
             )
             X_test = (t_test, delta_test, instid_group)
         return self._sample(key, shape, X_test, n_probe, instid_proj)
@@ -1189,15 +1181,11 @@ class GaussianProcess(eqx.Module):
                 # Conditioned GP: posterior samples of the latent function,
                 # i.e. no extra observation noise on top, to match tinygp, whose
                 #   conditioned .sample() reproduces condGP.variance (no +noise)
-                residual_batch = self.states.y[None, :] - (
-                    prior_obs_batch + noise_batch
-                )
+                residual_batch = self.states.y[None, :] - (prior_obs_batch + noise_batch)
 
                 # The batched-mean conditioning path is only implemented for the non-parallel solvers
                 if type(self.solver) in (StateSpaceSolver, IntegratedStateSpaceSolver):
-                    m_smoothed_batch = self.solver.condition_batched_mean(
-                        residual_batch
-                    )
+                    m_smoothed_batch = self.solver.condition_batched_mean(residual_batch)
                     resid_mean_obs_batch = jax.vmap(
                         lambda m: project_trajectory_at_data(
                             X_at_states,
@@ -1210,12 +1198,8 @@ class GaussianProcess(eqx.Module):
                 else:
                     # Parallel solvers fall back to the unoptimized per-sample conditioning
                     def _one_condition(residual_i: JAXArray) -> JAXArray:
-                        _, resid_conditioned_states, _ = self.solver.condition(
-                            residual_i
-                        )
-                        _, _, (m_smoothed_resid, _P_smoothed_resid) = (
-                            resid_conditioned_states
-                        )
+                        _, resid_conditioned_states, _ = self.solver.condition(residual_i)
+                        _, _, (m_smoothed_resid, _P_smoothed_resid) = resid_conditioned_states
                         return project_trajectory_at_data(
                             X_at_states,
                             state_coords,
@@ -1267,9 +1251,7 @@ class GaussianProcess(eqx.Module):
                 X_test_proj = (t_test, delta_test, instid_proj)
 
                 def _one_sample(sample_key: jax.random.KeyArray) -> JAXArray:
-                    x_traj = sample_prior_trajectory(
-                        kernel_ext, merged_coords, sample_key
-                    )
+                    x_traj = sample_prior_trajectory(kernel_ext, merged_coords, sample_key)
                     return project_exposure_test_points(
                         X_test_proj,
                         kernel_ext,
@@ -1288,9 +1270,7 @@ class GaussianProcess(eqx.Module):
                 positions = jnp.argsort(state_coords_test.obsid)
 
                 def _one_sample(sample_key: jax.random.KeyArray) -> JAXArray:
-                    x_traj = sample_prior_trajectory(
-                        self.kernel, state_coords_test, sample_key
-                    )
+                    x_traj = sample_prior_trajectory(self.kernel, state_coords_test, sample_key)
                     return project_trajectory_at_positions(
                         X_test, positions, x_traj, self.kernel.observation_model
                     )
@@ -1351,9 +1331,7 @@ class GaussianProcess(eqx.Module):
             prior_obs_train_batch, prior_obs_test_batch, noise_batch = jax.vmap(
                 _prior_obs_and_noise
             )(keys)
-            residual_batch = self.states.y[None, :] - (
-                prior_obs_train_batch + noise_batch
-            )
+            residual_batch = self.states.y[None, :] - (prior_obs_train_batch + noise_batch)
 
             H_test = jax.vmap(self.kernel.observation_model)(X_test_proj)
 
@@ -1388,9 +1366,7 @@ class GaussianProcess(eqx.Module):
             N_train = self.states.y.shape[0]
             t_test = self.kernel.coord_to_sortable(X_test)
             N_out = jnp.shape(jax.tree_util.tree_leaves(X_test)[0])[0]
-            merged_coords, train_positions, test_positions = merge_test_coords(
-                state_coords, t_test
-            )
+            merged_coords, train_positions, test_positions = merge_test_coords(state_coords, t_test)
             train_idx = data_order_indices(state_coords, N_train)
             merged_train_idx = train_positions[train_idx]
 
@@ -1415,9 +1391,7 @@ class GaussianProcess(eqx.Module):
             prior_obs_train_batch, prior_obs_test_batch, noise_batch = jax.vmap(
                 _prior_obs_and_noise
             )(keys)
-            residual_batch = self.states.y[None, :] - (
-                prior_obs_train_batch + noise_batch
-            )
+            residual_batch = self.states.y[None, :] - (prior_obs_train_batch + noise_batch)
 
             H_test = jax.vmap(self.kernel.observation_model)(X_test)
 
@@ -1433,9 +1407,7 @@ class GaussianProcess(eqx.Module):
                     resid_conditioned_states,
                     v_S,
                 )
-                resid_mean, _resid_var = self.solver.predict(
-                    X_test, resid_conditioned_results
-                )
+                resid_mean, _resid_var = self.solver.predict(X_test, resid_conditioned_results)
                 # Squeeze only the trailing D axis, not a blanket .squeeze()
                 # otherwise a single test point (N_test==1) would also
                 # collapse the N_test axis, breaking the shape needed to
@@ -1480,9 +1452,7 @@ class GaussianProcess(eqx.Module):
                 component_var (JAXArray)
         """
         if self.states is None:
-            raise ValueError(
-                "The GP must be conditioned before getting component means."
-            )
+            raise ValueError("The GP must be conditioned before getting component means.")
 
         if isinstance(component, str):
             component = [component]
@@ -1520,9 +1490,7 @@ class GaussianProcess(eqx.Module):
             evaluated at the data points.
         """
         if self.states is None:
-            raise ValueError(
-                "The GP must be conditioned before getting component means."
-            )
+            raise ValueError("The GP must be conditioned before getting component means.")
 
         ## First, extract all kernels
         kernels = extract_leaf_kernels(self.kernel)
@@ -1530,9 +1498,7 @@ class GaussianProcess(eqx.Module):
         ## Loop through and project each component
         results = {}
         for k, kernel in enumerate(kernels):
-            mu, var = self.get_component_mean(
-                component=kernel.name, return_var=True, kwargs=kwargs
-            )
+            mu, var = self.get_component_mean(component=kernel.name, return_var=True, kwargs=kwargs)
             if return_var:
                 results[kernel.name] = (mu, var)
             else:
