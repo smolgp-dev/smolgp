@@ -122,7 +122,7 @@ def make_associative_params(
         P = transition @ P0 @ transition.T  # Q(0,0) = 0
 
         A = Reset
-        b = jnp.squeeze(m)
+        b = m
         C = P
 
         eta = jnp.zeros(state_dim)
@@ -163,7 +163,7 @@ def make_associative_params(
         Kk = jnp.linalg.solve(Sk.T, (Q_dt @ Hk.T).T).T
         factor = I_nx - Kk @ Hk
         A = factor @ Phi_dt
-        b = jnp.squeeze(Kk @ jnp.atleast_1d(yk))
+        b = Kk @ jnp.atleast_1d(yk)
         C = factor @ Q_dt
         C = 0.5 * (C + C.T)
 
