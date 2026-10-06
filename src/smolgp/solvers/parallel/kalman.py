@@ -66,11 +66,11 @@ def make_associative_params(Phi, H_all, Q, R, t, y, m0, P0):
         K = jnp.linalg.solve(S.T, (P @ H0.T).T).T
 
         A = jnp.zeros_like(Phi0)
-        b = jnp.squeeze(m + K @ (y0 - H0 @ m))
+        b = m + K @ (y0 - H0 @ m)
         C = P - K @ S @ K.T
 
         _M = Phi0.T @ H0.T
-        eta = jnp.squeeze(_M @ jnp.linalg.solve(S, jnp.atleast_1d(y0)))
+        eta = _M @ jnp.linalg.solve(S, jnp.atleast_1d(y0))
         J = _M @ jnp.linalg.solve(S, _M.T)
 
         return (A, b, C, eta, J)
@@ -92,11 +92,11 @@ def make_associative_params(Phi, H_all, Q, R, t, y, m0, P0):
         K = jnp.linalg.solve(S.T, (Q_dt @ Hk.T).T).T
 
         A = (I - K @ Hk) @ Phi_dt
-        b = jnp.squeeze(K @ jnp.atleast_1d(y))  # remove atleast_1d?
+        b = K @ jnp.atleast_1d(y)
         C = (I - K @ Hk) @ Q_dt
 
         _M = Phi_dt.T @ Hk.T
-        eta = jnp.squeeze(_M @ jnp.linalg.solve(S, jnp.atleast_1d(y)))
+        eta = _M @ jnp.linalg.solve(S, jnp.atleast_1d(y))
         J = _M @ jnp.linalg.solve(S, _M.T)
 
         return (A, b, C, eta, J)
