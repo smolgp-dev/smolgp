@@ -172,6 +172,18 @@ def assign_num_insts(kernel: StateSpaceModel, num_insts: int) -> StateSpaceModel
     return kernel
 
 
+def fill_default_instid(X):
+    """Append ``instid = 0`` to time-tuple for integrated kernels ``X = (t, texp)``
+
+    ``(t, texp)`` means every measurement comes from a single instrument and
+    the integrated solvers expect ``(t, texp, instid)``.
+    """
+    if isinstance(X, tuple) and len(X) == 2:
+        t, texp = X
+        return (t, texp, jnp.zeros_like(t, dtype=int))
+    return X
+
+
 class ConditionedStates(eqx.Module):
     """
     An object to hold the conditioned means and variances
@@ -478,9 +490,7 @@ class GaussianProcess(eqx.Module):
             )
 
             # X = (t, texp): all measurements come from a single instrument
-            if len(X) == 2:
-                t_coord, texp = X
-                X = (t_coord, texp, jnp.zeros(jnp.shape(t_coord)[0], dtype=int))
+            X = fill_default_instid(X)
 
             # Validate instid's format and reconcile num_insts across any
             # integrated kernel components.
@@ -801,6 +811,8 @@ class GaussianProcess(eqx.Module):
         # (i.e. the dimension of the inputs must match). This is slightly
         # convoluted since we need to support arbitrary pytrees.
         if X_test is not None:
+            if isinstance(self.solver, IntegratedStateSpaceSolver):
+                X_test = fill_default_instid(X_test)
             matches = jax.tree_util.tree_map(
                 lambda a, b: jnp.ndim(a) == jnp.ndim(b) and jnp.shape(a)[1:] == jnp.shape(b)[1:],
                 self.X,
@@ -976,6 +988,8 @@ class GaussianProcess(eqx.Module):
                         mu, var = self.states.project_at_data(H_comp)
             else:
                 # Predicting at new test points
+                if isinstance(self.solver, IntegratedStateSpaceSolver):
+                    X_test = fill_default_instid(X_test)
                 H_test = (
                     self.kernel.observation_model
                     if observation_model is None
