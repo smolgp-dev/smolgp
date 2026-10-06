@@ -72,6 +72,3 @@ ignore = ["E731", # lambda functions
           "E741", # ambiguous variable names (e.g. I)
           "E743", # ambiguous function names (e.g. I)
          ]
-
-[tool.coverage.run]
-source = ["smolgp"]
