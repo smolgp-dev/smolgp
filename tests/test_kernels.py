@@ -183,6 +183,44 @@ def test_kernels():
         print()
 
 
+def test_generic_matern_matches_dedicated():
+    """
+    The generic half-integer Matern (P_inf from a Lyapunov solve, A and Q
+    numerically) reproduces the hand-derived Exp, Matern32, and Matern52
+    """
+    sigma = 2.1
+    dts = jnp.linspace(0, 1000, 50)
+    t, y = jnp.linspace(0, 1000, 300), jnp.sin(jnp.linspace(0, 1000, 300) / 70)
+    noise = jnp.full_like(t, 0.3)
+    dedicated = {0.5: smolgp.kernels.Exp, 1.5: smolgp.kernels.Matern32,
+                 2.5: smolgp.kernels.Matern52}
+    # include extreme scales, where F mixes very different powers of lambda
+    for scale in [1e-2, 83.3, 1e4]:
+        for nu, Kernel in dedicated.items():
+            print(f"Testing Matern(nu={nu}) vs {Kernel.__name__}, scale={scale}...")
+            kgen = smolgp.kernels.Matern(nu=nu, scale=scale, sigma=sigma)
+            kded = Kernel(scale=scale, sigma=sigma)
+
+            # Model matrices; Pinf compared relative to its own diagonal,
+            # since its entries span powers of lambda
+            for name in ["design_matrix", "noise_effect_matrix", "noise"]:
+                a, b = getattr(kgen, name)(), getattr(kded, name)()
+                allclose(name, (a - b) / jnp.max(jnp.abs(b)), tol=1e-13)
+            Pg, Pd = kgen.stationary_covariance(), kded.stationary_covariance()
+            D = jnp.sqrt(jnp.diag(Pd))
+            allclose("stationary_covariance", (Pg - Pd) / jnp.outer(D, D), tol=1e-13)
+
+            # Kernel function, and the likelihood through the full (jitted) solver
+            kernel_function(kgen, kded, tol=1e-12 * sigma**2, atol=1e-14)
+            llh = [
+                smolgp.GaussianProcess(k, t, noise=noise).log_probability(y)
+                for k in (kgen, kded)
+            ]
+            allclose("likelihood", (llh[0] - llh[1]) / jnp.abs(llh[1]), tol=1e-12)
+            print()
+
+
 if __name__ == "__main__":
     test_kernels()
+    test_generic_matern_matches_dedicated()
     print("All kernel tests passed.")

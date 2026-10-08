@@ -25,7 +25,7 @@ from tinygp.helpers import JAXArray
 from tinygp.kernels.base import Kernel
 from tinygp.solvers.quasisep.block import Block
 
-from smolgp.helpers import Q_from_VanLoan
+from smolgp.helpers import Q_from_VanLoan, solve_continuous_lyapunov
 
 
 def extract_leaf_kernels(kernel, all=False):
@@ -652,7 +652,7 @@ class SHO(StateSpaceModel):
             1 + \omega_0\,\Delta & \mbox{for } Q = 1/2 \\
             \cosh(\eta\,\omega_0\,\Delta) + \frac{1}{2\eta Q} \sinh(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q < 1/2 \\
-            \frac{1}{2\eta Q}\cos(\eta\,\omega_0\,\Delta) + \sin(\eta\,\omega_0\,\Delta)
+            \cos(\eta\,\omega_0\,\Delta) + \frac{1}{2\eta Q}\sin(\eta\,\omega_0\,\Delta)
                 & \mbox{for } Q > 1/2
         \end{array}\right.
 
@@ -1438,7 +1438,7 @@ class Matern(StateSpaceModel):
         sigma (optional): The parameter :math:`\sigma`. Defaults to a value of 1.
     """
 
-    nu: JAXArray | float
+    nu: float = eqx.field(static=True)  # sets the state dimension, so not traced
     scale: JAXArray | float
     sigma: JAXArray | float
     lam: JAXArray | float
@@ -1451,12 +1451,14 @@ class Matern(StateSpaceModel):
         name: str = "Matern",
         **kwargs,
     ):
-        assert jnp.isclose(nu % 1, 0.5), (
+        # Plain Python check (not jnp) so the kernel can be built inside jit;
+        # nu sets the state dimension, so it must be a concrete number anyway
+        assert abs(float(nu) % 1 - 0.5) < 1e-8, (
             "nu must be a half-integer (e.g., 1/2, 3/2, 5/2, etc.)"
         )
         if sigma is None:
             sigma = jnp.ones(())
-        self.nu = nu
+        self.nu = float(nu)
         self.scale = scale
         self.sigma = sigma
         self.name = f"Matern{self.nu * 2:.0f}{2}"
@@ -1503,19 +1505,51 @@ class Matern(StateSpaceModel):
         return jnp.array([[q]])
 
     def stationary_covariance(self) -> JAXArray:
-        r"""The stationary covariance of the Matérn process, :math:`\mathbf{P}_\infty`"""
-        from scipy.linalg import solve_continuous_lyapunov
+        r"""The stationary covariance of the Matérn process, :math:`\mathbf{P}_\infty`
 
-        # TODO: find a JAX version of solve_continuous_lyapunov
-        # or figure out the general form for Pinf analytically
-        print(
-            "Warning: there does not seem to be a JAX implementation "
-            "of solve_continuous_lyapunov, so we use the scipy version here "
-            "for now. This means that this method will not be JIT-compilable."
-        )
-
+        Solves the Lyapunov equation :math:`F P_\infty + P_\infty F^T + L Q_c L^T = 0`
+        in JAX, with the k-th state scaled by :math:`\lambda^k` so that the system
+        stays well conditioned at high order.
+        """
         F = self.design_matrix()
         L = self.noise_effect_matrix()
         Qc = self.noise()
-        LQL = L @ Qc @ L.T
-        return jnp.array(solve_continuous_lyapunov(F, -LQL))
+        T = self.lam ** jnp.arange(self.dimension)
+        return solve_continuous_lyapunov(F, L @ Qc @ L.T, T, self.lam)
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        r"""The transition matrix :math:`A_k` for the Matérn process
+
+        Evaluated with the k-th state scaled by :math:`\lambda^k` and time in
+        units of :math:`1/\lambda`, where :math:`F` is of order one for any
+        length scale (unscaled, ``expm`` returns NaN at high order or extreme
+        scales). For steps :math:`\tau = \lambda\Delta \le 50` this is ``expm``.
+        For longer steps ``expm`` itself overflows, so we use that :math:`F` has
+        characteristic polynomial :math:`(s + \lambda)^d`, making
+        :math:`N = F + \lambda I` nilpotent and the exponential a finite sum,
+
+        .. math::
+
+            A = e^{-\lambda\Delta} \sum_{k=0}^{d-1} \frac{(N\Delta)^k}{k!}.
+
+        This sum is exact but cancels badly for moderate :math:`\tau` at high
+        order, so it is only used once its leading term dominates (or always for
+        :math:`d = 1`, where it is just :math:`e^{-\tau}`).
+        """
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        tau = self.lam * (t2 - t1)  # step in units of the Matern timescale
+        d = self.dimension
+        T = self.lam ** jnp.arange(d)
+        Fs = self.design_matrix() * (T[None, :] / T[:, None]) / self.lam
+
+        # for d = 1 the sum is just exp(-tau): exact, so use it everywhere
+        tau_switch = 50.0 if d > 1 else 0.0
+        A_expm = expm(Fs * jnp.minimum(tau, tau_switch))  # clipped: stays finite
+        term = jnp.eye(d)
+        A_sum = term
+        for k in range(1, d):
+            term = term @ (Fs + jnp.eye(d)) * tau / k
+            A_sum = A_sum + term
+        As = jnp.where(tau <= tau_switch, A_expm, jnp.exp(-tau) * A_sum)
+        return T[:, None] * As / T[None, :]

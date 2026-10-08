@@ -387,6 +387,40 @@ def rescaled_solve(
     return T[:, None] * jnp.linalg.solve(Fs, B / T[:, None]) / rate
 
 
+def solve_continuous_lyapunov(
+    F: JAXArray, Q: JAXArray, T: JAXArray | None = None, rate: JAXArray = 1.0
+) -> JAXArray:
+    r"""Solve the continuous Lyapunov equation :math:`F P + P F^T + Q = 0` for :math:`P`.
+
+    A JAX (and so JIT/autodiff compatible) replacement for
+    :func:`scipy.linalg.solve_continuous_lyapunov`. The equation is linear in
+    :math:`P`, so it is solved directly as the :math:`d^2 \times d^2` system
+    :math:`(F \otimes I + I \otimes F)\,\mathrm{vec}(P) = -\mathrm{vec}(Q)`,
+    which is cheap for the small state dimensions of a state space model.
+
+    With :math:`P = D \tilde P D`, :math:`D = \mathrm{diag}(T)`, the equation keeps its
+    form in rescaled units, so it is solved there for :math:`\tilde P` with
+    :math:`\tilde F = D^{-1} F D / \mathrm{rate}` and :math:`\tilde Q = D^{-1} Q D^{-1} / \mathrm{rate}`.
+    This keeps the system well conditioned when :math:`F` mixes very different scales
+    (e.g. the powers of :math:`\lambda` in a high-order Matérn).
+
+    Args:
+        F: Feedback (design) matrix :math:`F`, with eigenvalues in the open left half-plane.
+        Q: Symmetric right-hand side, e.g. :math:`L Q_c L^T`.
+        T (optional): Diagonal state scaling, as a vector. Defaults to ones.
+        rate (optional): Time scaling, e.g. the kernel's fastest rate. Defaults to 1.
+    """
+    d = F.shape[0]
+    T = jnp.ones(d) if T is None else T
+    Fs = F * (T[None, :] / T[:, None]) / rate
+    Qs = Q / (T[:, None] * T[None, :]) / rate
+    I = jnp.eye(d)
+    K = jnp.kron(Fs, I) + jnp.kron(I, Fs)
+    Ps = jnp.linalg.solve(K, -Qs.reshape(-1)).reshape(d, d)
+    Ps = 0.5 * (Ps + Ps.T)  # symmetric up to round-off
+    return T[:, None] * Ps * T[None, :]
+
+
 def integrated_short_step_Phibar(
     F: JAXArray, dt: JAXArray, T: JAXArray, rate: JAXArray
 ) -> JAXArray:
