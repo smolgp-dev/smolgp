@@ -58,8 +58,7 @@ except ImportError:  # benchmark.py predates the adaptive schedule
                 return n
         return NREPEAT_SCHEDULE[-1][1]
 
-    print("note: benchmark.py has no NREPEAT_SCHEDULE; using a built-in copy",
-          file=sys.stderr)
+    print("note: benchmark.py has no NREPEAT_SCHEDULE; using a built-in copy", file=sys.stderr)
 
 #: Fixed cost per repeat, in seconds -- fork, ``import jax``, unpickling and
 #: compilation, with the two executions of the computation itself already
@@ -273,8 +272,12 @@ def long_run_band(kind, integrated, device):
     curves = GPU_CURVES if device == "gpu" else CPU_CURVES
     ratio = M_PER_N if base in SCALES_WITH_M else None
     cutoffs = size_cutoffs(
-        ram_budget(device=device), base, max_seconds=LONG_RUN_SECONDS,
-        gpu=(device == "gpu"), integrated=integrated, value_and_grad=vg,
+        ram_budget(device=device),
+        base,
+        max_seconds=LONG_RUN_SECONDS,
+        gpu=(device == "gpu"),
+        integrated=integrated,
+        value_and_grad=vg,
     )
     floors = existing_floors(f, cutoffs, m_per_n=ratio)
     data = load_benchmark_data(f)
@@ -301,13 +304,13 @@ def long_run_band(kind, integrated, device):
 
         todo = []
         for size in grid_for(base):
-            x = size * (ratio or 1)          # compare in the cutoff's variable
+            x = size * (ratio or 1)  # compare in the cutoff's variable
             if not (floor < x <= cut):
                 continue
             proj = project_seconds(size, mNs, mts, cost, power)
             todo.append((size, proj))
             if proj > LONG_RUN_SECONDS:
-                break                        # retires here; nothing beyond runs
+                break  # retires here; nothing beyond runs
         # Only bands whose slowest call clears the Tier 2 threshold. The rest
         # are production's business.
         if todo and max(t for _, t in todo) >= LONG_RUN_MIN_SECONDS:
@@ -320,20 +323,29 @@ def build_long_table():
     for kind, integrated, device in sweeps():
         try:
             band = long_run_band(kind, integrated, device)
-        except Exception as exc:                     # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             print(f"  ({label(kind, integrated)} {device}: {exc})", file=sys.stderr)
             continue
         if not band:
             continue
         c = OVERHEAD_SECONDS[(device, integrated)]
         for curve, power, todo in band:
-            secs = sum(2 * t + c for _, t in todo)   # nrepeat = 1
+            secs = sum(2 * t + c for _, t in todo)  # nrepeat = 1
             total += secs
             sizes = ", ".join(f"{s:,}" for s, _ in todo)
             slowest = max(t for _, t in todo)
-            rows.append((secs, label(kind, integrated),
-                         "🟦 CPU" if device == "cpu" else "🟪 GPU",
-                         curve, sizes, power, slowest, secs))
+            rows.append(
+                (
+                    secs,
+                    label(kind, integrated),
+                    "🟦 CPU" if device == "cpu" else "🟪 GPU",
+                    curve,
+                    sizes,
+                    power,
+                    slowest,
+                    secs,
+                )
+            )
     rows.sort(reverse=True)
 
     out = [
@@ -345,10 +357,7 @@ def build_long_table():
             f"| {lab} | {dev} | {curve} | {sizes} | N^{power:.2f} | "
             f"{fmt_secs(slowest)} | {marker(secs / 60)} {fmt_secs(secs)} |"
         )
-    out.append(
-        f"| **TOTAL ({len(rows)} curve-bands)** | | | | | | "
-        f"**{fmt_secs(total)}** |"
-    )
+    out.append(f"| **TOTAL ({len(rows)} curve-bands)** | | | | | | **{fmt_secs(total)}** |")
     return "\n".join(out), total
 
 
@@ -392,14 +401,17 @@ def calibrate(spec):
     c = (wall - 2 * compute) / calls
     print(f"{f}")
     print(f"  wall clock            {wall:9.1f} s")
-    print(f"  repeats (calls)       {calls:9d}"
-          f"   ({'fixed nrepeat=%d' % fixed if fixed else 'adaptive schedule'})")
-    print(f"  compute 2*sum(n*t)    {2 * compute:9.1f} s"
-          f"   ({200 * compute / wall:.0f}% of wall)")
+    print(
+        f"  repeats (calls)       {calls:9d}"
+        f"   ({'fixed nrepeat=%d' % fixed if fixed else 'adaptive schedule'})"
+    )
+    print(f"  compute 2*sum(n*t)    {2 * compute:9.1f} s   ({200 * compute / wall:.0f}% of wall)")
     print(f"  => c                  {c:9.2f} s per repeat")
     if c < 0:
-        print("  WARNING: negative -- the 2t warm-up term already exceeds the"
-              " wall clock, so either the wall clock or the repeat count is wrong")
+        print(
+            "  WARNING: negative -- the 2t warm-up term already exceeds the"
+            " wall clock, so either the wall clock or the repeat count is wrong"
+        )
     return c
 
 
@@ -448,22 +460,35 @@ LONG_END = "<!-- LONG RUN TABLE END -->"
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--write", action="store_true",
-                    help=f"splice the table into run/README.md between {START} and {END}")
-    ap.add_argument("--overhead", default=None, metavar="CPU,GPU",
-                    help="fixed seconds per repeat, overriding both non-int entries "
-                         f"(default {OVERHEAD_SECONDS[('cpu', False)]},"
-                         f"{OVERHEAD_SECONDS[('gpu', False)]}); the --int entries "
-                         "keep their measured offset above these")
-    ap.add_argument("--long-runs", action="store_true",
-                    help="print the Tier 2 (--long-runs-only) projection instead "
-                         "of the production table")
-    ap.add_argument("--calibrate", action="append", default=None,
-                    metavar="PKL,WALL_SECONDS[,NREPEAT]",
-                    help="solve a finished sweep's wall clock for c and exit; "
-                         "repeatable, one per sweep")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--write",
+        action="store_true",
+        help=f"splice the table into run/README.md between {START} and {END}",
+    )
+    ap.add_argument(
+        "--overhead",
+        default=None,
+        metavar="CPU,GPU",
+        help="fixed seconds per repeat, overriding both non-int entries "
+        f"(default {OVERHEAD_SECONDS[('cpu', False)]},"
+        f"{OVERHEAD_SECONDS[('gpu', False)]}); the --int entries "
+        "keep their measured offset above these",
+    )
+    ap.add_argument(
+        "--long-runs",
+        action="store_true",
+        help="print the Tier 2 (--long-runs-only) projection instead of the production table",
+    )
+    ap.add_argument(
+        "--calibrate",
+        action="append",
+        default=None,
+        metavar="PKL,WALL_SECONDS[,NREPEAT]",
+        help="solve a finished sweep's wall clock for c and exit; repeatable, one per sweep",
+    )
     args = ap.parse_args()
 
     if args.calibrate:
@@ -482,8 +507,12 @@ def main():
             text = open(path).read()
             if LONG_START not in text or LONG_END not in text:
                 sys.exit(f"{path} has no {LONG_START} / {LONG_END} markers")
-            text = re.sub(f"{re.escape(LONG_START)}.*?{re.escape(LONG_END)}",
-                          f"{LONG_START}\n{table}\n{LONG_END}", text, flags=re.S)
+            text = re.sub(
+                f"{re.escape(LONG_START)}.*?{re.escape(LONG_END)}",
+                f"{LONG_START}\n{table}\n{LONG_END}",
+                text,
+                flags=re.S,
+            )
             open(path, "w").write(text)
             print(f"\nwrote the Tier 2 table into {path}")
         return
@@ -495,34 +524,39 @@ def main():
             dev: OVERHEAD_SECONDS[(dev, True)] - OVERHEAD_SECONDS[(dev, False)]
             for dev in ("cpu", "gpu")
         }
-        overhead = {("cpu", False): cpu, ("gpu", False): gpu,
-                    ("cpu", True): cpu + int_offset["cpu"],
-                    ("gpu", True): gpu + int_offset["gpu"]}
+        overhead = {
+            ("cpu", False): cpu,
+            ("gpu", False): gpu,
+            ("cpu", True): cpu + int_offset["cpu"],
+            ("gpu", True): gpu + int_offset["gpu"],
+        }
 
     table, (tl, th, n_have, n_miss) = build_table(overhead)
     sched = ", ".join(
-        f"<{lim:g}s->{n}" if lim != float("inf") else f"else->{n}"
-        for lim, n in NREPEAT_SCHEDULE
+        f"<{lim:g}s->{n}" if lim != float("inf") else f"else->{n}" for lim, n in NREPEAT_SCHEDULE
     )
     print(f"repeat schedule: {sched}")
     fixed = ", ".join(
         f"{dev}{'+int' if isint else ''}={overhead[(dev, isint)]:.2f}s"
-        for dev in ("cpu", "gpu") for isint in (False, True)
+        for dev in ("cpu", "gpu")
+        for isint in (False, True)
     )
     print(f"fixed cost per repeat: {fixed}  (+/-{UNCERTAINTY:.0%})")
-    print("model: n x (2t + c) per point -- 2t because each repeat is a fresh"
-          " subprocess that warms up untimed before the timed call\n")
+    print(
+        "model: n x (2t + c) per point -- 2t because each repeat is a fresh"
+        " subprocess that warms up untimed before the timed call\n"
+    )
     print(table)
-    print(f"\n{n_have} sweeps measured, {n_miss} never run; "
-          f"total {tl / 60:.1f}--{th / 60:.1f} h")
+    print(f"\n{n_have} sweeps measured, {n_miss} never run; total {tl / 60:.1f}--{th / 60:.1f} h")
 
     if args.write:
         p = "run/README.md"
         s = open(p).read()
         if START not in s or END not in s:
             sys.exit(f"{p} has no {START} / {END} markers; add them around the table first")
-        s = re.sub(f"{re.escape(START)}.*?{re.escape(END)}",
-                   f"{START}\n{table}\n{END}", s, flags=re.S)
+        s = re.sub(
+            f"{re.escape(START)}.*?{re.escape(END)}", f"{START}\n{table}\n{END}", s, flags=re.S
+        )
         open(p, "w").write(s)
         print(f"\nwrote the table into {p}")
 

@@ -87,9 +87,7 @@ def test_prior_trajectory_integrated():
     for Ninst in (1, 2, 3):
         label = f"IntegratedSHO num_insts={Ninst}"
         print(f"Testing prior trajectory statistics: {label}...")
-        kernel = smolgp.kernels.IntegratedSHO(
-            omega=w, quality=Q, sigma=sigma, num_insts=Ninst
-        )
+        kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
         N = 4 * Ninst
         t = jnp.linspace(0.0, 40.0, N)
         texp = jnp.full(N, 2.0)
@@ -106,9 +104,7 @@ def test_prior_trajectory_ties_are_finite():
     Regression companion to issue #3's zero-length-transition fix, reusing
     the same tie-scenario builder as test_integrated.py."""
     key = jax.random.PRNGKey(2)
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
     for tie in ["start-start", "end-end", "end-start"]:
         t, texp, instid, _tied_t = _tied_exposure_data(tie)
         X = (t, texp, instid)
@@ -116,9 +112,7 @@ def test_prior_trajectory_ties_are_finite():
         state_coords = gp.state_coords
         keys = jax.random.split(key, 500)
         traj = jax.vmap(
-            lambda k, state_coords=state_coords: sample_prior_trajectory(
-                kernel, state_coords, k
-            )
+            lambda k, state_coords=state_coords: sample_prior_trajectory(kernel, state_coords, k)
         )(keys)
         assert jnp.all(jnp.isfinite(traj)), f"[{tie}] trajectory contains NaN/Inf"
     print("    ...tie scenarios: prior trajectory sampling finite throughout")
@@ -152,9 +146,7 @@ def test_prior_sample_smolgp_vs_tinygp():
         print(f"Testing prior sample vs tinygp: {name}...")
         key_smol, key_tiny = jax.random.split(jax.random.PRNGKey(100 + i))
 
-        gp_smol = smolgp.GaussianProcess(
-            kernel=ksmol, X=t, noise=jnp.full(15, noise_val**2)
-        )
+        gp_smol = smolgp.GaussianProcess(kernel=ksmol, X=t, noise=jnp.full(15, noise_val**2))
         samples_smol = gp_smol.sample(key_smol, shape=(M,))  # (N, M)
         assert jnp.all(jnp.isfinite(samples_smol))
         _, cov_emp_smol = _mean_cov(samples_smol)
@@ -166,9 +158,7 @@ def test_prior_sample_smolgp_vs_tinygp():
         )
         print(f"    ...[{name} smolgp] matches its own analytic cov to {diff_smol:.2e}")
 
-        gp_tiny = tinygp.GaussianProcess(
-            kernel=ktiny, X=t, diag=jnp.full(15, noise_val**2)
-        )
+        gp_tiny = tinygp.GaussianProcess(kernel=ktiny, X=t, diag=jnp.full(15, noise_val**2))
         samples_tiny = gp_tiny.sample(key_tiny, shape=(M,))  # (M, N) -- N last!
         assert jnp.all(jnp.isfinite(samples_tiny))
         cov_emp_tiny = jnp.cov(samples_tiny.T)
@@ -200,9 +190,7 @@ def _check_conditioned_sample_matches_condition(gp, y, key, M=50_000, label=""):
     assert diff_mean < 0.05 * jnp.sqrt(scale), (
         f"[{label}] posterior sample mean mismatch: {diff_mean:.3e}"
     )
-    assert diff_var < 0.1 * scale, (
-        f"[{label}] posterior sample variance mismatch: {diff_var:.3e}"
-    )
+    assert diff_var < 0.1 * scale, f"[{label}] posterior sample variance mismatch: {diff_var:.3e}"
     print(
         f"    ...[{label}] posterior samples (M={M}) match condition(): "
         f"|dmean|={diff_mean:.2e}, |dvar|={diff_var:.2e}"
@@ -253,9 +241,7 @@ def test_conditioned_sample_instantaneous_parallel_solver():
 
     diff = float(jnp.max(jnp.abs(samples_seq - samples_par)))
     assert diff < 1e-8, f"parallel vs serial solver sample() mismatch: {diff:.3e}"
-    print(
-        f"    ...parallel solver sample() matches serial to {diff:.2e} (same key, instantaneous)"
-    )
+    print(f"    ...parallel solver sample() matches serial to {diff:.2e} (same key, instantaneous)")
 
 
 def test_conditioned_sample_integrated_serial_and_parallel():
@@ -295,9 +281,7 @@ def test_conditioned_sample_integrated_serial_and_parallel():
 
     diff = float(jnp.max(jnp.abs(samples_seq - samples_par)))
     assert diff < 1e-8, f"parallel vs serial solver sample() mismatch: {diff:.3e}"
-    print(
-        f"    ...parallel solver sample() matches serial to {diff:.2e} (same key/data, Ninst=2)"
-    )
+    print(f"    ...parallel solver sample() matches serial to {diff:.2e} (same key/data, Ninst=2)")
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +298,12 @@ def test_sample_with_no_X_test_uses_training_coords_not_predict_coords():
     with an X_test argument (this is meant to be used for a successive
     call to predict after conditioning, to populate loc and variance at
     the X_test coordinates rather than at the training coordinates)."""
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=1
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=1)
     N = 8
     t = jnp.linspace(0, 20, N)
     texp = jnp.full(N, 1.0)
     instid = jnp.zeros(N, dtype=int)
-    gp = smolgp.GaussianProcess(
-        kernel=kernel, X=(t, texp, instid), noise=jnp.full(N, 0.01)
-    )
+    gp = smolgp.GaussianProcess(kernel=kernel, X=(t, texp, instid), noise=jnp.full(N, 0.01))
     key = jax.random.PRNGKey(42)
     y = gp.sample(key)
 
@@ -346,9 +326,7 @@ def test_sample_with_no_X_test_uses_training_coords_not_predict_coords():
     _, condgp_plain = gp.condition(y)
     mean_emp = jnp.mean(samples, axis=-1)
     diff = float(jnp.max(jnp.abs(mean_emp - condgp_plain.loc)))
-    assert diff < 0.05, (
-        f"sample() at training coords doesn't match condition(y).loc: {diff:.3e}"
-    )
+    assert diff < 0.05, f"sample() at training coords doesn't match condition(y).loc: {diff:.3e}"
     print(
         f"    ...sample() with no X_test correctly uses training coords "
         f"(N={N}) despite condition()'s own X_test (M=5): |dmean|={diff:.2e}"
@@ -376,14 +354,10 @@ def test_condition_batched_mean_matches_condition():
     M = 5
     residual_batch = jax.random.normal(key, (M, 20))
     m_batch_new = gp.solver.condition_batched_mean(residual_batch)
-    m_batch_old = jnp.stack(
-        [gp.solver.condition(residual_batch[i])[1][2][0] for i in range(M)]
-    )
+    m_batch_old = jnp.stack([gp.solver.condition(residual_batch[i])[1][2][0] for i in range(M)])
     diff = float(jnp.max(jnp.abs(m_batch_old - m_batch_new)))
     assert diff < 1e-9, f"plain solver mismatch: {diff:.3e}"
-    print(
-        f"    ...[plain, M={M}] condition_batched_mean matches condition(): {diff:.2e}"
-    )
+    print(f"    ...[plain, M={M}] condition_batched_mean matches condition(): {diff:.2e}")
 
     # Integrated, num_insts in {1, 2}
     for Ninst in (1, 2):
@@ -403,9 +377,7 @@ def test_condition_batched_mean_matches_condition():
 
     # Tie scenario (zero-length transitions) -- exercises get_smoothing_gain's
     # singular-covariance branch inside the new gain functions specifically.
-    tie_kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
-    )
+    tie_kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
     for tie in ["start-start", "end-end", "end-start"]:
         t_tie, texp_tie, instid_tie, _tied_t = _tied_exposure_data(tie)
         gp_tie = smolgp.GaussianProcess(
@@ -414,14 +386,10 @@ def test_condition_batched_mean_matches_condition():
         residual_tie = jnp.sin(0.1 * t_tie)
         m_old_tie = gp_tie.solver.condition(residual_tie)[1][2][0]
         m_new_tie = gp_tie.solver.condition_batched_mean(residual_tie[None, :])[0]
-        assert jnp.all(jnp.isfinite(m_new_tie)), (
-            f"[{tie}] batched-mean produced NaN/Inf"
-        )
+        assert jnp.all(jnp.isfinite(m_new_tie)), f"[{tie}] batched-mean produced NaN/Inf"
         diff_tie = float(jnp.max(jnp.abs(m_old_tie - m_new_tie)))
         assert diff_tie < 1e-7, f"[{tie}] mismatch: {diff_tie:.3e}"
-    print(
-        "    ...tie scenarios: condition_batched_mean matches condition(), finite throughout"
-    )
+    print("    ...tie scenarios: condition_batched_mean matches condition(), finite throughout")
 
 
 def test_condition_batched_mean_is_faster_for_many_samples():
@@ -473,9 +441,7 @@ def test_condition_batched_mean_is_faster_for_many_samples():
     t_old = _time_it(old_fn)
     t_new = _time_it(new_fn)
 
-    print(
-        f"    ...old (lax.map condition): {t_old:.4f}s, new (batched mean): {t_new:.4f}s"
-    )
+    print(f"    ...old (lax.map condition): {t_old:.4f}s, new (batched mean): {t_new:.4f}s")
     assert t_new < 0.2 * t_old, (
         f"expected batched-mean to be at least somewhat faster: old={t_old:.4f}s new={t_new:.4f}s"
     )
@@ -506,9 +472,7 @@ def _check_grid_sample_matches_predict(gp, y, X_test, key, M=3000, label=""):
     assert diff_mean < 0.05 * jnp.sqrt(scale), (
         f"[{label}] grid sample mean mismatch: {diff_mean:.3e}"
     )
-    assert diff_var < 0.1 * scale, (
-        f"[{label}] grid sample variance mismatch: {diff_var:.3e}"
-    )
+    assert diff_var < 0.1 * scale, f"[{label}] grid sample variance mismatch: {diff_var:.3e}"
     print(
         f"    ...[{label}] grid samples (M={M}) match predict(): "
         f"|dmean|={diff_mean:.2e}, |dvar|={diff_var:.2e}"
@@ -574,9 +538,7 @@ def test_exposure_sample_reproduces_training_point():
     d = _build_dataset(2, jax.random.PRNGKey(58))
     gp_smol, y, t, texp, instid = d["gp_smol"], d["y"], d["t"], d["texp"], d["instid"]
     _, condgp = gp_smol.condition(y)
-    samples = condgp.sample(
-        jax.random.PRNGKey(59), shape=(3000,), X_test=(t, texp, instid)
-    )
+    samples = condgp.sample(jax.random.PRNGKey(59), shape=(3000,), X_test=(t, texp, instid))
     mean_emp = jnp.mean(samples, axis=-1)
     diff = float(jnp.max(jnp.abs(mean_emp - condgp.loc)))
     assert diff < 0.05, (
@@ -590,9 +552,7 @@ def test_exposure_sample_reproduces_training_point():
 def test_grid_sample_ties_at_exposure_boundaries():
     """A delta=0 test point exactly at a real exposure start/end must still
     give finite, correct results (zero-length transition to/from it)."""
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
     for tie in ["start-start", "end-end", "end-start"]:
         t_tie, texp_tie, instid_tie, tied_t = _tied_exposure_data(tie)
         gp = smolgp.GaussianProcess(
@@ -628,9 +588,7 @@ def _check_exposure_sample_matches_predict(gp, y, X_test, key, M=3000, label="")
     assert diff_mean < 0.05 * jnp.sqrt(scale), (
         f"[{label}] exposure sample mean mismatch: {diff_mean:.3e}"
     )
-    assert diff_var < 0.15 * scale, (
-        f"[{label}] exposure sample variance mismatch: {diff_var:.3e}"
-    )
+    assert diff_var < 0.15 * scale, f"[{label}] exposure sample variance mismatch: {diff_var:.3e}"
     print(
         f"    ...[{label}] exposure samples (M={M}) match predict_exposure(): "
         f"|dmean|={diff_mean:.2e}, |dvar|={diff_var:.2e}"
@@ -678,13 +636,9 @@ def test_exposure_sample_multiple_points_are_correlated():
     d = _build_dataset(2, jax.random.PRNGKey(54))
     gp_smol, y = d["gp_smol"], d["y"]
 
-    t_test = jnp.array(
-        [30.0, 32.0, 80.0]
-    )  # first two close (and overlapping), third far
+    t_test = jnp.array([30.0, 32.0, 80.0])  # first two close (and overlapping), third far
     delta_test = jnp.array([5.0, 5.0, 5.0])
-    instid_test = jnp.array(
-        [0, 1, 0]
-    )  # overlapping pair distinct; distant point reuses 0
+    instid_test = jnp.array([0, 1, 0])  # overlapping pair distinct; distant point reuses 0
     X_test = (t_test, delta_test, instid_test)
 
     samples = _check_exposure_sample_matches_predict(
@@ -707,9 +661,7 @@ def test_exposure_sample_multiple_points_are_correlated():
         f"expected nearby points far more correlated than distant ones: "
         f"corr_12={corr_12:.3f}, corr_13={corr_13:.3f}"
     )
-    print(
-        f"    ...multiple probes: corr(close)={corr_12:.3f} >> corr(far)={corr_13:.3f}"
-    )
+    print(f"    ...multiple probes: corr(close)={corr_12:.3f} >> corr(far)={corr_13:.3f}")
 
 
 def test_exposure_sample_mixed_delta0_and_delta_gt0():
@@ -733,9 +685,7 @@ def test_exposure_sample_ties_at_boundaries():
     """A delta>0 exposure-integrated test point whose start/end exactly
     matches a training point's exposure start/end must still produce finite,
     correct results (zero-length transition to/from it)."""
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
     for tie in ["start-start", "end-end", "end-start"]:
         t_tie, texp_tie, instid_tie, tied_t = _tied_exposure_data(tie)
         gp = smolgp.GaussianProcess(
@@ -782,9 +732,7 @@ def test_exposure_sample_parallel_solver():
 
     diff = float(jnp.max(jnp.abs(samples_seq - samples_par)))
     assert diff < 1e-8, f"parallel vs sequential solver sample() mismatch: {diff:.3e}"
-    print(
-        f"    ...parallel solver sample() matches sequential to {diff:.2e} (same key/X_test)"
-    )
+    print(f"    ...parallel solver sample() matches sequential to {diff:.2e} (same key/X_test)")
 
 
 def test_exposure_sample_matches_tinygp_directly():
@@ -802,14 +750,10 @@ def test_exposure_sample_matches_tinygp_directly():
     )
 
     _, condgp_smol = gp_smol.condition(y)
-    samples_smol = condgp_smol.sample(
-        jax.random.PRNGKey(64), shape=(4000,), X_test=X_test
-    )
+    samples_smol = condgp_smol.sample(jax.random.PRNGKey(64), shape=(4000,), X_test=X_test)
 
     _, condgp_tiny_test = gp_tiny.condition(y, X_test)
-    samples_tiny = condgp_tiny_test.sample(
-        jax.random.PRNGKey(65), shape=(4000,)
-    )  # (M, N)!
+    samples_tiny = condgp_tiny_test.sample(jax.random.PRNGKey(65), shape=(4000,))  # (M, N)!
 
     mean_smol, var_smol = (
         jnp.mean(samples_smol, axis=-1),
@@ -824,9 +768,7 @@ def test_exposure_sample_matches_tinygp_directly():
     scale = float(jnp.max(var_tiny))
     diff_mean = float(jnp.max(jnp.abs(mean_smol - mean_tiny)))
     diff_var = float(jnp.max(jnp.abs(var_smol - (var_tiny - offset))))
-    assert diff_mean < 0.05 * jnp.sqrt(scale), (
-        f"mismatch vs tinygp mean: {diff_mean:.3e}"
-    )
+    assert diff_mean < 0.05 * jnp.sqrt(scale), f"mismatch vs tinygp mean: {diff_mean:.3e}"
     assert diff_var < 0.15 * scale, f"mismatch vs tinygp variance: {diff_var:.3e}"
     print(
         f"    ...smolgp vs tinygp condition(X_test).sample(): "
@@ -884,9 +826,7 @@ def test_sample_exposure_matches_quadrature_of_dense_curve_same_draw():
     of the way random numbers work, we have to draw both the exposure and
     dense samples in a single call to sample()
     """
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=1
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=1)
     # GP with dummy data
     gp = smolgp.GaussianProcess(
         kernel=kernel,
@@ -917,9 +857,7 @@ def test_sample_exposure_matches_quadrature_of_dense_curve_same_draw():
 
     y_quad = jax.vmap(trapz_window)(tmid, texp)
     diff = float(jnp.max(jnp.abs(y_exposure - y_quad)))
-    assert diff < 1e-2, (
-        f"exposure sample doesn't match quadrature of the same draw: {diff:.3e}"
-    )
+    assert diff < 1e-2, f"exposure sample doesn't match quadrature of the same draw: {diff:.3e}"
     print(
         f"    ...exposure entries of a combined draw match quadrature of its own dense entries: {diff:.2e}"
     )
@@ -987,8 +925,7 @@ def _min_groups_bruteforce(t, delta, max_n=9):
     b = [float(x) for x in (jnp.asarray(t) + jnp.asarray(delta) / 2)]
     n = len(a)
     assert n <= max_n, f"brute force is exponential; {n} windows is too many"
-    pairs = [(i, j) for i, j in itertools.combinations(range(n), 2)
-             if _conflicts(a, b, i, j)]
+    pairs = [(i, j) for i, j in itertools.combinations(range(n), 2) if _conflicts(a, b, i, j)]
     for k in range(1, n + 1):
         for colouring in itertools.product(range(k), repeat=n):
             if all(colouring[i] != colouring[j] for i, j in pairs):
@@ -1204,7 +1141,9 @@ def test_sample_X_test_missing_instid_auto_assigns_prior():
     y_2tuple = gp.sample(key, X_test=X_test_2tuple)
     y_3tuple = gp.sample(key, X_test=X_test_3tuple)
     diff = float(jnp.max(jnp.abs(y_2tuple - y_3tuple)))
-    assert diff == 0.0, f"2-tuple X_test should exactly match its own auto-assigned 3-tuple: {diff:.3e}"
+    assert diff == 0.0, (
+        f"2-tuple X_test should exactly match its own auto-assigned 3-tuple: {diff:.3e}"
+    )
     print("    ...sample() 2-tuple X_test (prior) matches manually-replicated auto instid exactly")
 
 
@@ -1224,8 +1163,12 @@ def test_sample_X_test_missing_instid_auto_assigns_conditioned():
     samples_2tuple = condgp.sample(key, shape=(500,), X_test=X_test_2tuple)
     samples_3tuple = condgp.sample(key, shape=(500,), X_test=X_test_3tuple)
     diff = float(jnp.max(jnp.abs(samples_2tuple - samples_3tuple)))
-    assert diff == 0.0, f"2-tuple X_test should exactly match its own auto-assigned 3-tuple: {diff:.3e}"
-    print("    ...sample() 2-tuple X_test (conditioned) matches manually-replicated auto instid exactly")
+    assert diff == 0.0, (
+        f"2-tuple X_test should exactly match its own auto-assigned 3-tuple: {diff:.3e}"
+    )
+    print(
+        "    ...sample() 2-tuple X_test (conditioned) matches manually-replicated auto instid exactly"
+    )
 
 
 def test_exposure_sample_matches_predict_when_groups_exceed_num_insts():
@@ -1246,9 +1189,7 @@ def test_exposure_sample_matches_predict_when_groups_exceed_num_insts():
     """
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=1
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=1)
     t = jnp.linspace(0.0, 100.0, 8)
     X = (t, jnp.full(8, 3.0), jnp.zeros(8, dtype=int))
     gp = smolgp.GaussianProcess(kernel, X=X, noise=0.01)
@@ -1270,9 +1211,7 @@ def test_exposure_sample_matches_predict_when_groups_exceed_num_insts():
             y=y,
             return_var=True,
         )
-        samples = condgp.sample(
-            jax.random.PRNGKey(7), shape=(6000,), X_test=(t_test, delta_test)
-        )
+        samples = condgp.sample(jax.random.PRNGKey(7), shape=(6000,), X_test=(t_test, delta_test))
         mean_emp = jnp.mean(samples, axis=-1)
         var_emp = jnp.var(samples, axis=-1, ddof=1)
         scale = float(jnp.sqrt(jnp.max(var_pred)))
@@ -1293,9 +1232,7 @@ def test_exposure_sample_explicit_instid_selects_projection():
     projection, matching predict() called with that same instid."""
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=2
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=2)
     t = jnp.linspace(0.0, 100.0, 10)
     X = (t, jnp.full(10, 3.0), jnp.array([0, 1] * 5))
     gp = smolgp.GaussianProcess(kernel, X=X, noise=0.01)
@@ -1325,9 +1262,7 @@ def test_exposure_sample_explicit_instid_allows_overlap():
     """
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=3
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=3)
     t = jnp.linspace(0.0, 100.0, 9)
     X = (t, jnp.full(9, 3.0), jnp.array([0, 1, 2] * 3))
     gp = smolgp.GaussianProcess(kernel, X=X, noise=0.01)

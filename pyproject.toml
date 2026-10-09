@@ -68,6 +68,10 @@ Homepage = "https://github.com/smolgp-dev/smolgp"
 Issues = "https://github.com/smolgp-dev/smolgp/issues"
 
 [tool.ruff]
+line-length = 100
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
 ignore = ["E731", # lambda functions
           "E741", # ambiguous variable names (e.g. I)
           "E743", # ambiguous function names (e.g. I)

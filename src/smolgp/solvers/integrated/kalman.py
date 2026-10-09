@@ -6,9 +6,7 @@ import jax.numpy as jnp
 from smolgp.helpers import kalman_gain, transition_sequence
 
 
-def IntegratedKalmanFilter(
-    kernel, X, y, t_states, obsid, instid, stateid, R, return_v_S=False
-):
+def IntegratedKalmanFilter(kernel, X, y, t_states, obsid, instid, stateid, R, return_v_S=False):
     """
     Wrapper for integrated_kalman_filter function
 
@@ -113,9 +111,7 @@ def integrated_kalman_filter(
     init_carry = (m0, P0)
 
     # Run the filter over all time steps, unpack, and return results
-    _, outputs = jax.lax.scan(
-        step, init_carry, (A_all, Q_all, jnp.arange(len(t_states)))
-    )
+    _, outputs = jax.lax.scan(step, init_carry, (A_all, Q_all, jnp.arange(len(t_states))))
     m_filtered, P_filtered, m_predicted, P_predicted, v, S = outputs
 
     # only return v,S at exposure ends (where there is data)
@@ -152,9 +148,7 @@ def integrated_kalman_gains(
     H_all = jax.vmap(H_aug)(X)
 
     def gains_at_k(k):
-        Delta = jax.lax.cond(
-            k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k
-        )
+        Delta = jax.lax.cond(k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k)
         A_k = A_aug(0, Delta)
         n = obsid[k]
         Hk = H_all[n]

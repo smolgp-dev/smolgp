@@ -192,8 +192,11 @@ def test_generic_matern_matches_dedicated():
     dts = jnp.linspace(0, 1000, 50)
     t, y = jnp.linspace(0, 1000, 300), jnp.sin(jnp.linspace(0, 1000, 300) / 70)
     noise = jnp.full_like(t, 0.3)
-    dedicated = {0.5: smolgp.kernels.Exp, 1.5: smolgp.kernels.Matern32,
-                 2.5: smolgp.kernels.Matern52}
+    dedicated = {
+        0.5: smolgp.kernels.Exp,
+        1.5: smolgp.kernels.Matern32,
+        2.5: smolgp.kernels.Matern52,
+    }
     # include extreme scales, where F mixes very different powers of lambda
     for scale in [1e-2, 83.3, 1e4]:
         for nu, Kernel in dedicated.items():
@@ -213,8 +216,7 @@ def test_generic_matern_matches_dedicated():
             # Kernel function, and the likelihood through the full (jitted) solver
             kernel_function(kgen, kded, tol=1e-12 * sigma**2, atol=1e-14)
             llh = [
-                smolgp.GaussianProcess(k, t, noise=noise).log_probability(y)
-                for k in (kgen, kded)
+                smolgp.GaussianProcess(k, t, noise=noise).log_probability(y) for k in (kgen, kded)
             ]
             allclose("likelihood", (llh[0] - llh[1]) / jnp.abs(llh[1]), tol=1e-12)
             print()

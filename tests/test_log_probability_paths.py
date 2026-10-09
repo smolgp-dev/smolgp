@@ -115,9 +115,7 @@ def test_gradient_wrt_hyperparameter(build, label):
         y = jnp.sin(t / 500.0)
         noise = jnp.full(N, 0.09)
         if label == "integrated":
-            kernel = smolgp.kernels.IntegratedSHO(
-                omega=w, quality=Q, sigma=sigma, num_insts=1
-            )
+            kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=1)
             X = (t, jnp.full(N, TEXP), jnp.zeros(N, dtype=int))
         else:
             kernel = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
@@ -180,9 +178,7 @@ def test_solver_hierarchy():
     """The parallel solvers must keep inheriting from their serial versions."""
     assert issubclass(smolgp.solvers.StateSpaceSolver, Solver)
     assert issubclass(smolgp.solvers.IntegratedStateSpaceSolver, Solver)
-    assert issubclass(
-        smolgp.solvers.ParallelStateSpaceSolver, smolgp.solvers.StateSpaceSolver
-    )
+    assert issubclass(smolgp.solvers.ParallelStateSpaceSolver, smolgp.solvers.StateSpaceSolver)
     assert issubclass(
         smolgp.solvers.ParallelIntegratedStateSpaceSolver,
         smolgp.solvers.IntegratedStateSpaceSolver,
@@ -318,22 +314,21 @@ def test_integrated_likelihood_matches_a_single_fused_scan():
                 S = H_k @ PHt + R[n]
                 Kk = jnp.linalg.solve(S.T, PHt.T).T
                 sk = S[0, 0]
-                return (m_pred + Kk @ v, P_pred - Kk @ S @ Kk.T,
-                        v[0] * v[0] / sk + jnp.log(sk))
+                return (m_pred + Kk @ v, P_pred - Kk @ S @ Kk.T, v[0] * v[0] / sk + jnp.log(sk))
 
             def at_start():
                 Reset = RESET(sc.instid[n])
                 return Reset @ m_pred, Reset @ P_pred @ Reset.T, zero
 
             m_k, P_k, term = jax.lax.cond(
-                sc.stateid[k] == 0, lambda _: at_start(), lambda _: at_end(),
+                sc.stateid[k] == 0,
+                lambda _: at_start(),
+                lambda _: at_end(),
                 operand=None,
             )
             return (m_k, P_k, acc + term), None
 
-        (_, _, acc), _ = jax.lax.scan(
-            step, (m0, P0, zero), (A_all, Q_all, jnp.arange(K_states))
-        )
+        (_, _, acc), _ = jax.lax.scan(step, (m0, P0, zero), (A_all, Q_all, jnp.arange(K_states)))
         return -0.5 * (acc + y_in.shape[0] * jnp.log(2.0 * jnp.pi))
 
     got = gp.solver.log_probability(y)
@@ -370,15 +365,12 @@ def test_split_scan_matches_a_single_fused_scan():
             S = H @ PHt + R
             K = jnp.linalg.solve(S.T, PHt.T).T
             s = S[0, 0]
-            return (m_pred + K @ v, P_pred - K @ S @ K.T,
-                    acc + v[0] * v[0] / s + jnp.log(s)), None
+            return (m_pred + K @ v, P_pred - K @ S @ K.T, acc + v[0] * v[0] / s + jnp.log(s)), None
 
         (_, _, acc), _ = jax.lax.scan(
             step, (m0, P0, jnp.zeros(())), (A_all, Q_all, H_all, R_s, y_nd)
         )
         return -0.5 * (acc + len(t_s) * jnp.log(2.0 * jnp.pi))
 
-    split = kalman_loglike(
-        ks.transition_matrix, ks.process_noise, H_all, R_s, t_s, y_s, m0, P0
-    )
+    split = kalman_loglike(ks.transition_matrix, ks.process_noise, H_all, R_s, t_s, y_s, m0, P0)
     assert jnp.allclose(split, fused(y_s), rtol=1e-10)

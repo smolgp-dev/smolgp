@@ -257,18 +257,14 @@ class IntegratedStateSpaceModel(StateSpaceModel):
             L, Qc = b.noise_effect_matrix(), b.noise()
             return smolgp.helpers.integrated_short_step_noise(F, L, Qc, dt, T, rate)
 
-        Qaug12, Qaug22 = jax.lax.cond(
-            rate * jnp.abs(dt) < 1.0, short_step, closed_form, dt
-        )
+        Qaug12, Qaug22 = jax.lax.cond(rate * jnp.abs(dt) < 1.0, short_step, closed_form, dt)
         return Qaug12, Qaug12.T, Qaug22
 
     # @partial(
     #     jax.jit,
     #     static_argnames=("force_numerical"),
     # )
-    def process_noise(
-        self, X1: JAXArray, X2: JAXArray, force_numerical: bool = False
-    ) -> JAXArray:
+    def process_noise(self, X1: JAXArray, X2: JAXArray, force_numerical: bool = False) -> JAXArray:
         """
         The augmented process noise matrix $Q_k$
 
@@ -359,9 +355,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
                 elif len(X) == 2:
                     t, delta = X
                 else:
-                    raise ValueError(
-                        f"X must be a tuple of length 2 or 3, got {len(X)}"
-                    )
+                    raise ValueError(f"X must be a tuple of length 2 or 3, got {len(X)}")
             else:
                 t, delta = X, 0.0
             return t, delta
@@ -379,9 +373,7 @@ class IntegratedStateSpaceModel(StateSpaceModel):
         a2, b2 = t2 - delta2 / 2, t2 + delta2 / 2
 
         def make_H(delta, probe_idx):
-            H_integral = (
-                jnp.zeros(n).at[probe_idx].set(1.0 / jnp.where(delta > 0, delta, 1.0))
-            )
+            H_integral = jnp.zeros(n).at[probe_idx].set(1.0 / jnp.where(delta > 0, delta, 1.0))
             H_latent = jnp.zeros(n).at[0].set(1.0)
             return jnp.where(delta > 0, H_integral, H_latent)
 
@@ -609,9 +601,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
 
         def numerical(dt: JAXArray) -> JAXArray:
             # Short-step Van Loan / long-step closed form from the base class
-            return IntegratedStateSpaceModel.integrated_process_noise(
-                self, jnp.zeros(()), dt
-            )
+            return IntegratedStateSpaceModel.integrated_process_noise(self, jnp.zeros(()), dt)
 
         def short_step(dt: JAXArray) -> JAXArray:
             # Rescaled Van Loan directly, not the base class's hybrid: under
@@ -629,9 +619,7 @@ class IntegratedSHO(IntegratedStateSpaceModel):
             # ~1e-8 at rate*dt = 0.05, but useless below ~1e-3 (e.g. a slow,
             # rotation-like SHO over one exposure). Van Loan in rescaled units
             # is accurate for short steps.
-            return jax.lax.cond(
-                self.rate * jnp.abs(dt) < 0.05, short_step, underdamped, dt
-            )
+            return jax.lax.cond(self.rate * jnp.abs(dt) < 0.05, short_step, underdamped, dt)
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),

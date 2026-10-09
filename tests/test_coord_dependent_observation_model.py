@@ -61,9 +61,7 @@ def _build(solver=None, n_per=25, noise_var=1e-6):
     t1 = jnp.linspace(0.0, 20.0, n_per)
     t2 = jnp.linspace(0.5, 20.5, n_per)
     t_all = jnp.concatenate([t1, t2])
-    outputid = jnp.concatenate(
-        [jnp.zeros(n_per, dtype=int), jnp.ones(n_per, dtype=int)]
-    )
+    outputid = jnp.concatenate([jnp.zeros(n_per, dtype=int), jnp.ones(n_per, dtype=int)])
     idx = jnp.argsort(t_all, stable=True)
     t_all, outputid = t_all[idx], outputid[idx]
 
@@ -97,9 +95,7 @@ def test_coord_dependent_H_conditions_and_predicts(solver, name):
     mu0 = condgp.predict((ts, zeros, zeros.astype(int)))
     mu1 = condgp.predict((ts, zeros, jnp.ones_like(ts, dtype=int)))
 
-    assert jnp.all(jnp.isfinite(mu0)) and jnp.all(jnp.isfinite(mu1)), (
-        f"[{name}] NaN/Inf"
-    )
+    assert jnp.all(jnp.isfinite(mu0)) and jnp.all(jnp.isfinite(mu1)), f"[{name}] NaN/Inf"
 
     # Both outputs view the SAME latent state through different H, so the
     # posterior means must differ by exactly amp2/amp1 -- an exact algebraic
@@ -169,22 +165,15 @@ def test_coord_dependent_H_sample_matches_predict(solver, name):
     dmean = float(jnp.max(jnp.abs(jnp.mean(samples, axis=-1) - mu_pred)))
     dvar = float(jnp.max(jnp.abs(jnp.var(samples, axis=-1) - var_pred)))
     assert dmean < 0.15 * scale, f"[{name}] sample mean vs predict mean: {dmean:.3e}"
-    assert dvar < 0.25 * float(jnp.max(var_pred)), (
-        f"[{name}] sample var vs predict var: {dvar:.3e}"
-    )
+    assert dvar < 0.25 * float(jnp.max(var_pred)), f"[{name}] sample var vs predict var: {dvar:.3e}"
 
     # The id channel must still be respected in the sampled output: asking for
     # the amp1 output instead must scale the whole draw by amp1/amp2.
     X_other = (ts, zeros, jnp.zeros_like(ts, dtype=int))
-    samples_other = condgp.sample(
-        jax.random.PRNGKey(0), shape=(4000,), X_test=X_other
-    )
+    samples_other = condgp.sample(jax.random.PRNGKey(0), shape=(4000,), X_test=X_other)
     ratio_err = float(
         jnp.max(
-            jnp.abs(
-                jnp.mean(samples_other, axis=-1) * (AMP2 / AMP1)
-                - jnp.mean(samples, axis=-1)
-            )
+            jnp.abs(jnp.mean(samples_other, axis=-1) * (AMP2 / AMP1) - jnp.mean(samples, axis=-1))
         )
     )
     assert ratio_err < 0.15 * scale, (

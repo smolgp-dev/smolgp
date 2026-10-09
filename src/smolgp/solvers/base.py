@@ -1,12 +1,12 @@
 """:class:`Solver` helps organize the common elements of all solvers, including
-    1. the required methods (:meth:`Kalman`, :meth:`RTS`, :meth:`smoothing_gains`, :meth:`predict`), 
+    1. the required methods (:meth:`Kalman`, :meth:`RTS`, :meth:`smoothing_gains`, :meth:`predict`),
     2. the shared state-order bookkeeping definitions,
     3. and a default implementation of the marginal likelihood in terms of the
-       filter's innovations, which every Kalman filter produces. A subclass may 
-       override :meth:`log_probability` with a more efficient scan that only 
+       filter's innovations, which every Kalman filter produces. A subclass may
+       override :meth:`log_probability` with a more efficient scan that only
        accumulates the likelihood contributions (rather than the full filter outputs).
 
-Subclasses of :class:`Solver` only inherit when the parent's method would be still 
+Subclasses of :class:`Solver` only inherit when the parent's method would be still
 be correct (though perhaps slower). As such, the inheritance tree looks like:
 
     Solver
@@ -59,14 +59,14 @@ def log_prob_from_v_S(v: JAXArray, S: JAXArray) -> JAXArray:
 class Solver(eqx.Module):
     r"""Base class for a smolgp solver.
 
-    Subclasses must implement :meth:`Kalman`, :meth:`RTS`, :meth:`smoothing_gains` 
+    Subclasses must implement :meth:`Kalman`, :meth:`RTS`, :meth:`smoothing_gains`
     and :meth:`predict`. :meth:`condition` is provided here too, being only a
-    sequencing of :meth:`Kalman` and :meth:`RTS`, but a solver whose smoother 
+    sequencing of :meth:`Kalman` and :meth:`RTS`, but a solver whose smoother
     takes different arguments overrides it.
 
     The likelihood is implemented here in terms of the filter's innovations,
-    which every Kalman filter produces, but a subclass may override 
-    :meth:`log_probability` with a more efficient scan that only accumulates 
+    which every Kalman filter produces, but a subclass may override
+    :meth:`log_probability` with a more efficient scan that only accumulates
     the likelihood contributions (rather than the full filter outputs).
 
     Attributes:
@@ -89,7 +89,7 @@ class Solver(eqx.Module):
         return self.state_coords.t_states
 
     def _to_state_order(self, *arrays: JAXArray) -> tuple[JAXArray, ...]:
-        """Gather per-observation arrays into the solver's (chronologically 
+        """Gather per-observation arrays into the solver's (chronologically
         sorted) state order.
 
         ``self.X`` and everything derived from it (``y``, ``noise``) are kept
@@ -104,7 +104,7 @@ class Solver(eqx.Module):
     def Kalman(self, y, return_v_S: bool = False) -> Any:
         """Run this solver's Kalman filter.
 
-        Returns ``(m_filtered, P_filtered, m_predicted, P_predicted)``, 
+        Returns ``(m_filtered, P_filtered, m_predicted, P_predicted)``,
             plus ``(v, S)`` when ``return_v_S`` is True.
         """
         raise NotImplementedError

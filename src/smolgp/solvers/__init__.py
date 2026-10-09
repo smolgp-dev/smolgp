@@ -24,7 +24,7 @@ The four built-in solvers are:
 All four inherit from :class:`Solver`, which fixes the interface (``Kalman``,
 ``RTS``, ``condition``, ``predict``) and supplies the shared state-order
 bookkeeping and a default marginal likelihood built from any filter's
-innovations. The parallel solvers subclass their sequential counterparts, 
+innovations. The parallel solvers subclass their sequential counterparts,
 implement associative scans for their Kalman and RTS methods, and fix
 ``log_probability`` to the default behavior rather than inherit a sequential scan.
 

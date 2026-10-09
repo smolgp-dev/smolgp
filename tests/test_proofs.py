@@ -22,9 +22,7 @@ def base(kernel, dts):
 
     # Numerical versions
     # transition_matrix_numerical = lambda dt: expm(F * dt)
-    transition_matrix_numerical = lambda dt: super(
-        type(kernel), kernel
-    ).transition_matrix(0, dt)
+    transition_matrix_numerical = lambda dt: super(type(kernel), kernel).transition_matrix(0, dt)
     process_noise_vanloan = lambda dt: super(type(kernel), kernel).process_noise(
         0, dt, use_van_loan=True
     )
@@ -71,9 +69,7 @@ def integrated_transition(kernel, dts):
 
     ### Integrated transition matrix
     Phibar_analytic = lambda dt: kernel.integrated_transition_matrix(0, dt)
-    Phibar_from_VanLoan = lambda dt: super(
-        type(kernel), kernel
-    ).integrated_transition_matrix(0, dt)
+    Phibar_from_VanLoan = lambda dt: super(type(kernel), kernel).integrated_transition_matrix(0, dt)
     print("Comparing analytic Phibar vs. Van Loan...")
     A_analytic = jax.vmap(Phibar_analytic)(dts)
     A_numerical = jax.vmap(Phibar_from_VanLoan)(dts)
@@ -144,9 +140,7 @@ def test_proofs():
     integrated_process_noise(isho, dtlarge, tol=1e-3)
 
     ## and verify dt=0 is correct
-    assert jnp.all(isho.process_noise(0.0, 0.0) == 0), (
-        "Process noise at dt=0 should be zero."
-    )
+    assert jnp.all(isho.process_noise(0.0, 0.0) == 0), "Process noise at dt=0 should be zero."
     assert jnp.all(isho.transition_matrix(0.0, 0.0) == jnp.eye(isho.dimension)), (
         "Transition matrix at dt=0 should be the identity."
     )

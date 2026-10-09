@@ -58,9 +58,7 @@ def _plain(solver=None, N=7):
 def _integrated(solver=None, Ninst=1, N=8):
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
-    k_smol = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
-    )
+    k_smol = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
     k_dense = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
     t = jnp.linspace(0.0, 100.0, N)
     texp = jnp.full(N, 3.0)
