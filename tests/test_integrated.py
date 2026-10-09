@@ -109,9 +109,7 @@ def test_integrated_evaluate():
         cov_tiny = kernel_tiny(X0, X1)[0, :]
         diff = float(jnp.max(jnp.abs(cov_smol - cov_tiny)))
         assert diff < 1e-9, f"exptime={exptime}: max|diff|={diff:.3e}"
-    print(
-        "    ...evaluate() grid (matching widths, varying separation): matches dense kernel"
-    )
+    print("    ...evaluate() grid (matching widths, varying separation): matches dense kernel")
 
     # Pairwise edge cases: asymmetric widths, mixed zero/nonzero, overlap,
     # nesting, reversed order, exact ties, and self-variance (X1==X2).
@@ -200,9 +198,7 @@ def test_instid_validation():
     }
     for name, badX in bad_cases.items():
         try:
-            smolgp.GaussianProcess(
-                kernel=smolgp.kernels.IntegratedExp(scale=1.0), X=badX
-            )
+            smolgp.GaussianProcess(kernel=smolgp.kernels.IntegratedExp(scale=1.0), X=badX)
             raise AssertionError(f"Expected ValueError for {name}, but none was raised")
         except ValueError:
             print(f"    ...instid validation: correctly rejected {name}")
@@ -240,9 +236,7 @@ def test_float32_warning():
     for x64, expected in [(False, 1), (True, 0)]:
         with jax.enable_x64(x64), warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            gp = smolgp.GaussianProcess(
-                kernel=smolgp.kernels.SHO(omega=1.0, quality=2.0), X=t
-            )
+            gp = smolgp.GaussianProcess(kernel=smolgp.kernels.SHO(omega=1.0, quality=2.0), X=t)
             gp.condition(jnp.ones_like(t))  # its internal conditioned GP must not warn again
         # (match smolgp's own message: JAX's dtype warnings also mention x64)
         n = sum("running in 32-bit precision" in str(w.message) for w in caught)
@@ -477,9 +471,7 @@ def _run_tie_scenario(tie, solver=None):
     t, texp, instid, tied_t = _tied_exposure_data(tie)
     y = jnp.sin(0.1 * t)
 
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=0.2, quality=2.0, sigma=1.0, num_insts=2
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=0.2, quality=2.0, sigma=1.0, num_insts=2)
     kwargs = {} if solver is None else {"solver": solver}
     gp = smolgp.GaussianProcess(
         kernel=kernel, X=(t, texp, instid), noise=jnp.full(t.shape, 0.1**2), **kwargs
@@ -487,17 +479,13 @@ def _run_tie_scenario(tie, solver=None):
 
     _, condgp = gp.condition(y)
     assert jnp.all(jnp.isfinite(condgp.loc)), f"[{tie}] smoothed mean contains NaN/Inf"
-    assert jnp.all(jnp.isfinite(condgp.variance)), (
-        f"[{tie}] smoothed variance contains NaN/Inf"
-    )
+    assert jnp.all(jnp.isfinite(condgp.variance)), f"[{tie}] smoothed variance contains NaN/Inf"
 
     # Also predict directly at the tied timestamp (covers solver.py's smooth())
     X_test = (jnp.array([tied_t]), jnp.array([0.0]), jnp.array([0], dtype=int))
     mu_test, var_test = condgp.predict(X_test, return_var=True)
     assert jnp.all(jnp.isfinite(mu_test)), f"[{tie}] predict mean at tie is NaN/Inf"
-    assert jnp.all(jnp.isfinite(var_test)), (
-        f"[{tie}] predict variance at tie is NaN/Inf"
-    )
+    assert jnp.all(jnp.isfinite(var_test)), f"[{tie}] predict variance at tie is NaN/Inf"
 
     print(f"    ...tie='{tie}' ({type(gp.solver).__name__}): finite throughout")
 
@@ -542,15 +530,11 @@ def test_smoothing_gain_singular_input():
     G_lstsq, *_ = jnp.linalg.lstsq(P_pred_next.T, numerator.T)
     G_lstsq = G_lstsq.T
 
-    assert jnp.all(jnp.isfinite(G)), (
-        "get_smoothing_gain produced NaN/Inf on a singular input"
-    )
+    assert jnp.all(jnp.isfinite(G)), "get_smoothing_gain produced NaN/Inf on a singular input"
     assert jnp.allclose(G, G_lstsq, atol=1e-10), (
         f"get_smoothing_gain did not fall back to the lstsq solution:\n{G}\nvs\n{G_lstsq}"
     )
-    print(
-        "    ...get_smoothing_gain: correctly falls back to lstsq on a singular P_pred_next"
-    )
+    print("    ...get_smoothing_gain: correctly falls back to lstsq on a singular P_pred_next")
 
 
 def test_smoothing_gain_badly_scaled_input():
@@ -581,9 +565,7 @@ def test_smoothing_gain_badly_scaled_input():
     G = np.asarray(smoothing_gain(jnp.array(P), jnp.array(PAt)))
 
     relerr = np.abs(G - G_exact).max() / np.abs(G_exact).max()
-    assert relerr < 1e-10, (
-        f"smoothing gain inaccurate on badly scaled input: {relerr:.2e}"
-    )
+    assert relerr < 1e-10, f"smoothing gain inaccurate on badly scaled input: {relerr:.2e}"
     print("    ...smoothing_gain: accurate on a badly scaled P_pred_next")
 
 
@@ -608,9 +590,7 @@ def test_integrated_sho_process_noise_short_steps():
         for wdt in wdts:
             Q = np.asarray(kernel.process_noise(0.0, wdt))
             Q_ref = np.asarray(
-                IntegratedStateSpaceModel.process_noise(
-                    kernel, 0.0, wdt, force_numerical=True
-                )
+                IntegratedStateSpaceModel.process_noise(kernel, 0.0, wdt, force_numerical=True)
             )
             relerr = np.abs(Q - Q_ref).max() / np.abs(Q_ref).max()
             assert relerr < 1e-12, f"Q={quality}, w*dt={wdt}: rel err {relerr:.1e}"
@@ -697,9 +677,7 @@ def _long_gap_gps(solver=None):
     smol, tiny = [], []
     for w, Q, s in params:
         smol.append(smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=s))
-        tiny.append(
-            smolgp.kernels.dense.IntegratedSHOKernel(S=s**2 / (w * Q), w=w, Q=Q)
-        )
+        tiny.append(smolgp.kernels.dense.IntegratedSHOKernel(S=s**2 / (w * Q), w=w, Q=Q))
     kernel_smol = smol[0] + smol[1] + smol[2]
     kernel_tiny = tiny[0] + tiny[1] + tiny[2]
 
@@ -709,9 +687,7 @@ def _long_gap_gps(solver=None):
     noise = jnp.full_like(t, 0.3**2)
 
     solver_kwargs = {} if solver is None else {"solver": solver}
-    gp_smol = smolgp.GaussianProcess(
-        kernel=kernel_smol, X=X, noise=noise, **solver_kwargs
-    )
+    gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=X, noise=noise, **solver_kwargs)
     gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X, diag=noise)
     y = gp_tiny.sample(jax.random.PRNGKey(3))
     return gp_smol, gp_tiny, y
@@ -824,17 +800,13 @@ def _assert_smol_matches_tiny(Ninst, tie_type, key, tol=1e-8):
     S, w, Q, sigma = d["S"], d["w"], d["Q"], d["sigma"]
     X_train = (t, texp, instid)
 
-    kernel_smol = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
-    )
+    kernel_smol = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
     kernel_tiny = smolgp.kernels.dense.IntegratedSHOKernel(S=S, w=w, Q=Q)
 
     gp_smol = smolgp.GaussianProcess(
         kernel=kernel_smol, X=X_train, noise=jnp.full(t.shape, yerr**2)
     )
-    gp_tiny = tinygp.GaussianProcess(
-        kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2)
-    )
+    gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=X_train, diag=jnp.full(t.shape, yerr**2))
 
     # tinygp adds a machine-epsilon jitter to variances that smolgp doesn't
     offset = jnp.sqrt(jnp.finfo(jnp.array([0.0])).eps)
@@ -888,9 +860,7 @@ def test_smol_matches_tiny_all_tie_types():
     key = jax.random.PRNGKey(42)
     for Ninst in (1, 2, 3):
         tie_types = (
-            ("endstart", "startend")
-            if Ninst == 1
-            else ("starts", "ends", "endstart", "startend")
+            ("endstart", "startend") if Ninst == 1 else ("starts", "ends", "endstart", "startend")
         )
         for tie_type in tie_types:
             key, subkey = jax.random.split(key)

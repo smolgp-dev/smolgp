@@ -72,9 +72,7 @@ def sample_prior_trajectory(
 
         # k==0 uses zero time-lag (Delta=0) to trivially step to x0
         # (drawn above from the stationary distribution above).
-        Delta = jax.lax.cond(
-            k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k
-        )
+        Delta = jax.lax.cond(k > 0, lambda i: t_states[i] - t_states[i - 1], lambda _: 0.0, k)
         A_k = A(0, Delta)
         Q_k = Q(0, Delta)
         z = jax.random.normal(key_k, shape=(dim,))
@@ -269,9 +267,7 @@ def merge_exposure_test_coords(
 
     # +1 for a shared "trash" dimension (index num_test_insts) that every
     # delta==0 point's reset is redirected to -- see below.
-    kernel_ext = dataclasses.replace(
-        kernel, num_insts=kernel.num_insts + num_test_insts + 1
-    )
+    kernel_ext = dataclasses.replace(kernel, num_insts=kernel.num_insts + num_test_insts + 1)
 
     a = t_test - delta_test / 2
     b = t_test + delta_test / 2
@@ -289,9 +285,7 @@ def merge_exposure_test_coords(
     # delta==0 points, using the ordinary observation_model-based one
     # instead.
     trash_instid = num_test_insts
-    probe_instids = kernel.num_insts + jnp.where(
-        delta_test > 0, instid_test, trash_instid
-    )
+    probe_instids = kernel.num_insts + jnp.where(delta_test > 0, instid_test, trash_instid)
     instid_ext = jnp.concatenate([instid, probe_instids])
 
     a_obsid = N + jnp.arange(M)  # resolves instid_ext[N+i] = probe_instids[i]

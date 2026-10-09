@@ -31,9 +31,7 @@ def _quadrature_covariance(kernel, dt):
         return impulse @ Qc @ impulse.T
 
     points = [point for point in (0.1, 1.0, 10.0, 100.0) if point < dt]
-    value, _ = quad_vec(
-        integrand, 0.0, dt, points=points, epsabs=1e-10, epsrel=1e-11
-    )
+    value, _ = quad_vec(integrand, 0.0, dt, points=points, epsabs=1e-10, epsrel=1e-11)
     return value
 
 
@@ -110,9 +108,7 @@ def test_zero_step():
         smolgp.kernels.IntegratedMatern52(scale=1.0),
         smolgp.kernels.IntegratedSHO(omega=1.0, quality=0.3),
     ]:
-        np.testing.assert_array_equal(
-            kernel.transition_matrix(0.0, 0.0), np.eye(kernel.dimension)
-        )
+        np.testing.assert_array_equal(kernel.transition_matrix(0.0, 0.0), np.eye(kernel.dimension))
         np.testing.assert_array_equal(
             kernel.process_noise(0.0, 0.0), np.zeros((kernel.dimension,) * 2)
         )
@@ -142,6 +138,7 @@ def test_interrupted_exposures_likelihood_matches_dense_ou():
 # Short- and long-step methods, the switch between them, and units
 # ---------------------------------------------------------------------------
 
+
 def _all_integrated_kernels(unit=1.0):
     """Every integrated kernel (and SHO damping regime), with timescale ``unit``."""
     return {
@@ -150,9 +147,7 @@ def _all_integrated_kernels(unit=1.0):
         "Matern52": smolgp.kernels.IntegratedMatern52(scale=unit),
         "Cosine": smolgp.kernels.IntegratedCosine(scale=6.0 * unit),
         "SHO underdamped": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=7.6),
-        "SHO Q=1/sqrt2": smolgp.kernels.IntegratedSHO(
-            omega=1 / unit, quality=1 / np.sqrt(2)
-        ),
+        "SHO Q=1/sqrt2": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=1 / np.sqrt(2)),
         "SHO critical": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=0.5),
         "SHO overdamped": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=0.3),
     }

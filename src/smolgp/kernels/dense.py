@@ -25,9 +25,7 @@ def extract_leaf_kernels(kernel, all=False):
     """Recursively extract all tinygp leaf kernels from a sum or product of tinygp kernels"""
     leaf_level = (Sum, qsSum, Product, qsProduct) if all else (Sum, qsSum)
     if isinstance(kernel, leaf_level):
-        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(
-            kernel.kernel2
-        )
+        return extract_leaf_kernels(kernel.kernel1) + extract_leaf_kernels(kernel.kernel2)
     else:
         return [kernel]
 
@@ -147,9 +145,7 @@ class SHOKernel(tinygp.kernels.Kernel):
 
         # Calculate the kernel
         eta = jnp.sqrt(jnp.abs(1 - 1 / (4 * self.Q**2)))  # damping factor
-        k = jnp.cos(eta * self.w * Delta) + 1 / (2 * eta * self.Q) * jnp.sin(
-            eta * self.w * Delta
-        )
+        k = jnp.cos(eta * self.w * Delta) + 1 / (2 * eta * self.Q) * jnp.sin(eta * self.w * Delta)
         return self.sig**2 * jnp.exp(-Delta / self.tau) * k
 
     def __repr__(self):
@@ -282,19 +278,13 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
 
     def I0(self, y):
         """Helper function for single integral (Eq. 11 in L26)"""
-        return jnp.exp(-self.a * y) * (
-            (1 - self.a**2) * jnp.sin(y) - 2 * self.a * jnp.cos(y)
-        )
+        return jnp.exp(-self.a * y) * ((1 - self.a**2) * jnp.sin(y) - 2 * self.a * jnp.cos(y))
 
     def I1(self, lower, upper):
         """Helper function for double integrals (Eq. 14 in L26)"""
 
         def f1(y):
-            num = (
-                jnp.exp(-self.a * y)
-                * (1 - self.a**2)
-                * (jnp.cos(y) + self.a * jnp.sin(y))
-            )
+            num = jnp.exp(-self.a * y) * (1 - self.a**2) * (jnp.cos(y) + self.a * jnp.sin(y))
             den = self.eta * self.w * (1 + self.a**2)
             return num / den
 
@@ -304,9 +294,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         """Helper function for double integrals (Eq. 15 in L26)"""
 
         def f2(y):
-            num = (
-                -2 * self.a * jnp.exp(-self.a * y) * (jnp.sin(y) - self.a * jnp.cos(y))
-            )
+            num = -2 * self.a * jnp.exp(-self.a * y) * (jnp.sin(y) - self.a * jnp.cos(y))
             den = self.eta * self.w * (1 + self.a**2)
             return num / den
 
@@ -326,9 +314,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         y4 = self.eta * self.w * ((delta1 - delta2) / 2 + Delta - delta1)  # Eq. 12
 
         pre = (self.S * self.Q) / (delta1 * delta2 * self.eta * (1 + self.a**2))
-        return pre * (
-            self.I1(y1, y2) - self.I2(y1, y2) - self.I1(y3, y4) + self.I2(y3, y4)
-        )
+        return pre * (self.I1(y1, y2) - self.I2(y1, y2) - self.I1(y3, y4) + self.I2(y3, y4))
 
     def integrated_overlap(self, delta):
         """
@@ -395,9 +381,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         # If so, can use the single integral directly
         notothers = ~use_latent
         case1 = p2 <= p3
-        result = jnp.where(
-            case1 & notothers, self.integrated_single(Delta, delta), result
-        )
+        result = jnp.where(case1 & notothers, self.integrated_single(Delta, delta), result)
 
         ## CASE 2
         # If obs2 did occur during exposure of obs1
@@ -483,9 +467,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
         ##### CASE 2: obs1 and obs2 are completely separated
         notothers &= ~case1
         case2 = Delta >= (delta1 + delta2) / 2
-        k = jnp.where(
-            case2 & notothers, self.integrated_separate(Delta, delta1, delta2), k
-        )
+        k = jnp.where(case2 & notothers, self.integrated_separate(Delta, delta1, delta2), k)
 
         ##### CASE 3: obs 1 and obs 2 share mutual partial overlap
         #     |----------|
@@ -530,8 +512,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
                 p2 == p3,
                 int_case3,
                 int_case3
-                + self.integrated_separate(Delta_2, delta1_2, delta2_2)
-                * (delta1_2 * delta2_2),
+                + self.integrated_separate(Delta_2, delta1_2, delta2_2) * (delta1_2 * delta2_2),
             )
 
             # Int 3 (overlap)
@@ -578,8 +559,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
                 p1 == p3,
                 int_case4,
                 int_case4
-                + self.integrated_separate(Delta_1, delta1_1, delta2_1)
-                * (delta1_1 * delta2_1),
+                + self.integrated_separate(Delta_1, delta1_1, delta2_1) * (delta1_1 * delta2_1),
             )
             # int_case4 += self.integrated_separate(Delta_1, delta1_1, delta2_1)*(delta1_1*delta2_1)
 
@@ -595,8 +575,7 @@ class IntegratedSHOKernel(tinygp.kernels.Kernel):
                 p2 == p4,
                 int_case4,
                 int_case4
-                + self.integrated_separate(Delta_2, delta1_2, delta2_2)
-                * (delta1_2 * delta2_2),
+                + self.integrated_separate(Delta_2, delta1_2, delta2_2) * (delta1_2 * delta2_2),
             )
             # int_case4 += self.integrated_separate(Delta_2, delta1_2, delta2_2)*(delta1_2*delta2_2)
 

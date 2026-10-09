@@ -113,12 +113,8 @@ def test_shuffled_X_test_posterior_sample(solver, name):
     p = jax.random.permutation(jax.random.PRNGKey(5), 30)
     s_sorted = cond.sample(jax.random.PRNGKey(2), shape=(2000,), X_test=t_test)
     s_shuf = cond.sample(jax.random.PRNGKey(2), shape=(2000,), X_test=t_test[p])
-    dmean = float(
-        jnp.max(jnp.abs(jnp.mean(s_shuf, axis=-1) - jnp.mean(s_sorted, axis=-1)[p]))
-    )
-    assert dmean < 1e-10, (
-        f"[{name}] posterior sample not permuted consistently: {dmean:.3e}"
-    )
+    dmean = float(jnp.max(jnp.abs(jnp.mean(s_shuf, axis=-1) - jnp.mean(s_sorted, axis=-1)[p])))
+    assert dmean < 1e-10, f"[{name}] posterior sample not permuted consistently: {dmean:.3e}"
 
 
 @pytest.mark.parametrize("solver,name", PLAIN_SOLVERS)
@@ -136,14 +132,10 @@ def test_shuffled_X_with_tied_timestamps(solver, name):
 
     llh_s, cond_s = gp_s.condition(y)
     llh_u, cond_u = gp_u.condition(y[perm])
-    assert jnp.isfinite(llh_u), (
-        f"[{name}] tied+shuffled gave non-finite log probability"
-    )
+    assert jnp.isfinite(llh_u), f"[{name}] tied+shuffled gave non-finite log probability"
     assert jnp.allclose(llh_s, llh_u, atol=1e-10), f"[{name}] tied log probability"
     dloc = float(jnp.max(jnp.abs(cond_u.loc - cond_s.loc[perm])))
-    assert dloc < 1e-10, (
-        f"[{name}] tied conditioned mean not in input order: {dloc:.3e}"
-    )
+    assert dloc < 1e-10, f"[{name}] tied conditioned mean not in input order: {dloc:.3e}"
 
 
 @pytest.mark.parametrize("solver,name", INTEGRATED_SOLVERS)

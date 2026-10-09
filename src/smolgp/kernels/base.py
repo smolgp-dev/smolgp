@@ -57,9 +57,7 @@ def extract_all_components(kernel):
     extract_leaf_kernels remains the right tool for that.
     """
     if isinstance(kernel, (Sum, Product)):
-        return extract_all_components(kernel.kernel1) + extract_all_components(
-            kernel.kernel2
-        )
+        return extract_all_components(kernel.kernel1) + extract_all_components(kernel.kernel2)
     if isinstance(kernel, Wrapper):
         return extract_all_components(kernel.kernel)
     return [kernel]
@@ -689,9 +687,7 @@ class SHO(StateSpaceModel):
 
     def design_matrix(self) -> JAXArray:
         """The design (also called the feedback) matrix for the SHO process, F"""
-        return jnp.array(
-            [[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]]
-        )
+        return jnp.array([[0, 1], [-jnp.square(self.omega), -self.omega / self.quality]])
 
     def stationary_covariance(self) -> JAXArray:
         """The stationary covariance of the SHO process, Pinf"""
@@ -749,9 +745,7 @@ class SHO(StateSpaceModel):
             ep, em = jnp.exp(x - a), jnp.exp(-x - a)
             cosh = 0.5 * (ep + em)
             sinh = 0.5 * (ep - em)
-            return jnp.array(
-                [[cosh + sinh / f, sinh / (w * n)], [-w * sinh / n, cosh - sinh / f]]
-            )
+            return jnp.array([[cosh + sinh / f, sinh / (w * n)], [-w * sinh / n, cosh - sinh / f]])
 
         return jax.lax.cond(
             jnp.allclose(q, 0.5),
@@ -1340,9 +1334,7 @@ class ExpSineSquared(Wrapper):
             Approximated via a truncated Taylor series expansion.
             """
             k = jnp.arange(terms)
-            log_terms = (
-                -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
-            )
+            log_terms = -gammaln(k + 1) - gammaln(k + j + 1) + (2 * k + j) * jnp.log(x / 2)
             return jnp.sum(jnp.exp(log_terms))
 
         def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:

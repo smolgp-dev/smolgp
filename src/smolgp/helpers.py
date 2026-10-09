@@ -367,9 +367,7 @@ def scaled_VanLoan(
     return _unscale(Qs, Phibar_s, T, rate)
 
 
-def rescaled_solve(
-    F: JAXArray, B: JAXArray, T: JAXArray, rate: JAXArray
-) -> JAXArray:
+def rescaled_solve(F: JAXArray, B: JAXArray, T: JAXArray, rate: JAXArray) -> JAXArray:
     r"""Solve :math:`F X = B` in rescaled units, for a badly scaled :math:`F`.
 
     With :math:`F = \mathrm{rate} \cdot D \tilde F D^{-1}`, where :math:`D = \mathrm{diag}(T)`
@@ -492,9 +490,7 @@ def robust_sqrt(M: JAXArray) -> JAXArray:
     return V * jnp.sqrt(jnp.clip(w, min=0.0))[None, :]
 
 
-def transition_sequence(
-    A, Q, t: JAXArray, map_noise: bool = False
-) -> tuple[JAXArray, JAXArray]:
+def transition_sequence(A, Q, t: JAXArray, map_noise: bool = False) -> tuple[JAXArray, JAXArray]:
     r"""Per-step transition matrices and process noise, for precomputing.
 
     Returns ``A(0, Delta_k)`` and ``Q(0, Delta_k)`` for every step ``k``, with
@@ -614,9 +610,7 @@ def smoothing_gain(P_pred_next: JAXArray, PAt: JAXArray) -> JAXArray:
     return G_eq / d[None, :]
 
 
-def VanLoan(
-    F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray
-) -> dict[str, JAXArray]:
+def VanLoan(F: JAXArray, L: JAXArray, Qc: JAXArray, dt: JAXArray) -> dict[str, JAXArray]:
     r"""Compute all submatrices of the Van Loan matrix exponential.
 
     Assembles the block matrix :math:`C` and returns its matrix exponential,

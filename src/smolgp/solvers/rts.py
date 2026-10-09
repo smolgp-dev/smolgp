@@ -147,7 +147,5 @@ def rts_smoother_batched_mean(G_all, m_filtered_batch, m_predicted_batch):
 
     init_carry = m_filtered_T[-1]  # (M, dim)
     _, m_smooth_reversed_T = jax.lax.scan(step, init_carry, jnp.arange(N - 2, -1, -1))
-    m_smooth_T = jnp.concatenate(
-        [m_smooth_reversed_T[::-1], m_filtered_T[-1][None, :, :]], axis=0
-    )
+    m_smooth_T = jnp.concatenate([m_smooth_reversed_T[::-1], m_filtered_T[-1][None, :, :]], axis=0)
     return jnp.moveaxis(m_smooth_T, 0, 1)  # (M, N, dim)

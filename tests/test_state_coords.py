@@ -80,9 +80,7 @@ def test_state_coords_from_instantaneous_solver(parallel):
     N = 6
     t = jnp.sort(jax.random.uniform(jax.random.PRNGKey(0), (N,), maxval=50.0))
     solver_cls = (
-        smolgp.solvers.ParallelStateSpaceSolver
-        if parallel
-        else smolgp.solvers.StateSpaceSolver
+        smolgp.solvers.ParallelStateSpaceSolver if parallel else smolgp.solvers.StateSpaceSolver
     )
     gp = smolgp.GaussianProcess(kernel, X=t, noise=jnp.full(N, 0.01), solver=solver_cls)
     label = solver_cls.__name__
@@ -95,9 +93,7 @@ def test_state_coords_from_instantaneous_solver(parallel):
     assert jnp.array_equal(gp.state_coords.t_states, sc.t_states), f"[{label}] gp pre"
     _, condgp = gp.condition(jax.random.normal(jax.random.PRNGKey(1), (N,)))
     sc_post = condgp.state_coords
-    _assert_core_invariants(
-        sc_post, N=N, K=N, num_insts=1, label=f"{label} conditioned"
-    )
+    _assert_core_invariants(sc_post, N=N, K=N, num_insts=1, label=f"{label} conditioned")
     assert jnp.array_equal(sc_post.t_states, sc.t_states), f"[{label}] gp post"
 
 
@@ -107,9 +103,7 @@ def test_state_coords_from_integrated_solver(parallel, Ninst):
     """The integrated case, where K = 2N and instid stays length N."""
     S, w, Q = 2.5, 0.2, 2.0
     sigma = jnp.sqrt(S * w * Q)
-    kernel = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=Ninst
-    )
+    kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=Ninst)
     tA = jnp.linspace(0.0, 100.0, 7)
     t, texp, instid = tA, jnp.full(7, 3.0), jnp.zeros(7, dtype=int)
     if Ninst == 2:
@@ -133,9 +127,7 @@ def test_state_coords_from_integrated_solver(parallel, Ninst):
     _assert_core_invariants(sc, N=N, K=2 * N, num_insts=Ninst, label=label)
 
     # instid must be passed through from the data, NOT gathered/expanded
-    assert jnp.array_equal(sc.instid, instid), (
-        f"[{label}] instid must be the data's own"
-    )
+    assert jnp.array_equal(sc.instid, instid), f"[{label}] instid must be the data's own"
 
     # Each observation contributes exactly one start (stateid=0) and one end
     # (stateid=1), and the start must come first in the sorted timeline.
@@ -152,16 +144,12 @@ def test_state_coords_from_integrated_solver(parallel, Ninst):
         assert jnp.allclose(sc.t_states[start_pos], t[n] - texp[n] / 2), (
             f"[{label}] obs {n} start time"
         )
-        assert jnp.allclose(sc.t_states[end_pos], t[n] + texp[n] / 2), (
-            f"[{label}] obs {n} end time"
-        )
+        assert jnp.allclose(sc.t_states[end_pos], t[n] + texp[n] / 2), f"[{label}] obs {n} end time"
         # The gather must resolve BOTH of that observation's states to its
         # own instrument -- the single most load-bearing consequence of
         # instid being per-observation rather than per-state.
         per_state = sc.instid_per_state()
-        assert int(per_state[start_pos]) == int(instid[n]), (
-            f"[{label}] obs {n} start inst"
-        )
+        assert int(per_state[start_pos]) == int(instid[n]), f"[{label}] obs {n} start inst"
         assert int(per_state[end_pos]) == int(instid[n]), f"[{label}] obs {n} end inst"
 
 
@@ -331,8 +319,7 @@ def test_conditioned_states_call_matches_solver_condition(kind, solver_cls):
         f"got {type(from_states[0]).__name__}"
     )
     assert isinstance(from_solver[0], StateCoords), (
-        f"[{label}] solver.condition must yield a StateCoords, "
-        f"got {type(from_solver[0]).__name__}"
+        f"[{label}] solver.condition must yield a StateCoords, got {type(from_solver[0]).__name__}"
     )
 
     # 2. Identical pytree structure. Catches a field added to one producer
@@ -363,15 +350,11 @@ def test_conditioned_states_call_matches_solver_condition(kind, solver_cls):
     #    None for v_S, while condition(return_v_S=True) returns (v, S). The
     #    first two elements must still agree; predict() discards the third.
     with_vs = condgp.solver.condition(y, return_v_S=True)
-    assert from_states[2] is None, (
-        f"[{label}] ConditionedStates v_S slot should be None"
-    )
+    assert from_states[2] is None, f"[{label}] ConditionedStates v_S slot should be None"
     assert with_vs[2] is not None, f"[{label}] return_v_S=True should populate v_S"
-    assert jax.tree_util.tree_structure(
-        from_states[:2]
-    ) == jax.tree_util.tree_structure(with_vs[:2]), (
-        f"[{label}] only the v_S slot may differ when return_v_S=True"
-    )
+    assert jax.tree_util.tree_structure(from_states[:2]) == jax.tree_util.tree_structure(
+        with_vs[:2]
+    ), f"[{label}] only the v_S slot may differ when return_v_S=True"
 
 
 @pytest.mark.parametrize("kind,solver_cls", SOLVER_CASES)

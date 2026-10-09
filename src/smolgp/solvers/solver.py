@@ -72,23 +72,17 @@ class StateSpaceSolver(Solver):
     def Kalman(self, y, return_v_S=False) -> Any:
         """Wrapper for Kalman filter used with this solver"""
         y_nd = y[:, None] if y.ndim == 1 else y
-        X_sorted, y_sorted, noise_sorted = self._to_state_order(
-            self.X, y_nd, self.noise
-        )
-        return KalmanFilter(
-            self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
-        )
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
+        return KalmanFilter(self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S)
 
     def log_probability(self, y) -> JAXArray:
         """The marginal log likelihood, without running the full filter.
 
-        Uses :func:`~smolgp.solvers.kalman.kalman_loglike`, whose scan only 
+        Uses :func:`~smolgp.solvers.kalman.kalman_loglike`, whose scan only
         computes the parts of the Kalman filter needed for the likelihood
         """
         y_nd = y[:, None] if y.ndim == 1 else y
-        X_sorted, y_sorted, noise_sorted = self._to_state_order(
-            self.X, y_nd, self.noise
-        )
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
         return KalmanLoglike(self.kernel, X_sorted, y_sorted, noise_sorted)
 
     def RTS(self, kalman_results) -> Any:
@@ -101,9 +95,7 @@ class StateSpaceSolver(Solver):
         These are ``y``-independent, so they can be rebuilt on demand from the
         covariances a previous :meth:`condition` already produced
         """
-        return rts_gains(
-            self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted
-        )
+        return rts_gains(self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted)
 
     def condition_batched_mean(self, y_batch: JAXArray) -> JAXArray:
         """
@@ -138,9 +130,7 @@ class StateSpaceSolver(Solver):
             self.t_states,
             P_predicted,
         )
-        G_all = rts_gains(
-            self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted
-        )
+        G_all = rts_gains(self.kernel.transition_matrix, self.t_states, P_filtered, P_predicted)
 
         # 3. Batched mean-path recursion, O(M) cheap.
         m0 = jnp.zeros(self.kernel.dimension)
@@ -254,9 +244,7 @@ class StateSpaceSolver(Solver):
             # Compute smoothing gain
             # P_pred_next_inv = jnp.linalg.inv(P_pred_next)
             # G_k = P_star_pred @ A_k.T @ P_pred_next_inv # smoothing gain
-            G_k = jnp.linalg.solve(
-                P_pred_next.T, (P_star_pred @ A_k.T).T
-            ).T  # more stable
+            G_k = jnp.linalg.solve(P_pred_next.T, (P_star_pred @ A_k.T).T).T  # more stable
 
             # Update state and covariance
             m_star_hat = m_star_pred + G_k @ (m_hat_next - m_pred_next)
@@ -294,9 +282,7 @@ class StateSpaceSolver(Solver):
             Switch between retrodiction, interpolation, and extrapolation
             for a single test point ktest
             """
-            return jax.lax.switch(
-                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
-            )
+            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
 
         # Calculate predictions
         ktests = jnp.arange(0, M, 1)

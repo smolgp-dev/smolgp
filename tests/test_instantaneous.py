@@ -101,12 +101,8 @@ def test_instantaneous_tied_timestamps():
 
         kernel_smol = smolgp.kernels.SHO(omega=w, quality=Q, sigma=sigma)
 
-        gp_smol = smolgp.GaussianProcess(
-            kernel=kernel_smol, X=t_tied, noise=yerr_train**2
-        )
-        gp_tiny = tinygp.GaussianProcess(
-            kernel=kernel_tiny, X=t_tied, diag=yerr_train**2
-        )
+        gp_smol = smolgp.GaussianProcess(kernel=kernel_smol, X=t_tied, noise=yerr_train**2)
+        gp_tiny = tinygp.GaussianProcess(kernel=kernel_tiny, X=t_tied, diag=yerr_train**2)
 
         condition(gp_smol, gp_tiny, y_tied, tol=1e-9, atol=1e-12)
         predict(gp_smol, gp_tiny, y_tied, tol=1e-9, atol=1e-12)
@@ -139,8 +135,7 @@ def test_scalar_noise_matches_explicit_array():
         label = "StateSpaceSolver" if solver is None else solver.__name__
 
         assert gp_scalar.noise.shape == (N, 1, 1), (
-            f"[{label}] scalar noise must broadcast to (N, 1, 1), "
-            f"got {gp_scalar.noise.shape}"
+            f"[{label}] scalar noise must broadcast to (N, 1, 1), got {gp_scalar.noise.shape}"
         )
         assert jnp.array_equal(gp_scalar.noise, gp_array.noise), f"[{label}] noise"
 
@@ -153,9 +148,7 @@ def test_scalar_noise_matches_explicit_array():
         assert jnp.array_equal(var_s, var_a), f"[{label}] predicted variance"
 
     # --- integrated kernel (noise still applies per observation, not per state) ---
-    kernel_i = smolgp.kernels.IntegratedSHO(
-        omega=w, quality=Q, sigma=sigma, num_insts=1
-    )
+    kernel_i = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=1)
     ti = jnp.linspace(0.0, 100.0, 6)
     Xi = (ti, jnp.full(6, 3.0), jnp.zeros(6, dtype=int))
     yi = jax.random.normal(jax.random.PRNGKey(2), (6,))
@@ -171,9 +164,7 @@ def test_scalar_noise_matches_explicit_array():
     # A Python float and a 0-D jnp scalar must behave identically
     gp_pyfloat = smolgp.GaussianProcess(kernel, X=t, noise=float(var))
     gp_jaxscalar = smolgp.GaussianProcess(kernel, X=t, noise=jnp.asarray(var))
-    assert jnp.array_equal(gp_pyfloat.noise, gp_jaxscalar.noise), (
-        "python float vs 0-D jnp scalar"
-    )
+    assert jnp.array_equal(gp_pyfloat.noise, gp_jaxscalar.noise), "python float vs 0-D jnp scalar"
     print("    ...scalar noise matches the explicit per-observation array exactly")
 
 
