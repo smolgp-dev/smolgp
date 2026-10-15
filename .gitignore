@@ -11,6 +11,7 @@ __pycache__
 .python-version
 .DS_Store
 playground/
+.vscode/
 
 coverage.xml
 dev/
