@@ -42,6 +42,7 @@ from smolgp.kernels.base import (
     Matern52 as Matern52,
     Matern as Matern,
     Cosine as Cosine,
+    ExpSquared as ExpSquared,
     ExpSineSquared as ExpSineSquared,
     Quasiperiodic as Quasiperiodic,
 )
@@ -53,6 +54,7 @@ from smolgp.kernels.integrated import (
     IntegratedMatern32 as IntegratedMatern32,
     IntegratedMatern52 as IntegratedMatern52,
     IntegratedCosine as IntegratedCosine,
+    IntegratedExpSquared as IntegratedExpSquared,
 )
 
 # Dense kernels (for testing)

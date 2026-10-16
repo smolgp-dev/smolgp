@@ -25,6 +25,7 @@ from __future__ import annotations
 __all__ = [
     "IntegratedCosine",
     "IntegratedExp",
+    "IntegratedExpSquared",
     "IntegratedMatern32",
     "IntegratedMatern52",
     "IntegratedSHO",
@@ -807,4 +808,56 @@ class IntegratedCosine(IntegratedStateSpaceModel):
 
     def state_scales(self) -> JAXArray:
         """The cosine's two states are a rotating pair of equal size"""
+        return jnp.ones(self.d)
+
+
+class IntegratedExpSquared(IntegratedStateSpaceModel):
+    r"""The :class:`~smolgp.kernels.ExpSquared` (RBF) kernel integrated over a finite time range :math:`\delta`.
+
+    Uses the order-:math:`M` state space approximation of :class:`~smolgp.kernels.ExpSquared`;
+    see there for its accuracy as a function of ``order``. Requires 64-bit precision.
+
+    Args:
+        scale: The length scale :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        order (optional): The order :math:`M` of the approximation (the base
+            state dimension). Defaults to 16.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
+    """
+
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float | None = None,
+        order: int = 16,
+        num_insts: int = 1,
+        name: str = "IntegratedExpSquared",
+        **kwargs,
+    ):
+        if sigma is None:
+            sigma = jnp.ones(())
+        self.scale = scale
+        self.sigma = sigma
+        self.name = name
+        self.num_insts = num_insts
+        self.base_model = smolgp.kernels.ExpSquared(
+            scale=self.scale, sigma=self.sigma, order=order
+        )
+        self.lam = self.base_model.lam
+
+    @property
+    def rate(self) -> JAXArray:
+        """The base process's rate, ``sqrt(2) / scale``"""
+        return self.lam
+
+    def state_scales(self) -> JAXArray:
+        """The base states are a coupled-oscillator chain of equal size (Pinf is a multiple of I)"""
         return jnp.ones(self.d)
