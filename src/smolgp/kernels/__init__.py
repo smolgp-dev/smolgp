@@ -55,6 +55,7 @@ from smolgp.kernels.integrated import (
     IntegratedMatern52 as IntegratedMatern52,
     IntegratedCosine as IntegratedCosine,
     IntegratedExpSquared as IntegratedExpSquared,
+    IntegratedExpSineSquared as IntegratedExpSineSquared,
 )
 
 # Dense kernels (for testing)

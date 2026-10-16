@@ -15,6 +15,7 @@ from __future__ import annotations
 __all__ = [
     "IntegratedCosine",
     "IntegratedExp",
+    "IntegratedExpSineSquared",
     "IntegratedExpSquared",
     "IntegratedMatern32",
     "IntegratedMatern52",
@@ -31,6 +32,7 @@ from tinygp.helpers import JAXArray
 
 import smolgp.kernels
 from smolgp.kernels import StateSpaceModel
+from smolgp.kernels.base import Wrapper
 
 
 class IntegratedStateSpaceModel(StateSpaceModel):
@@ -851,3 +853,132 @@ class IntegratedExpSquared(IntegratedStateSpaceModel):
     def state_scales(self) -> JAXArray:
         """The base states are a coupled-oscillator chain of equal size (Pinf is a multiple of I)"""
         return jnp.ones(self.d)
+
+
+class IntegratedExpSineSquared(Wrapper):
+    r"""The :class:`~smolgp.kernels.ExpSineSquared` (periodic) kernel integrated over a finite time range :math:`\delta`.
+
+    Like :class:`~smolgp.kernels.ExpSineSquared`, this is a sum of the terms of its
+    series approximation, each of which is a rotation at a harmonic :math:`j\omega_0`
+    of :math:`\omega_0 = 2\pi/P`. Each term is integrated separately (see
+    :class:`IntegratedExpSineSquared.IntegratedPeriodicTerm`), which is exact since
+    the average of a sum is the sum of the averages, at the cost of one integral
+    state per term (and per instrument).
+
+    Args:
+        period: The parameter :math:`P`.
+        gamma (optional): The parameter :math:`\Gamma`. Defaults to 1.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to 1.
+        order (optional): The number of terms in the approximation. Defaults to
+            the same automatic choice as :class:`~smolgp.kernels.ExpSineSquared`.
+        num_insts (optional): Number of distinct instrument datasets. Defaults to 1.
+            Automatically brought into alignment with the number of
+            instruments implied by the ``instid`` array in ``X`` when a
+            :class:`~smolgp.GaussianProcess` is constructed, so it rarely
+            needs to be set explicitly.
+    """
+
+    period: JAXArray | float
+    gamma: JAXArray | float
+    sigma: JAXArray | float
+    order: int = eqx.field(static=True)
+
+    def __init__(
+        self,
+        period: JAXArray | float,
+        gamma: JAXArray | float | None = None,
+        sigma: JAXArray | float | None = None,
+        order: int | None = None,
+        num_insts: int = 1,
+        name: str = "IntegratedExpSineSquared",
+        kernel: StateSpaceModel | None = None,
+        **kwargs,
+    ):
+        self.period = period
+        self.gamma = jnp.ones(()) if gamma is None else gamma
+        self.sigma = jnp.ones(()) if sigma is None else sigma
+        self.name = name
+        periodic = smolgp.kernels.ExpSineSquared(
+            period=self.period, gamma=self.gamma, sigma=1.0, order=order
+        )
+        self.order = periodic.order
+        if kernel is None:
+            # One integrated term per harmonic, each carrying the amplitude sigma^2
+            def leaves(k):
+                if isinstance(k, smolgp.kernels.Sum):
+                    return leaves(k.kernel1) + leaves(k.kernel2)
+                return [k]
+
+            terms = [
+                IntegratedExpSineSquared.IntegratedPeriodicTerm(
+                    base_model=smolgp.kernels.Scale(term, jnp.square(self.sigma)),
+                    omega=term.order * term.omega,
+                    num_insts=num_insts,
+                    name=f"IntegratedPeriodicTerm_{term.order}",
+                )
+                for term in leaves(periodic.kernel)
+            ]
+            kernel = terms[0]
+            for term in terms[1:]:
+                kernel = kernel + term
+        # (passed in directly when GaussianProcess rebuilds this with a new num_insts)
+        self.kernel = kernel
+
+    class IntegratedPeriodicTerm(IntegratedStateSpaceModel):
+        r"""A single term of :class:`IntegratedExpSineSquared`: a rotation at angular
+        frequency :math:`\omega` (a harmonic :math:`j\omega_0`), integrated.
+
+        The term is deterministic (no process noise), so its integrated process
+        noise is exactly zero, and the integral of its rotation is closed form,
+
+        .. math::
+
+            \bar\Phi(\Delta) = \int_0^\Delta R(\omega t)\, dt
+            = \frac{1}{\omega}\begin{pmatrix} \sin\theta & \cos\theta - 1 \\
+                                               1 - \cos\theta & \sin\theta \end{pmatrix},
+            \qquad \theta = \omega\Delta,
+
+        written with ``sinc`` so that it stays accurate for small :math:`\theta` and
+        is exact (:math:`\bar\Phi = \Delta I`) for the constant :math:`j = 0` term.
+
+        Args:
+            base_model: The (amplitude-scaled) periodic term.
+            omega: Its angular frequency :math:`j\omega_0`.
+        """
+
+        omega: JAXArray | float
+
+        def __init__(
+            self,
+            base_model: StateSpaceModel,
+            omega: JAXArray | float,
+            num_insts: int = 1,
+            name: str = "IntegratedPeriodicTerm",
+            **kwargs,
+        ):
+            self.base_model = base_model
+            self.omega = omega
+            self.num_insts = num_insts
+            self.name = name
+
+        @property
+        def rate(self) -> JAXArray:
+            """The term's angular frequency (1 for the constant term)"""
+            return jnp.where(self.omega > 0, self.omega, 1.0)
+
+        def state_scales(self) -> JAXArray:
+            """The two states are a rotating pair of equal size"""
+            return jnp.ones(self.d)
+
+        def integrated_transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+            """The integrated transition matrix Phibar, the integral of the rotation"""
+            dt = self.coord_to_sortable(X2) - self.coord_to_sortable(X1)
+            theta = self.omega * dt
+            s = dt * jnp.sinc(theta / jnp.pi)  # sin(theta) / omega
+            c = dt * (theta / 2) * jnp.square(jnp.sinc(theta / (2 * jnp.pi)))  # (1 - cos(theta)) / omega
+            return jnp.array([[s, -c], [c, s]])
+
+        def integrated_process_noise(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+            """The integrated process noise submatrices, all zero: the term is deterministic"""
+            Qaug12 = jnp.zeros((self.d, 1))
+            return Qaug12, Qaug12.T, jnp.zeros((1, 1))

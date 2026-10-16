@@ -140,25 +140,39 @@ def assign_num_insts(kernel: StateSpaceModel, num_insts: int) -> StateSpaceModel
     num_insts set to the given value, reinitializing any that don't already match.
 
     Traverses Sum, Product, and Wrapper nodes to find IntegratedStateSpaceModel
-    leaves anywhere in the kernel tree.
+    leaves anywhere in the kernel tree. Warns once, naming every component that
+    was reinitialized (a kernel such as IntegratedExpSineSquared has many).
     """
+    reinitialized = []
+    kernel = _assign_num_insts(kernel, num_insts, reinitialized)
+    if reinitialized:
+        names = ", ".join(f"'{name}'" for name, _ in reinitialized)
+        old = sorted({n for _, n in reinitialized})
+        warnings.warn(
+            f"Kernel component(s) {names} have num_insts={', '.join(map(str, old))}, but the "
+            f"data's instid array implies {num_insts} instrument(s). Reinitializing "
+            f"{'this component' if len(reinitialized) == 1 else 'these components'} "
+            f"with num_insts={num_insts}."
+        )
+    return kernel
+
+
+def _assign_num_insts(kernel, num_insts, reinitialized):
+    """The recursion behind :func:`assign_num_insts`, recording (name, old num_insts)
+    of each component it reinitializes in ``reinitialized``"""
     if isinstance(kernel, (Sum, Product)):
-        k1 = assign_num_insts(kernel.kernel1, num_insts)
-        k2 = assign_num_insts(kernel.kernel2, num_insts)
+        k1 = _assign_num_insts(kernel.kernel1, num_insts, reinitialized)
+        k2 = _assign_num_insts(kernel.kernel2, num_insts, reinitialized)
         if k1 is kernel.kernel1 and k2 is kernel.kernel2:
             return kernel
         return type(kernel)(k1, k2)
     if isinstance(kernel, IntegratedStateSpaceModel):
         if kernel.num_insts == num_insts:
             return kernel
-        warnings.warn(
-            f"Kernel '{kernel.name}' has num_insts={kernel.num_insts}, but the data's "
-            f"instid array implies {num_insts} instrument(s). Reinitializing this "
-            f"kernel component with num_insts={num_insts}."
-        )
+        reinitialized.append((kernel.name, kernel.num_insts))
         return dataclasses.replace(kernel, num_insts=num_insts)
     if isinstance(kernel, Wrapper):
-        inner = assign_num_insts(kernel.kernel, num_insts)
+        inner = _assign_num_insts(kernel.kernel, num_insts, reinitialized)
         if inner is kernel.kernel:
             return kernel
         updated = dataclasses.replace(kernel, kernel=inner)
