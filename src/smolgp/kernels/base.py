@@ -580,8 +580,6 @@ class Scale(Wrapper):
 ## TODO: tinygp base kernels not yet implemented
 ##       some will require approximations
 # Polynomial
-# ExpSquared (RBF), will need approx. via Taylor expannsion
-#     see Hartikainen and Särkkä, 2010; Särkkä et al., 2013
 # RationalQuadratic
 ## RotationTerm (sum of SHO as in celerite)
 
@@ -1237,6 +1235,7 @@ class ExpSquared(StateSpaceModel):
         name: str = "ExpSquared",
         **kwargs,
     ):
+        order = int(order)  # a Python int (not e.g. numpy.int64): it is a static field
         if not 1 <= order <= 30:
             raise ValueError(f"ExpSquared order must be between 1 and 30, got {order}")
         self.scale = scale
