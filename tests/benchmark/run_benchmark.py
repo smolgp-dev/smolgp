@@ -95,10 +95,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "func",
         type=str,
-        help=(
-            "What to benchmark: 'llh', 'cond', 'pred', 'sample-prior', or "
-            "'sample-post'."
-        ),
+        help=("What to benchmark: 'llh', 'cond', 'pred', 'sample-prior', or 'sample-post'."),
     )
     parser.add_argument("--gpu", action="store_true", help="Run on GPU (default: CPU).")
     parser.add_argument(
@@ -349,9 +346,7 @@ if __name__ == "__main__":
         if max_seconds is None:
             max_seconds = 5.0
     if max_seconds is None:
-        max_seconds = (
-            LONG_RUN_MAX_SECONDS if args.long_runs_only else DEFAULT_MAX_SECONDS
-        )
+        max_seconds = LONG_RUN_MAX_SECONDS if args.long_runs_only else DEFAULT_MAX_SECONDS
     if args.func in SCALES_WITH_M:
         logmax -= round(math.log10(M_PER_N))
     if args.quick:
@@ -501,9 +496,7 @@ if __name__ == "__main__":
     # (O(N)) rather than by quadrature over a dense realization (O(N * cadence),
     # which overflowed at N = 1e7). true_kernel is used only for data generation.
     if args.int:
-        true_kernel = smolgp.kernels.IntegratedSHO(
-            omega=w, quality=Q, sigma=sigma, num_insts=1
-        )
+        true_kernel = smolgp.kernels.IntegratedSHO(omega=w, quality=Q, sigma=sigma, num_insts=1)
     else:
         true_kernel = tinygp.kernels.quasisep.SHO(omega=w, quality=Q, sigma=sigma)
     ################# Which kernels to benchmark ##################
@@ -604,11 +597,7 @@ if __name__ == "__main__":
 
     only_sizes = _int_list(args.sizes)
     only_indices = _int_list(args.indices)
-    only_curves = (
-        [c.strip() for c in args.curves.split(",") if c.strip()]
-        if args.curves
-        else None
-    )
+    only_curves = [c.strip() for c in args.curves.split(",") if c.strip()] if args.curves else None
     # A long run measures a disjoint band of sizes, so its result arrays are
     # NaN everywhere the production sweep has numbers. Writing that over the
     # aggregate would erase the sweep; treat it as partial and let --rebuild
@@ -626,8 +615,13 @@ if __name__ == "__main__":
     if args.value_and_grad:
         # Same curves, differentiated. Only llh reaches here (checked above).
         llh_funcs = [
-            {"SSM": ss_llh_vg, "QSM": qs_llh_vg, "GP": gp_llh_vg,
-             "pQSM": pqs_llh_vg, "pSSM": pss_llh_vg},
+            {
+                "SSM": ss_llh_vg,
+                "QSM": qs_llh_vg,
+                "GP": gp_llh_vg,
+                "pQSM": pqs_llh_vg,
+                "pSSM": pss_llh_vg,
+            },
             {"SSM": iss_llh_vg, "GP": igp_llh_vg, "pSSM": ipss_llh_vg},
         ]
         print("Benchmarking value AND gradient (hyperparameter-fit cost)")
@@ -640,8 +634,7 @@ if __name__ == "__main__":
         unknown = sorted(set(only_curves) - known)
         if unknown:
             raise SystemExit(
-                f"Unknown curve(s): {', '.join(unknown)}. "
-                f"Known curves: {', '.join(sorted(known))}"
+                f"Unknown curve(s): {', '.join(unknown)}. Known curves: {', '.join(sorted(known))}"
             )
         for fl in _all:
             for i, d in enumerate(fl):
@@ -651,19 +644,29 @@ if __name__ == "__main__":
     if args.make_data:
         print(f"Building data files for {args.func}{isinst or ''}...")
         _w, _s, _f = make_data_files(
-            true_kernel, args.func, yerr=yerr,
+            true_kernel,
+            args.func,
+            yerr=yerr,
             exposure_quantities=(texp, readout) if args.int else None,
-            n_sizes=n_sizes, logmin=1,
+            n_sizes=n_sizes,
+            logmin=1,
             logmax=logmax + (round(math.log10(M_PER_N)) if args.func in SCALES_WITH_M else 0),
-            m_per_n=M_PER_N, only_sizes=only_sizes, only_indices=only_indices,
-            overwrite=args.overwrite_data, max_n=args.max_n,
+            m_per_n=M_PER_N,
+            only_sizes=only_sizes,
+            only_indices=only_indices,
+            overwrite=args.overwrite_data,
+            max_n=args.max_n,
         )
         raise SystemExit(1 if _f else 0)
 
     if args.rebuild:
         Ns, runtime, memory, outputs = rebuild_from_points(
-            args.func + isvg, device, integrated=args.int, m_per_n=M_PER_N,
-            n_sizes=n_sizes, logmin=1,
+            args.func + isvg,
+            device,
+            integrated=args.int,
+            m_per_n=M_PER_N,
+            n_sizes=n_sizes,
+            logmin=1,
             logmax=logmax + (round(math.log10(M_PER_N)) if args.func in SCALES_WITH_M else 0),
             tag=isvg + isquick,
         )
@@ -789,8 +792,7 @@ if __name__ == "__main__":
         )
     else:
         raise ValueError(
-            "Argument must be one of 'llh', 'cond', 'pred', 'sample-prior', "
-            "or 'sample-post'."
+            "Argument must be one of 'llh', 'cond', 'pred', 'sample-prior', or 'sample-post'."
         )
 
     if args.xla_only or args.absolute_only:
@@ -813,9 +815,7 @@ if __name__ == "__main__":
         # N = 749 and storing it as N = 23.
         fresh_by_n = {}
         for curve in memory:
-            fresh_by_n[curve] = {
-                int(n): e for n, e in zip(Ns, memory[curve])
-            }
+            fresh_by_n[curve] = {int(n): e for n, e in zip(Ns, memory[curve])}
         merged, filled = {}, 0
         for curve, entries in old_mem.items():
             lookup = fresh_by_n.get(curve, {})
@@ -830,11 +830,16 @@ if __name__ == "__main__":
                 out.append(tuple(e))
             merged[curve] = out
         save_benchmark_data(
-            out_filename, old_data["Ns"], old_data["runtime"], merged,
+            out_filename,
+            old_data["Ns"],
+            old_data["runtime"],
+            merged,
             old_data["outputs"],
         )
-        print(f"  filled the {what} slot for {filled} points; other values "
-              f"untouched\n  wrote {out_filename}")
+        print(
+            f"  filled the {what} slot for {filled} points; other values "
+            f"untouched\n  wrote {out_filename}"
+        )
     elif args.rebuild:
         print("Wrote results to", out_filename)
         save_benchmark_data(out_filename, Ns, runtime, memory, outputs)
@@ -869,7 +874,10 @@ if __name__ == "__main__":
         if gpu_data is None:
             print(f"  (no {gpu_file}; plotting CPU curves only)")
         make_benchmark_figure(
-            kind, cpu_data, gpu_data=gpu_data, integrated=args.int,
+            kind,
+            cpu_data,
+            gpu_data=gpu_data,
+            integrated=args.int,
             tag=isvg,
             suffix=isquick,
             title_suffix=" + gradient" if args.value_and_grad else "",

@@ -325,9 +325,7 @@ class IntegratedStateSpaceSolver(Solver):
             Switch between retrodiction, interpolation, and extrapolation
             for a single instantaneous test point ktest
             """
-            return jax.lax.switch(
-                cases[ktest], (retrodict, interpolate, extrapolate), (ktest)
-            )
+            return jax.lax.switch(cases[ktest], (retrodict, interpolate, extrapolate), (ktest))
 
         if delta_test is not None and y is not None:
             # Exposure-integrated prediction requires a non-zero exposure time (delta),

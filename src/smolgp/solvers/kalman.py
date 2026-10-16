@@ -100,8 +100,8 @@ def kalman_filter(A, Q, H_all, R, t, y, m0, P0):
 def KalmanLoglike(kernel, X, y, R):
     """
     Wrapper for the jitted kalman_loglike function
-    
-    Same arguments as :func:`KalmanFilter`, but returns 
+
+    Same arguments as :func:`KalmanFilter`, but returns
     just the marginal log likelihood.
     """
     A = kernel.transition_matrix
@@ -122,19 +122,19 @@ def kalman_loglike(A, Q, H_all, R, t, y, m0, P0):
     Optimized function to return just the marginal log likelihood.
     The performance boost here comes from three optimisations:
 
-    1. Replace `solve` with a simple division in 
+    1. Replace `solve` with a simple division in
         :func:`~smolgp.helpers.kalman_gain` when `D==1`.
-    2. Prebuilds A(Δ) and Q(Δ) with vmap instead of computing them 
+    2. Prebuilds A(Δ) and Q(Δ) with vmap instead of computing them
         on-the-fly inside the scan.
-    3. Splitting: separate scans for the y-independant covariance and the 
-        y-dependent mean, so each carries one array instead of (m, P). 
+    3. Splitting: separate scans for the y-independant covariance and the
+        y-dependent mean, so each carries one array instead of (m, P).
 
     #3 is only relevant for `d == 2` kernels (with nontrivial Q). At that size,
-    the covariance half of the scan fits just under a code-generation threshold, 
+    the covariance half of the scan fits just under a code-generation threshold,
     so splitting it from the mean scan (which is always small) is a ~10x speedup
     as both scans compile into short instructions whereas carrying both is over
-    the threshold and compiles to ~7x more instructions per step.  d == 1 fits 
-    as a single scan, so splitting is actually marginally slower (10%), and 
+    the threshold and compiles to ~7x more instructions per step.  d == 1 fits
+    as a single scan, so splitting is actually marginally slower (10%), and
     d > 2 is over the threshold regardless, so splitting is irrelevant.
     """
     D = R.shape[-1]
@@ -168,8 +168,9 @@ def kalman_loglike(A, Q, H_all, R, t, y, m0, P0):
     )
 
     if D == 1:
+
         def solve(carry, data):
-            """Pass 2: the y-dependent mean recursion, 
+            """Pass 2: the y-dependent mean recursion,
             accumulating the quadratic form."""
             m_prev, quad = carry
             A_prev, H_k, K_k, S_k, y_k = data

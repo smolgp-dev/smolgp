@@ -47,8 +47,10 @@ KINDS = ("llh", "cond", "pred", "sample-prior", "sample-post")
 
 
 def path_for(kind, integrated, vg=False, device="cpu"):
-    return (f"results/{device}_{kind}{'_int' if integrated else ''}"
-            f"{'_value_and_grad' if vg else ''}_benchmark.pkl")
+    return (
+        f"results/{device}_{kind}{'_int' if integrated else ''}"
+        f"{'_value_and_grad' if vg else ''}_benchmark.pkl"
+    )
 
 
 def measured(kind, integrated, curve, vg=False, min_bytes=0.0):
@@ -63,8 +65,7 @@ def measured(kind, integrated, curve, vg=False, min_bytes=0.0):
         return []
     m = np.array([q[0] for q in pts], dtype=float)
     n = min(len(Ns), len(m))
-    return [(float(N), float(v)) for N, v in zip(Ns[:n], m[:n])
-            if np.isfinite(v) and v > min_bytes]
+    return [(float(N), float(v)) for N, v in zip(Ns[:n], m[:n]) if np.isfinite(v) and v > min_bytes]
 
 
 def per_unit(kind, size, value, n_pow, m_pow):
@@ -72,7 +73,7 @@ def per_unit(kind, size, value, n_pow, m_pow):
     mpn = M_PER_N if kind in SCALES_WITH_M or kind == "pred" else 1
     N = size
     M = mpn * size if kind in SCALES_WITH_M or kind == "pred" else size
-    denom = (N ** n_pow) * (M ** m_pow) if m_pow else N ** n_pow
+    denom = (N**n_pow) * (M**m_pow) if m_pow else N**n_pow
     return value / denom if denom else float("nan")
 
 
@@ -80,8 +81,10 @@ def report_cost(min_bytes, verbose):
     print("=" * 78)
     print("_COST / _COST_INT memory coefficients: source vs measured")
     print("=" * 78)
-    print(f"{'kind':14s} {'curve':5s} {'int':4s} {'source':>10s} "
-          f"{'measured':>10s} {'ratio':>7s}   points used")
+    print(
+        f"{'kind':14s} {'curve':5s} {'int':4s} {'source':>10s} "
+        f"{'measured':>10s} {'ratio':>7s}   points used"
+    )
     for integrated in (False, True):
         table = _COST_INT if integrated else _COST
         for (kind, curve), ((coef, (pn, pm)), _t) in sorted(table.items()):
@@ -91,10 +94,11 @@ def report_cost(min_bytes, verbose):
             vals = [per_unit(kind, s, v, pn, pm) for s, v in pts]
             got = vals[-1]
             flag = "" if 0.8 <= got / coef <= 1.25 else "  <-- drifted"
-            detail = ", ".join(f"{v:.0f}" for v in vals[-3:]) if verbose else \
-                     f"n={len(vals)}"
-            print(f"{kind:14s} {curve:5s} {str(integrated):4s} {coef:10.0f} "
-                  f"{got:10.0f} {got / coef:7.2f}   {detail}{flag}")
+            detail = ", ".join(f"{v:.0f}" for v in vals[-3:]) if verbose else f"n={len(vals)}"
+            print(
+                f"{kind:14s} {curve:5s} {str(integrated):4s} {coef:10.0f} "
+                f"{got:10.0f} {got / coef:7.2f}   {detail}{flag}"
+            )
 
 
 def report_grad(min_bytes, verbose):
@@ -102,8 +106,7 @@ def report_grad(min_bytes, verbose):
     print("=" * 78)
     print("_GRAD_MEM_FACTOR: source vs measured (value-and-grad / forward)")
     print("=" * 78)
-    print(f"{'kind':14s} {'curve':5s} {'int':4s} {'source':>7s} "
-          f"{'measured':>9s}   basis")
+    print(f"{'kind':14s} {'curve':5s} {'int':4s} {'source':>7s} {'measured':>9s}   basis")
     for (kind, curve, integrated), factor in sorted(_GRAD_MEM_FACTOR.items()):
         table = _COST_INT if integrated else _COST
         cost = table.get((kind, curve))
@@ -118,17 +121,21 @@ def report_grad(min_bytes, verbose):
         # needs more memory, so its last point is never the forward one's.
         shared = sorted(set(fwd) & set(vg))
         if not shared:
-            print(f"{kind:14s} {curve:5s} {str(integrated):4s} {factor:7.1f} "
-                  f"{'--':>9s}   no size measured both ways")
+            print(
+                f"{kind:14s} {curve:5s} {str(integrated):4s} {factor:7.1f} "
+                f"{'--':>9s}   no size measured both ways"
+            )
             continue
         N = shared[-1]
         f_unit = per_unit(kind, N, fwd[N], pn, pm)
         v_unit = per_unit(kind, N, vg[N], pn, pm)
         got = v_unit / f_unit if f_unit else float("nan")
         flag = "" if 0.75 <= got / factor <= 1.33 else "  <-- drifted"
-        print(f"{kind:14s} {curve:5s} {str(integrated):4s} {factor:7.1f} "
-              f"{got:9.1f}   at N={N:.0f}: fwd {f_unit:.0f}, vg {v_unit:.0f}"
-              f"{flag}")
+        print(
+            f"{kind:14s} {curve:5s} {str(integrated):4s} {factor:7.1f} "
+            f"{got:9.1f}   at N={N:.0f}: fwd {f_unit:.0f}, vg {v_unit:.0f}"
+            f"{flag}"
+        )
 
 
 def report_theory(min_bytes, verbose):
@@ -138,8 +145,7 @@ def report_theory(min_bytes, verbose):
     print("=" * 78)
     print("(these are what a sub-floor point is drawn as, so a low one puts the")
     print(" hollow markers below where the real curve goes)")
-    print(f"{'kind':14s} {'curve':5s} {'int':4s} {'source@N':>12s} "
-          f"{'measured':>12s} {'ratio':>7s}")
+    print(f"{'kind':14s} {'curve':5s} {'int':4s} {'source@N':>12s} {'measured':>12s} {'ratio':>7s}")
     for integrated in (False, True):
         table = THEORY_MEM_INT if integrated else THEORY_MEM
         for (pkind, curve), fn in sorted(table.items()):
@@ -149,24 +155,33 @@ def report_theory(min_bytes, verbose):
                 continue
             size, value = pts[-1]
             want = fn(size, M_PER_N)
-            print(f"{kind:14s} {curve:5s} {str(integrated):4s} "
-                  f"{want / 1e9:11.2f}G {value / 1e9:11.2f}G "
-                  f"{value / want:7.2f}" +
-                  ("" if 0.8 <= value / want <= 1.25 else "  <-- drifted"))
+            print(
+                f"{kind:14s} {curve:5s} {str(integrated):4s} "
+                f"{want / 1e9:11.2f}G {value / 1e9:11.2f}G "
+                f"{value / want:7.2f}" + ("" if 0.8 <= value / want <= 1.25 else "  <-- drifted")
+            )
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--grad", action="store_true", help="only the gradient factors")
     ap.add_argument("--theory", action="store_true", help="only the theory constants")
     ap.add_argument("--cost", action="store_true", help="only the cost coefficients")
-    ap.add_argument("--min-gb", type=float, default=0.004,
-                    help="ignore points below this (default 0.004 GB = the 4 MB "
-                         "above which a reading is meaningfully above the plot floor)")
-    ap.add_argument("-v", "--verbose", action="store_true",
-                    help="show the last three per-unit values rather than a count")
+    ap.add_argument(
+        "--min-gb",
+        type=float,
+        default=0.004,
+        help="ignore points below this (default 0.004 GB = the 4 MB "
+        "above which a reading is meaningfully above the plot floor)",
+    )
+    ap.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="show the last three per-unit values rather than a count",
+    )
     a = ap.parse_args()
     mb = a.min_gb * 1e9
     everything = not (a.grad or a.theory or a.cost)

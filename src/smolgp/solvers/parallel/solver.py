@@ -30,9 +30,7 @@ class ParallelStateSpaceSolver(StateSpaceSolver):
         """Wrapper for Kalman filter used with this solver"""
         # noise (N, D, D) → R (N, D, D); y (..., N) → (N, D)
         y_nd = y[:, None] if y.ndim == 1 else y
-        X_sorted, y_sorted, noise_sorted = self._to_state_order(
-            self.X, y_nd, self.noise
-        )
+        X_sorted, y_sorted, noise_sorted = self._to_state_order(self.X, y_nd, self.noise)
         return ParallelKalmanFilter(
             self.kernel, X_sorted, y_sorted, noise_sorted, return_v_S=return_v_S
         )

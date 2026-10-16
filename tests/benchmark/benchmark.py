@@ -25,7 +25,7 @@ import utils
 
 mp.set_start_method("spawn", force=True)
 
-# Profiling runs each point in a spawned subprocess, and that child imports this 
+# Profiling runs each point in a spawned subprocess, and that child imports this
 # module, so need to enable here to ensure 64-bit precision in the benchmark
 jax.config.update("jax_enable_x64", True)
 
@@ -415,9 +415,7 @@ def tracer(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe, machine):
     try:
         stats = fn_jit.lower(dat).compile().memory_analysis()
         xla_mem = (
-            stats.temp_size_in_bytes
-            + stats.output_size_in_bytes
-            + stats.argument_size_in_bytes
+            stats.temp_size_in_bytes + stats.output_size_in_bytes + stats.argument_size_in_bytes
         )
     except Exception:  # noqa: BLE001 -- not worth failing a measurement over
         xla_mem = float("nan")
@@ -484,8 +482,7 @@ def _xla_child(fn_bytes, dat_bytes, obj_bytes, args_bytes, return_pipe):
 
     try:
         st = fn_jit.lower(dat).compile().memory_analysis()
-        total = (st.temp_size_in_bytes + st.output_size_in_bytes
-                 + st.argument_size_in_bytes)
+        total = st.temp_size_in_bytes + st.output_size_in_bytes + st.argument_size_in_bytes
     except Exception as exc:  # noqa: BLE001
         return_pipe.send({"xla": float("nan"), "err": repr(exc)[:200]})
     else:
@@ -511,8 +508,13 @@ def xla_footprint(fn, data, obj, *args, timeout=900.0):
     parent_conn, child_conn = mp.Pipe()
     p = mp.Process(
         target=_xla_child,
-        args=(pickle.dumps(fn), pickle.dumps(data), pickle.dumps(obj),
-              pickle.dumps(args), child_conn),
+        args=(
+            pickle.dumps(fn),
+            pickle.dumps(data),
+            pickle.dumps(obj),
+            pickle.dumps(args),
+            child_conn,
+        ),
     )
     p.start()
     result = None
@@ -537,8 +539,15 @@ def xla_footprint(fn, data, obj, *args, timeout=900.0):
 
 
 def profile_jax_function(
-    fn, data, obj, *args, n_repeat=None, machine="cpu", drop_outliers=False,
-    max_seconds=None, **kwargs
+    fn,
+    data,
+    obj,
+    *args,
+    n_repeat=None,
+    machine="cpu",
+    drop_outliers=False,
+    max_seconds=None,
+    **kwargs,
 ):
     """
     JAX profiler for time benchmarking and memory tracing a function.
@@ -558,8 +567,8 @@ def profile_jax_function(
 
     runtimes = []
     peaks = []
-    absolutes = []   # absolute peak: what must be free to run this
-    xlas = []        # XLA buffer accounting: the computation alone
+    absolutes = []  # absolute peak: what must be free to run this
+    xlas = []  # XLA buffer accounting: the computation alone
     output = None
 
     adaptive = n_repeat is None
@@ -591,7 +600,11 @@ def profile_jax_function(
 
         if result is None:
             code = p.exitcode
-            why = f"signal {-code} ({SIGNAL_NAMES.get(-code, '?')})" if code and code < 0 else f"exit code {code}"
+            why = (
+                f"signal {-code} ({SIGNAL_NAMES.get(-code, '?')})"
+                if code and code < 0
+                else f"exit code {code}"
+            )
             print(f"      (subprocess died with {why}; recording this point as failed)")
             return (np.nan, np.nan), (np.nan, np.nan, np.nan, np.nan), np.nan
 
@@ -809,9 +822,7 @@ def benchmark(
                         outputs[name].append(jnp.nan)
                         continue
                     if projected > max_seconds:
-                        _retired[name] = (
-                            f"projected over the {max_seconds:g}s budget"
-                        )
+                        _retired[name] = f"projected over the {max_seconds:g}s budget"
                         print(
                             f"    {name}: Skipped (projected {projected:.0f}s"
                             f" via N^{power:.2f} from the last two points,"
@@ -870,11 +881,17 @@ def benchmark(
                         # This is a size the sweep was told not to spend, so
                         # record it the way a cutoff-retired size is recorded.
                         # The measured value is still printed above.
-                        t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
+                        t, mem, val = (
+                            (jnp.nan, jnp.nan),
+                            (jnp.nan, jnp.nan, jnp.nan, jnp.nan),
+                            jnp.nan,
+                        )
             elif N <= floor:
                 t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
-                print(f"    {name}: Skipped (N={N} <= floor={floor:.3g}, already"
-                      " covered by the production sweep)")
+                print(
+                    f"    {name}: Skipped (N={N} <= floor={floor:.3g}, already"
+                    " covered by the production sweep)"
+                )
             else:
                 t, mem, val = (jnp.nan, jnp.nan), (jnp.nan, jnp.nan, jnp.nan, jnp.nan), jnp.nan
                 print(f"    {name}: Skipped (N={N} > cutoff={cutoff:.3g})")
@@ -972,8 +989,9 @@ def select_sizes(sizes, only_sizes=None, only_indices=None):
     return [sizes[i] for i in order], order
 
 
-def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
-                        logmin=1, logmax=7, curves=None, tag=""):
+def rebuild_from_points(
+    kind, device, integrated=False, m_per_n=100, n_sizes=17, logmin=1, logmax=7, curves=None, tag=""
+):
     """Reassemble an aggregate result file from the per-point checkpoints.
 
     Every measured point is written to ``results/individual/`` as it completes,
@@ -991,19 +1009,34 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
     import glob
 
     prefixes = {
-        "llh": {"SSM": "ss_llh", "QSM": "qs_llh", "GP": "gp_llh",
-                "pSSM": "pss_llh", "pQSM": "pqs_llh"},
-        "llh_value_and_grad": {
-            "SSM": "ss_llh_vg", "QSM": "qs_llh_vg", "GP": "gp_llh_vg",
-            "pSSM": "pss_llh_vg", "pQSM": "pqs_llh_vg",
+        "llh": {
+            "SSM": "ss_llh",
+            "QSM": "qs_llh",
+            "GP": "gp_llh",
+            "pSSM": "pss_llh",
+            "pQSM": "pqs_llh",
         },
-        "cond": {"SSM": "ss_cond", "QSM": "qs_cond", "GP": "gp_cond",
-                 "pSSM": "pss_cond", "pQSM": "pqs_cond"},
+        "llh_value_and_grad": {
+            "SSM": "ss_llh_vg",
+            "QSM": "qs_llh_vg",
+            "GP": "gp_llh_vg",
+            "pSSM": "pss_llh_vg",
+            "pQSM": "pqs_llh_vg",
+        },
+        "cond": {
+            "SSM": "ss_cond",
+            "QSM": "qs_cond",
+            "GP": "gp_cond",
+            "pSSM": "pss_cond",
+            "pQSM": "pqs_cond",
+        },
         "pred": {"SSM": "ss_pred", "QSM": "qs_pred", "GP": "gp_pred"},
-        "sample-prior": {"SSM": "ss_sample_prior", "QSM": "qs_sample_prior",
-                         "GP": "gp_sample_prior"},
-        "sample-post": {"SSM": "ss_sample_post", "QSM": "qs_sample_post",
-                        "GP": "gp_sample_post"},
+        "sample-prior": {
+            "SSM": "ss_sample_prior",
+            "QSM": "qs_sample_prior",
+            "GP": "gp_sample_prior",
+        },
+        "sample-post": {"SSM": "ss_sample_post", "QSM": "qs_sample_post", "GP": "gp_sample_post"},
     }[kind]
     if integrated:
         prefixes = {k: "i" + v for k, v in prefixes.items() if k != "QSM"}
@@ -1054,23 +1087,39 @@ def rebuild_from_points(kind, device, integrated=False, m_per_n=100, n_sizes=17,
             for i, e in enumerate(entries):
                 e = tuple(e) + (float("nan"),) * (4 - len(e))
                 for slot in (2, 3):
-                    if (e[slot] != e[slot] and i < len(was)
-                            and len(was[i]) > slot and was[i][slot] == was[i][slot]):
-                        e = e[:slot] + (was[i][slot],) + e[slot + 1:]
+                    if (
+                        e[slot] != e[slot]
+                        and i < len(was)
+                        and len(was[i]) > slot
+                        and was[i][slot] == was[i][slot]
+                    ):
+                        e = e[:slot] + (was[i][slot],) + e[slot + 1 :]
                         kept += 1
                 entries[i] = e
         if kept:
             print(f"  kept {kept} xla values the checkpoints do not carry")
 
-    print(f"  rebuilt {kind}{'_int' if integrated else ''} ({device}) from "
-          f"{found} per-point files across {len(grid)} sizes")
+    print(
+        f"  rebuilt {kind}{'_int' if integrated else ''} ({device}) from "
+        f"{found} per-point files across {len(grid)} sizes"
+    )
     return grid, runtime, memory, outputs
 
 
-def make_data_files(true_kernel, kind, yerr=0.3, exposure_quantities=None,
-                    n_sizes=17, logmin=1, logmax=7, m_per_n=100,
-                    only_sizes=None, only_indices=None, overwrite=False,
-                    max_n=None):
+def make_data_files(
+    true_kernel,
+    kind,
+    yerr=0.3,
+    exposure_quantities=None,
+    n_sizes=17,
+    logmin=1,
+    logmax=7,
+    m_per_n=100,
+    only_sizes=None,
+    only_indices=None,
+    overwrite=False,
+    max_n=None,
+):
     """Build the ``data/*.npz`` inputs for a kind's grid, without profiling.
 
     Split out from the sweeps so a single dataset can be repaired or rebuilt on
@@ -1113,14 +1162,12 @@ def make_data_files(true_kernel, kind, yerr=0.3, exposure_quantities=None,
         verb = "rewriting" if os.path.exists(path) else "generating"
         print(f"  {N:>9}  {verb} {path} ...", flush=True)
         try:
-            get_data(true_kernel, N, yerr=yerr,
-                     exposure_quantities=exposure_quantities, save=True)
+            get_data(true_kernel, N, yerr=yerr, exposure_quantities=exposure_quantities, save=True)
             size = os.path.getsize(path) if os.path.exists(path) else 0
             print(f"  {N:>9}  wrote {path} ({format_bytes(size)})", flush=True)
             written.append(N)
         except Exception as exc:  # noqa: BLE001 -- report and continue
-            print(f"  {N:>9}  FAILED: {type(exc).__name__}: {str(exc)[:120]}",
-                  flush=True)
+            print(f"  {N:>9}  FAILED: {type(exc).__name__}: {str(exc)[:120]}", flush=True)
             failed.append(N)
     print(f"\n  wrote {len(written)}, skipped {len(skipped)}, failed {len(failed)}")
     if failed:
@@ -1305,17 +1352,20 @@ def run_pred_benchmark(
         gp = {
             "SSM": (
                 smolgp.GaussianProcess(kernels["SSM"], X_train, noise=yerr_train**2)
-                if _in_band("SSM") else None
+                if _in_band("SSM")
+                else None
             ),
             "GP": (
                 tinygp.GaussianProcess(kernels["GP"], X_train, diag=yerr_train**2)
-                if _in_band("GP") else None
+                if _in_band("GP")
+                else None
             ),
         }
         if "QSM" in kernels:
             gp["QSM"] = (
                 tinygp.GaussianProcess(kernels["QSM"], X_train, diag=yerr_train**2)
-                if _in_band("QSM") else None
+                if _in_band("QSM")
+                else None
             )
 
         _, t, m, o = benchmark(
@@ -1786,9 +1836,7 @@ def size_cutoffs(
             continue
         (mem_coeff, mem_pow), (sec_coeff, sec_pow) = cost
         grad = (
-            _GRAD_MEM_FACTOR.get(
-                (kind, curve, integrated), GRAD_MEM_FACTOR_DEFAULT
-            )
+            _GRAD_MEM_FACTOR.get((kind, curve, integrated), GRAD_MEM_FACTOR_DEFAULT)
             if value_and_grad
             else 1.0
         )

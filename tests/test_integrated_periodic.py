@@ -47,7 +47,9 @@ def test_matches_dense_exposure_averaged(period):
 
     C = _dense_exposure_averaged(period, kernel.order, t, delta) + 0.05 * np.eye(len(t))
     y = np.linalg.cholesky(C) @ rng.normal(size=len(t))
-    llh_dense = -0.5 * (y @ np.linalg.solve(C, y) + np.linalg.slogdet(C)[1] + len(t) * np.log(2 * np.pi))
+    llh_dense = -0.5 * (
+        y @ np.linalg.solve(C, y) + np.linalg.slogdet(C)[1] + len(t) * np.log(2 * np.pi)
+    )
 
     X = (jnp.array(t), jnp.array(delta), jnp.zeros(len(t), int))
     gp = smolgp.GaussianProcess(kernel, X, noise=jnp.full(len(t), 0.05))

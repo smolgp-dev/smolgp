@@ -72,9 +72,7 @@ class StateCoords(eqx.Module):
                 the identity ``obsid`` is wanted verbatim.
         """
         K = t_states.shape[0]
-        order = (
-            jnp.argsort(t_states, stable=True) if sort else jnp.arange(K, dtype=int)
-        )
+        order = jnp.argsort(t_states, stable=True) if sort else jnp.arange(K, dtype=int)
         return cls(
             t_states=t_states[order],
             instid=jnp.zeros(K, dtype=int),

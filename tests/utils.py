@@ -53,9 +53,9 @@ def generate_data(N, kernel, yerr=0.3, tmin=0, tmax=86400):
 def generate_integrated_data(N, kernel, texp=180, yerr=0.3, readout=40):
     """Draw ``N`` exposure-integrated observationsfrom the process defined by ``kernel``.
 
-    ``kernel`` must be a smolgp :class:`~smolgp.kernels.integrated.IntegratedStateSpaceModel`, 
+    ``kernel`` must be a smolgp :class:`~smolgp.kernels.integrated.IntegratedStateSpaceModel`,
     e.g. ``smolgp.kernels.IntegratedSHO``. Draws exposure-averaged samples from
-    the process, replacing the old method of sampling a much higher resolution 
+    the process, replacing the old method of sampling a much higher resolution
     grid at instantaneous times and averaging within windows to create exposures,
     which is prohibitively expensive for large simulated datasets.
 
@@ -83,6 +83,7 @@ def generate_integrated_data(N, kernel, texp=180, yerr=0.3, readout=40):
     gp = smolgp.GaussianProcess(kernel, X=(t_train, texp_train, instid), noise=yerr**2)
     y_train = gp.sample(key)
     return t_train, y_train
+
 
 def get_data(true_kernel, N, yerr=0.3, exposure_quantities=None, save=True):
     # Generate data of length N

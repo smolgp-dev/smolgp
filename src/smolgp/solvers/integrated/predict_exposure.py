@@ -221,9 +221,7 @@ def predict_exposure(
     numerator = P_star_pred @ A_rect.T
     G_k = smoothing_gain(P_predicted[idx_next], numerator)
     m_smooth_res = m_star_pred + G_k @ (m_smoothed[idx_next] - m_predicted[idx_next])
-    P_smooth_res = (
-        P_star_pred + G_k @ (P_smoothed[idx_next] - P_predicted[idx_next]) @ G_k.T
-    )
+    P_smooth_res = P_star_pred + G_k @ (P_smoothed[idx_next] - P_predicted[idx_next]) @ G_k.T
 
     is_extrapolate = k_b >= K
     m_final = jnp.where(is_extrapolate, m_star_pred, m_smooth_res)

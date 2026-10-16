@@ -66,8 +66,9 @@ def test_state_space_matches_dense_approximate_kernel(scale, order):
     """
     ksmol = smolgp.kernels.ExpSquared(scale=scale, sigma=SIGMA, order=order)
     yerr = 0.3
-    t, y = generate_data(200, SIGMA**2 * tinygp.kernels.ExpSquared(scale=scale),
-                         yerr=yerr, tmin=0, tmax=20 * scale)
+    t, y = generate_data(
+        200, SIGMA**2 * tinygp.kernels.ExpSquared(scale=scale), yerr=yerr, tmin=0, tmax=20 * scale
+    )
     noise = jnp.full_like(t, yerr**2)
 
     gp_ssm = smolgp.GaussianProcess(ksmol, t, noise=noise)
@@ -79,8 +80,7 @@ def test_state_space_matches_dense_approximate_kernel(scale, order):
     _, cond_ssm = gp_ssm.condition(y)
     _, cond_dense = gp_dense.condition(y)
     allclose("conditioned mean", cond_ssm.loc - cond_dense.loc, tol=1e-7 * SIGMA)
-    allclose("conditioned variance", cond_ssm.variance - cond_dense.variance,
-             tol=1e-7 * SIGMA**2)
+    allclose("conditioned variance", cond_ssm.variance - cond_dense.variance, tol=1e-7 * SIGMA**2)
 
 
 @pytest.mark.parametrize("scale", SCALES)
@@ -122,8 +122,7 @@ def test_transitions_stable_for_any_step(order):
 @pytest.mark.parametrize("scale", SCALES)
 def test_jit_and_gradients(scale):
     """The likelihood is jittable and differentiable in the length scale"""
-    t, y = generate_data(100, tinygp.kernels.ExpSquared(scale=scale),
-                         tmin=0, tmax=20 * scale)
+    t, y = generate_data(100, tinygp.kernels.ExpSquared(scale=scale), tmin=0, tmax=20 * scale)
     noise = jnp.full_like(t, 0.09)
 
     def nll(log_scale):
@@ -170,13 +169,17 @@ def test_integrated_matches_exact_exposure_averaged_rbf(scale):
     delta = np.full(len(t), 0.3 * scale)
     C = _exposure_averaged_rbf(t, delta, scale, SIGMA) + 0.05 * np.eye(len(t))
     y = np.linalg.cholesky(C) @ rng.normal(size=len(t))
-    llh_exact = -0.5 * (y @ np.linalg.solve(C, y) + np.linalg.slogdet(C)[1] + len(t) * np.log(2 * np.pi))
+    llh_exact = -0.5 * (
+        y @ np.linalg.solve(C, y) + np.linalg.slogdet(C)[1] + len(t) * np.log(2 * np.pi)
+    )
 
     X = (jnp.array(t), jnp.array(delta), jnp.zeros(len(t), int))
     diffs = []
     for order in [8, 16, 24]:
         k = smolgp.kernels.IntegratedExpSquared(scale=scale, sigma=SIGMA, order=order)
-        llh = smolgp.GaussianProcess(k, X, noise=jnp.full(len(t), 0.05)).log_probability(jnp.array(y))
+        llh = smolgp.GaussianProcess(k, X, noise=jnp.full(len(t), 0.05)).log_probability(
+            jnp.array(y)
+        )
         diffs.append(abs(float(llh) - llh_exact))
     assert all(d1 > d2 for d1, d2 in zip(diffs, diffs[1:])), diffs
     assert diffs[-1] < 1e-5, diffs
