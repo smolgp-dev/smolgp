@@ -150,6 +150,7 @@ def _all_integrated_kernels(unit=1.0):
         "SHO Q=1/sqrt2": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=1 / np.sqrt(2)),
         "SHO critical": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=0.5),
         "SHO overdamped": smolgp.kernels.IntegratedSHO(omega=1 / unit, quality=0.3),
+        "ExpSquared": smolgp.kernels.IntegratedExpSquared(scale=unit, order=8),
     }
 
 
@@ -182,9 +183,19 @@ def test_process_noise_matches_quadrature_across_switch(name, tau):
         np.testing.assert_allclose(actual, 0.0, atol=1e-14)
         return
     assert np.abs(actual - expected).max() / scale < 1e-11
-    # The integral state's own variance, which an exposure's variance depends on
-    zz = abs(actual[-1, -1] - expected[-1, -1]) / abs(expected[-1, -1])
-    assert zz < 1e-11, f"Q_zz relative error {zz:.1e}"
+    # The integral state's own variance, which an exposure's variance depends on.
+    # For very smooth kernels Q_zz ~ tau^(2d+1) (ExpSquared: d = order) and can be a
+    # negligible part of z's total variance over the step, Var[z] = h Phibar Pinf
+    # Phibar^T h^T + Q_zz; there, only its error relative to Var[z] matters.
+    d = kernel.d
+    Phibar_row = np.asarray(kernel.transition_matrix(0.0, dt))[d, :d]
+    Pinf = np.asarray(kernel.base_model.stationary_covariance())
+    var_z = Phibar_row @ Pinf @ Phibar_row + expected[-1, -1]
+    err_zz = abs(actual[-1, -1] - expected[-1, -1])
+    zz = err_zz / abs(expected[-1, -1])
+    assert zz < 1e-11 or err_zz / var_z < 1e-14, (
+        f"Q_zz relative error {zz:.1e} ({err_zz / var_z:.1e} of Var[z])"
+    )
 
 
 @pytest.mark.parametrize("name", list(_all_integrated_kernels()))
@@ -193,7 +204,8 @@ def test_transitions_independent_of_time_units(name, tau):
     # The same kernel with times in days and in seconds must give the same
     # integral-state rows of A and Q, up to the change of units. With times in
     # seconds, derivative states scale as c**-k and z = int x dt as c (the
-    # cosine's two states are a rotating pair, so they do not scale). The base
+    # cosine's two states are a rotating pair, and the ExpSquared's are a chain
+    # of equal-size oscillators, so they do not scale). The base
     # block of Q comes from the base kernel's own process_noise and is not
     # tested here.
     c = 86400.0
@@ -201,7 +213,7 @@ def test_transitions_independent_of_time_units(name, tau):
     k_secs = _all_integrated_kernels(c)[name]
     dt = tau / float(k_days.rate)
     d = k_days.d
-    Dx = np.ones(d) if name == "Cosine" else c ** -np.arange(d)
+    Dx = np.ones(d) if name in ("Cosine", "ExpSquared") else c ** -np.arange(d)
     D = np.concatenate([Dx, [c]])
 
     A_days = np.asarray(k_days.transition_matrix(0.0, dt))

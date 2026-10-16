@@ -12,13 +12,17 @@ pull requests <https://github.com/smolgp-dev/smolgp/issues>`_ as you find gaps.
 
 from __future__ import annotations
 
+import functools
+import math
 import warnings
 from abc import abstractmethod
+from fractions import Fraction
 from typing import Any
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax.scipy.linalg import expm
 from jax.scipy.special import factorial, gammaln
 from tinygp.helpers import JAXArray
@@ -574,8 +578,6 @@ class Scale(Wrapper):
 ## TODO: tinygp base kernels not yet implemented
 ##       some will require approximations
 # Polynomial
-# ExpSquared (RBF), will need approx. via Taylor expannsion
-#     see Hartikainen and Särkkä, 2010; Särkkä et al., 2013
 # RationalQuadratic
 ## RotationTerm (sum of SHO as in celerite)
 
@@ -1168,24 +1170,241 @@ class Cosine(StateSpaceModel):
         return jnp.zeros((self.dimension, self.dimension))
 
 
-# class ExpSquared(StateSpaceModel):
-#     r"""
-#     A state space implementation of the exponential squared
-#     (also called the radial basis function, or RBF) kernel
+class ExpSquared(StateSpaceModel):
+    r"""The exponential squared kernel, also called the squared exponential,
+    Gaussian, or radial basis function (RBF) kernel.
 
-#     .. math::
+    .. math::
 
-#         k(\mathbf{x}_i,\,\mathbf{x}_j) = \exp(-r^2 / 2)
+        k(\Delta) = \sigma^2 \exp\left(-\frac{\Delta^2}{2\ell^2}\right)
 
-#     where, by default,
+    for :math:`\Delta = |x_i - x_j|`.
 
-#     .. math::
+    Its spectral density :math:`S(\omega) = \sigma^2 \sqrt{2\pi}\,\ell\, e^{-x}`, with
+    :math:`x = \ell^2\omega^2/2`, is not a rational function, so the process has no
+    exact finite-dimensional state space representation. Following
+    `Särkkä & Piché (2014) <https://doi.org/10.1109/MLSP.2014.6958867>`_ (see also
+    Eq. 12.37 of Särkkä & Solin 2019), :math:`e^{-x}` is replaced by its
+    order-:math:`M` Taylor (Padé :math:`[0/M]`) approximant,
 
-#         r^2 = ||(\mathbf{x}_i - \mathbf{x}_j) / \ell||_2^2
+    .. math::
 
-#     Args:
-#         scale: The parameter :math:`\ell`.
-#     """
+        S_M(\omega) = \frac{\sigma^2 \sqrt{2\pi}\,\ell}{\sum_{j=0}^{M} x^j / j!},
+
+    which converges uniformly to the exact kernel as :math:`M \to \infty` and
+    gives an :math:`M`-dimensional (and :math:`M - 1` times differentiable) model.
+    The maximum error in :math:`k(\Delta)/\sigma^2`, independent of :math:`\ell`, is
+
+    ======  ==========  ==========  ==========  ==========  ==========  ==========
+    order   4           8           12          16          20          24
+    error   1.7e-2      6.0e-4      2.9e-5      1.5e-6      8.3e-8      4.7e-9
+    ======  ==========  ==========  ==========  ==========  ==========  ==========
+
+    and is returned by :meth:`max_error`. Padé approximants with a nonzero
+    numerator converge slightly faster in exact arithmetic but lose more to
+    round-off in 64-bit precision, so only the Taylor family is implemented.
+    The model is built in a form with :math:`P_\infty \propto I`
+    (see :class:`ExpSquared.TaylorApproximation`), and in units of the length
+    scale, so it is equally well conditioned at every order, length scale, and
+    step size. It requires 64-bit precision
+    (``jax.config.update("jax_enable_x64", True)``).
+
+    Args:
+        scale: The length scale :math:`\ell`.
+        sigma (optional): The amplitude :math:`\sigma`. Defaults to a value of 1.
+        order (optional): The order :math:`M` of the approximation, which is also
+            the state dimension. Defaults to 16. Must be between 1 and 30.
+    """
+
+    scale: JAXArray | float
+    sigma: JAXArray | float = eqx.field(default_factory=lambda: jnp.ones(()))
+    lam: JAXArray | float
+    approx: ExpSquared.TaylorApproximation
+
+    def __init__(
+        self,
+        scale: JAXArray | float,
+        sigma: JAXArray | float | None = None,
+        order: int = 16,
+        name: str = "ExpSquared",
+        **kwargs,
+    ):
+        order = int(order)  # a Python int (not e.g. numpy.int64): it is a static field
+        if not 1 <= order <= 30:
+            raise ValueError(f"ExpSquared order must be between 1 and 30, got {order}")
+        self.scale = scale
+        self.sigma = jnp.ones(()) if sigma is None else sigma
+        self.name = name
+        self.lam = jnp.sqrt(2.0) / self.scale  # model time is theta = lam * dt
+        self.approx = ExpSquared.TaylorApproximation(order)
+
+    @property
+    def order(self) -> int:
+        """The order :math:`M` of the approximation"""
+        return self.approx.order
+
+    def design_matrix(self) -> JAXArray:
+        """The design (also called the feedback) matrix for the ExpSquared process, F"""
+        # The approximation's matrices are fixed constants, not parameters: stop_gradient
+        # keeps an optimizer that differentiates the kernel object itself from changing them
+        return self.lam * jax.lax.stop_gradient(self.approx.F)
+
+    def stationary_covariance(self) -> JAXArray:
+        """The stationary covariance of the ExpSquared process, Pinf"""
+        return jnp.square(self.sigma) * self.approx.variance * jnp.eye(self.order)
+
+    def observation_matrix(self, X: JAXArray) -> JAXArray:
+        """The observation model H for the ExpSquared process"""
+        del X
+        return jax.lax.stop_gradient(self.approx.H)
+
+    def noise_effect_matrix(self) -> JAXArray:
+        """The noise effect matrix L for the ExpSquared process"""
+        return jax.lax.stop_gradient(self.approx.L)
+
+    def noise(self) -> JAXArray:
+        """The scalar Qc for the ExpSquared process"""
+        return jnp.square(self.sigma) * self.lam * jnp.ones((1, 1))
+
+    def transition_matrix(self, X1: JAXArray, X2: JAXArray) -> JAXArray:
+        """The transition matrix A_k for the ExpSquared process
+
+        ``expm`` of the order-one dimensionless F. Beyond ``theta_max`` the
+        transition has decayed far below round-off, so it is set to zero
+        rather than asking ``expm`` for an arbitrarily long step.
+        """
+        t1 = self.coord_to_sortable(X1)
+        t2 = self.coord_to_sortable(X2)
+        theta = self.lam * (t2 - t1)
+        theta_max = self.approx.theta_max
+        F = jax.lax.stop_gradient(self.approx.F)
+        A = expm(F * jnp.minimum(theta, theta_max))
+        return jnp.where(theta < theta_max, A, jnp.zeros_like(A))
+
+    def max_error(self) -> JAXArray:
+        r"""The maximum absolute error of the approximate kernel, :math:`\max_\Delta |k_M(\Delta) - k(\Delta)|`"""
+        return jnp.square(self.sigma) * self.approx.max_error
+
+    class TaylorApproximation(eqx.Module):
+        r"""
+        The order-:math:`M` Taylor (Padé :math:`[0/M]`) approximation to the
+        unit-amplitude ExpSquared process, in dimensionless time
+        :math:`\theta = \sqrt{2}\,\Delta/\ell`, where it does not depend on :math:`\ell`.
+
+        In these units the approximate spectral density is
+        :math:`2\sqrt{\pi} / A(-s^2)` at :math:`s = iu`, with :math:`A(x) = \sum_{j=0}^{M} x^j/j!`.
+        Spectral factorization, :math:`A(-s^2) = \tilde A(s)\,\tilde A(-s) / M!`, gives an
+        all-pole model with the :math:`M` stable roots of :math:`A(-s^2)` as poles,
+        driven by white noise of spectral density :math:`2\sqrt{\pi}\,M!`.
+
+        It is realized as a chain of coupled oscillators in which the first state
+        is observed (the convention of every kernel here, which the integrated
+        kernels rely on) and only the last is damped and driven,
+
+        .. math::
+
+            F = \begin{pmatrix}
+                    0      & c_{M-1} &        &         \\
+                    -c_{M-1} & 0     & \ddots &         \\
+                           & \ddots & \ddots & c_1     \\
+                           &       & -c_1   & -\delta
+                \end{pmatrix},
+            \qquad L = h \sqrt{2\delta}\, e_M,
+            \qquad H = e_1,
+
+        with unit white noise. Since :math:`F + F^T + L L^T / h^2 = 0`, the stationary
+        covariance is exactly :math:`P_\infty = h^2 I`, where :math:`h^2 = k_M(0)` is
+        the approximate kernel's variance. Being a multiple of the identity keeps
+        the filter well conditioned at any order. (The more obvious modal form, one damped
+        rotation per complex pole pair, has :math:`P_\infty` with condition number
+        :math:`\sim 10^{13}` at :math:`M = 12`, because every mode is driven by the
+        same noise. Nor can the modes be separate kernels in a :class:`Sum`, like
+        the terms of :class:`ExpSineSquared`: each alone has a spectral density that
+        is negative at some frequencies.)
+
+        The characteristic polynomial of :math:`F` must be :math:`\tilde A(s)`, which
+        fixes :math:`\delta = 1/\alpha_1` and :math:`c_k^2 = 1/(\alpha_k \alpha_{k+1})`
+        in terms of the coefficients :math:`\alpha_k` of the Cauer continued fraction
+        of :math:`\tilde A` (the Routh algorithm). These are computed in exact rational
+        arithmetic, then :math:`h^2` is set by matching the spectral density.
+        Everything is computed once per order, in NumPy, and cached.
+
+        Args:
+            order: The order :math:`M` of the approximation.
+        """
+
+        order: int = eqx.field(static=True)
+        variance: float = eqx.field(static=True)  # h^2 = k_M(0), so Pinf = h^2 I
+        theta_max: float = eqx.field(static=True)
+        max_error: float = eqx.field(static=True)
+        F: JAXArray
+        L: JAXArray
+        H: JAXArray
+
+        def __init__(self, order: int):
+            self.order = order
+            F, L, H, self.variance, self.theta_max, self.max_error = self.build(order)
+            self.F = jnp.asarray(F)
+            self.L = jnp.asarray(L)
+            self.H = jnp.asarray(H)
+
+        @staticmethod
+        @functools.lru_cache
+        def build(order: int):
+            """The dimensionless realization (F, L, H, variance, theta_max, max_error)"""
+            from scipy.linalg import expm as scipy_expm
+
+            M = order
+
+            # Stable spectral factor: roots s of A(-s^2) in the left half plane
+            A = np.polynomial.Polynomial([1 / math.factorial(j) for j in range(M + 1)])
+            s = np.sqrt(-A.roots().astype(complex))
+            poles = np.where(s.real < 0, s, -s)
+            # Its coefficients are all positive (products of stable factors), so
+            # they are accurate; from here on, arithmetic is exact
+            Atilde = [Fraction(float(c)) for c in np.real(np.poly(poles))]
+
+            # Cauer continued fraction of Atilde's two parity parts,
+            # odd/even = alpha_1 s + 1/(alpha_2 s + 1/(alpha_3 s + ...))
+            num = [c if i % 2 == 0 else Fraction(0) for i, c in enumerate(Atilde)]
+            den = [c if i % 2 == 1 else Fraction(0) for i, c in enumerate(Atilde)][1:]
+            alpha = []
+            while den:
+                alpha.append(num[0] / den[0])
+                # remainder num - alpha s den, whose leading coefficient is zero
+                rem = [n - alpha[-1] * d for n, d in zip(num, den + [0])][1:]
+                while rem and rem[0] == 0:
+                    rem = rem[1:]
+                num, den = den, rem
+            assert len(alpha) == M and all(a > 0 for a in alpha), "Atilde is not stable"
+            delta = float(1 / alpha[0])
+            c = np.sqrt([float(1 / (alpha[k] * alpha[k + 1])) for k in range(M - 1)])
+
+            # The coupled-oscillator chain: observed at the first state, damped and
+            # driven at the last. Its transfer function is h sqrt(2 delta) prod(c) / Atilde(s);
+            # h matches the spectral density 2 sqrt(pi) M! / |Atilde(iu)|^2
+            h = np.sqrt(2 * np.sqrt(np.pi) * math.factorial(M) / (2 * delta * np.prod(c**2)))
+            F = np.diag(c[::-1], 1) - np.diag(c[::-1], -1)
+            F[-1, -1] = -delta
+            L = np.zeros((M, 1))
+            L[-1, 0] = h * np.sqrt(2 * delta)
+            H = np.zeros((1, M))
+            H[0, 0] = 1.0
+
+            # A(theta) on a grid, by repeated steps: the kernel k(theta) = H A Pinf H^T
+            # gives the maximum error, and |A| shows where the transition has decayed
+            dtheta = 0.01
+            step = scipy_expm(F * dtheta)
+            A_theta, k, norms = np.eye(M), [], []
+            while not norms or (norms[-1] > 1e-20 and len(norms) < 10**5):
+                k.append(h**2 * A_theta[0, 0])
+                norms.append(np.linalg.norm(A_theta))
+                A_theta = step @ A_theta
+            theta = dtheta * np.arange(len(k))
+            max_error = float(np.max(np.abs(np.array(k) - np.exp(-(theta**2) / 4))))
+            theta_max = float(theta[-1])  # beyond here |A| < 1e-20, and still decaying
+
+            return F, L, H, float(h**2), theta_max, max_error
 
 
 class ExpSineSquared(Wrapper):
