@@ -102,9 +102,7 @@ K = t_dense_full.shape[0]
 
 state_coords = StateCoords.instantaneous(t_dense_full)
 key, sub = jax.random.split(key)
-x_traj_true = sample_prior_trajectory(
-    kernel, state_coords, sub
-)  # (K, dim): position, velocity
+x_traj_true = sample_prior_trajectory(kernel, state_coords, sub)  # (K, dim): position, velocity
 
 H_all = jax.vmap(kernel.observation_model)(t_dense_full)  # (K, 1, dim)
 y_true_dense = jnp.einsum("kij,kj->ki", H_all, x_traj_true)[:, 0]
@@ -268,9 +266,7 @@ for i in range(N_COORDS - 1):
     add_beat("beat" if first or i == N_COORDS - 2 else "beat_short")
 
 for alpha in 1.0 - sweep("fade_out"):
-    scenes.append(
-        {"stage": "finalize", "alpha": alpha, "label": "One realization of the process"}
-    )
+    scenes.append({"stage": "finalize", "alpha": alpha, "label": "One realization of the process"})
 add_hold({"stage": "final", "label": "One realization of the process"}, "final")
 
 N_FRAMES = len(scenes)
@@ -384,9 +380,7 @@ def update(frame_idx):
         if alpha > 0:
             draw_resolved_paths(N_COORDS - 1, alpha=alpha * 0.9)
         else:
-            ax.plot(
-                t_coords_np, y_chosen, "-", color="crimson", lw=1.5, alpha=0.6, zorder=9
-            )
+            ax.plot(t_coords_np, y_chosen, "-", color="crimson", lw=1.5, alpha=0.6, zorder=9)
         draw_chosen_chain(N_COORDS - 1)
 
     return []

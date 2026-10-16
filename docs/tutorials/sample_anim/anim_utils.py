@@ -59,8 +59,7 @@ class Timing:
             return self._moments[moment]
         except KeyError:
             raise KeyError(
-                f"No duration defined for moment {moment!r}. Known moments: "
-                f"{sorted(self._moments)}"
+                f"No duration defined for moment {moment!r}. Known moments: {sorted(self._moments)}"
             ) from None
 
     def frames(self, moment: str) -> int:
@@ -90,9 +89,7 @@ class _QuantizedHTMLWriter(HTMLWriter):
         self.fig.savefig(raw, format="png", dpi=self.dpi, **savefig_kwargs)
         raw.seek(0)
         quantized = (
-            Image.open(raw)
-            .convert("RGB")
-            .quantize(colors=PALETTE_COLORS, method=Image.MEDIANCUT)
+            Image.open(raw).convert("RGB").quantize(colors=PALETTE_COLORS, method=Image.MEDIANCUT)
         )
         out = BytesIO()
         quantized.save(out, format="PNG", optimize=True)
@@ -150,9 +147,7 @@ def write_interactive_html(ani, out_path: str, fps: int = 12) -> None:
             # embedded frame's pixel count.
             ani.save(
                 str(path),
-                writer=_QuantizedHTMLWriter(
-                    fps=fps, embed_frames=True, default_mode="loop"
-                ),
+                writer=_QuantizedHTMLWriter(fps=fps, embed_frames=True, default_mode="loop"),
                 dpi=ANIM_DPI,
             )
             html = path.read_text()
@@ -193,7 +188,4 @@ def write_interactive_html(ani, out_path: str, fps: int = 12) -> None:
         f.write(autoplay)
         f.write("\n</div>\n")
     saved = 100 * (1 - n_unique / n_total) if n_total else 0
-    print(
-        f"  {out_path}: {n_total} frames ({n_unique} unique, "
-        f"{saved:.0f}% deduplicated)"
-    )
+    print(f"  {out_path}: {n_total} frames ({n_unique} unique, {saved:.0f}% deduplicated)")

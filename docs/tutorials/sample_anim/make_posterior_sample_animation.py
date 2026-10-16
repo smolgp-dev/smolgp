@@ -132,16 +132,10 @@ boundary_kind = [e[1] for e in boundary_entries]
 
 data_boundary_pos = []
 for idx in DATA_COINCIDE_IDX:
-    pos = next(
-        i for i, e in enumerate(boundary_entries) if e[1] == "sample" and e[2] == idx
-    )
+    pos = next(i for i, e in enumerate(boundary_entries) if e[1] == "sample" and e[2] == idx)
     data_boundary_pos.append(pos)
 for t_extra in DATA_EXTRA_T:
-    pos = next(
-        i
-        for i, e in enumerate(boundary_entries)
-        if e[1] == "data_only" and e[0] == t_extra
-    )
+    pos = next(i for i, e in enumerate(boundary_entries) if e[1] == "data_only" and e[0] == t_extra)
     data_boundary_pos.append(pos)
 data_boundary_pos = np.array(data_boundary_pos)
 # Process data points in chronological order (matching the forward-in-time
@@ -167,9 +161,7 @@ NOISE_STD = 0.3 * float(np.sqrt(var0))
 # algorithm itself never sees this curve; only the data and the desired
 # sample coordinates.
 # ---------------------------------------------------------------------------
-truth_entries = [
-    (float(t), "grid", None) for t in np.linspace(0.0, T_MAX, TRUTH_GRID_N)
-]
+truth_entries = [(float(t), "grid", None) for t in np.linspace(0.0, T_MAX, TRUTH_GRID_N)]
 truth_entries += [(float(t), "data", m) for m, t in enumerate(t_data_np)]
 truth_entries.sort(key=lambda e: e[0])
 t_truth_dense_np = np.array([e[0] for e in truth_entries])
@@ -212,9 +204,7 @@ t_dense_full = jnp.concatenate(grid_pieces)
 t_dense_full_np = np.asarray(t_dense_full)
 K = t_dense_full.shape[0]
 boundary_idx_arr = np.array(boundary_idx)
-data_dense_idx = boundary_idx_arr[
-    data_boundary_pos
-]  # index into t_dense_full for each data point
+data_dense_idx = boundary_idx_arr[data_boundary_pos]  # index into t_dense_full for each data point
 
 state_coords = StateCoords.instantaneous(t_dense_full)
 key, sub = jax.random.split(key)
@@ -324,9 +314,7 @@ for k in range(1, N_DATA + 1):
     mean_prefix_dense = np.asarray(cond_prefix.predict(t_dense_full))
     correction_curves.append(mean_prefix_dense)
 
-FULL_CORR = correction_curves[
-    -1
-]  # the true, all-data-conditioned correction, on the dense grid
+FULL_CORR = correction_curves[-1]  # the true, all-data-conditioned correction, on the dense grid
 
 # ---------------------------------------------------------------------------
 # Fixed y-axis range for the whole animation
@@ -439,16 +427,12 @@ for i in range(N_BOUND - 1):
     n_pts_total = sub_grids[i].shape[0]
     for frac in 0.3 + 0.7 * sweep("passA_walk"):
         n_pts = max(2, int(frac * n_pts_total))
-        scenes.append(
-            {"stage": "walk", "seg": i, "label": PASS_A_LABEL, "n_pts": n_pts}
-        )
+        scenes.append({"stage": "walk", "seg": i, "label": PASS_A_LABEL, "n_pts": n_pts})
     add_hold(
         {"stage": "walk", "seg": i, "label": PASS_A_LABEL, "n_pts": n_pts_total},
         "passA_walk_cloud",
     )
-    add_hold(
-        {"stage": "walk_chosen", "seg": i, "label": PASS_A_LABEL}, "passA_walk_chosen"
-    )
+    add_hold({"stage": "walk_chosen", "seg": i, "label": PASS_A_LABEL}, "passA_walk_chosen")
 
 add_hold(
     {
@@ -624,9 +608,7 @@ def draw_coord_lines(bold_idx=None, include_data_only=True, alpha_scale=1.0):
         elif is_sample:
             ax.axvline(tj, color="0.5", lw=1.3, alpha=0.45 * alpha_scale, zorder=1)
         elif include_data_only:
-            ax.axvline(
-                tj, color="0.5", lw=1.3, ls="--", alpha=0.45 * alpha_scale, zorder=1
-            )
+            ax.axvline(tj, color="0.5", lw=1.3, ls="--", alpha=0.45 * alpha_scale, zorder=1)
 
 
 def draw_true_process(alpha):
