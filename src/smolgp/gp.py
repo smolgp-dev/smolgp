@@ -172,6 +172,54 @@ def assign_num_insts(kernel: StateSpaceModel, num_insts: int) -> StateSpaceModel
     return kernel
 
 
+def _component_observation_model(kernel, component):
+    """Observation model of a component or a **sum** of components: ``X -> Σ_i H_i(X)``.
+    ``component`` is a name or a sequence of names."""
+    names = [component] if isinstance(component, str) else list(component)
+    if not names:
+        raise ValueError("no component names given")
+
+    def H(X):
+        out = kernel.observation_model(X, component=names[0])
+        for name in names[1:]:
+            out = out + kernel.observation_model(X, component=name)
+        return out
+
+    return H
+
+
+def _conditioning_observation_models(kernel, conditioned_on):
+    """One observation model per conditioning variable.
+
+    ``conditioned_on`` is a list with one entry per variable; an entry is a component name, or a
+    tuple of names whose **sum** is the variable. E.g. ``["A"]`` (A), ``[("A", "B")]`` (the sum
+    A + B), ``["A", "B"]`` (A and B jointly), ``[("A", "B"), "C"]`` (A + B and C jointly). A bare
+    name or a bare tuple is a single variable."""
+    if isinstance(conditioned_on, (str, tuple)):
+        conditioned_on = [conditioned_on]
+    if len(conditioned_on) == 0:
+        raise ValueError("conditioned_on is empty")
+    return [_component_observation_model(kernel, v) for v in conditioned_on]
+
+
+def _conditional_variance(H_target, H_conds, X, P):
+    r"""Posterior variance of the target conditional on the conditioning variables, at one state:
+
+    .. math::
+        \mathrm{Var}(T \mid L) = h P h^\top - c\, S^{-1} c^\top,
+        \quad c = h P L^\top, \quad S = L P L^\top
+
+    with ``h`` the target's observation row and ``L`` the stacked rows of the conditioning variables
+    (Gaussian conditioning at the same time / coordinate ``X``). A variable not observed at ``X``
+    (all-zero row: ``S_jj = 0`` and ``c_j = 0``) drops out exactly."""
+    h = jnp.atleast_2d(H_target(X))
+    L = jnp.concatenate([jnp.atleast_2d(H(X)) for H in H_conds], axis=0)
+    c = h @ P @ L.T
+    S = L @ P @ L.T
+    S = S + jnp.diag(jnp.where(jnp.diag(S) > 0, 0.0, 1.0))
+    return h @ P @ h.T - c @ jnp.linalg.solve(S, c.T)
+
+
 class ConditionedStates(eqx.Module):
     """
     An object to hold the conditioned means and variances
@@ -256,14 +304,25 @@ class ConditionedStates(eqx.Module):
             var = H @ P @ H.T
             return mu, var
 
-        N = jnp.array(self.X).shape[-1]
-        ends_idx = jnp.nonzero(self.stateid == 1, size=N)[0]
-        sort = jnp.argsort(self.obsid[ends_idx])
-        idx = ends_idx[sort]
+        idx = self._data_index()
         m_sel = jnp.take(self.smoothed_mean, idx, axis=0)
         P_sel = jnp.take(self.smoothed_cov, idx, axis=0)
         mu, var = jax.vmap(project)(self.X, m_sel, P_sel)
         return mu.squeeze(), var.squeeze()
+
+    def _data_index(self):
+        """Indices of the states with measurements (e.g. exposure-ends), in data order."""
+        N = jnp.array(self.X).shape[-1]
+        ends_idx = jnp.nonzero(self.stateid == 1, size=N)[0]
+        sort = jnp.argsort(self.obsid[ends_idx])
+        return ends_idx[sort]
+
+    def project_conditional_variance_at_data(self, H_target, H_conds):
+        """Variance of the target projection at the data, conditional on the projections
+        ``H_conds`` (see :func:`_conditional_variance`), in data order."""
+        P_sel = jnp.take(self.smoothed_cov, self._data_index(), axis=0)
+        var = jax.vmap(lambda X, P: _conditional_variance(H_target, H_conds, X, P))(self.X, P_sel)
+        return var.squeeze()
 
 
 class PredictedStates(eqx.Module):
@@ -318,6 +377,12 @@ class PredictedStates(eqx.Module):
         var = jax.vmap(_project)(H, self.cov)
         return var.squeeze()
 
+    def project_conditional_variance(self, H_target, H_conds) -> JAXArray:
+        """Variance of the target projection at self.t_states, conditional on the projections
+        ``H_conds`` (see :func:`_conditional_variance`)."""
+        var = jax.vmap(lambda X, P: _conditional_variance(H_target, H_conds, X, P))(self.t_states, self.cov)
+        return var.squeeze()
+
     @property
     def loc(self) -> JAXArray:
         """
@@ -336,24 +401,32 @@ class PredictedStates(eqx.Module):
         self,
         component: str | list[str],
         return_var: bool = False,
+        conditioned_on: str | tuple | list | None = None,
     ) -> PredictedStates:
         """
-        Extract the predicted states corresponding to a component kernel
+        Extract the predicted mean (and variance) of a component kernel, or of the **sum** of the
+        components in ``component`` (a list of names), at the predicted states.
+
+        ``conditioned_on`` (optional, only affects the variance): return the variance conditional
+        on the components named in conditioned_on at the same data coordinate using Gaussian 
+        conditioning of the joint posterior. ``conditioned_on'' can have the following forms:
+        - ``["A"]``: conditional on A
+        - ``[("A", "B")]``: conditional on the sum A + B
+        - ``["A", "B"]``: conditional on A and B jointly
+        - ``[("A", "B"), "C"]``: conditional on A + B and C jointly
         """
-
-        if isinstance(component, str):
-            component = [component]
-
-        ## Get effective observation model for the desired component(s)
-        def H_comp(X):
-            H = self.kernel.observation_model(X, component=component[0])
-            for k, name in enumerate(component[1:]):
-                H += self.kernel.observation_model(X, component=name)
-            return H
+        H_comp = _component_observation_model(self.kernel, component)
 
         ## Project at test coordinates with component observation model
         component_mean = self.project_mean(H_comp)
-        component_var = self.project_variance(H_comp)
+        if not return_var:
+            return component_mean
+        if conditioned_on is None:
+            component_var = self.project_variance(H_comp)
+        else:
+            component_var = self.project_conditional_variance(
+                H_comp, _conditioning_observation_models(self.kernel, conditioned_on)
+            )
 
         if return_var:
             return component_mean, component_var
@@ -1454,6 +1527,7 @@ class GaussianProcess(eqx.Module):
         self,
         component: list | str,
         return_var: bool = False,
+        conditioned_on: str | tuple | list | None = None,
         **kwargs,
     ) -> Any:
         """
@@ -1471,7 +1545,10 @@ class GaussianProcess(eqx.Module):
                 will be returned.
             return_var (bool, optional): If ``True``, also return the variances
                 of each component. Default is ``False``.
-
+            conditioned_on (optional): return the variance conditional on other
+                components at the same data point; should be a list of names 
+                (or of tuples of names to sum), see :meth:`PredictedStates.get_component`). 
+                
         Returns:
             If ``return_var`` is ``False``:
                 component_mean (JAXArray)
@@ -1484,18 +1561,14 @@ class GaussianProcess(eqx.Module):
                 "The GP must be conditioned before getting component means."
             )
 
-        if isinstance(component, str):
-            component = [component]
-
-        ## Get effective observation model for the desired component(s)
-        def H_comp(X):
-            H = self.kernel.observation_model(X, component=component[0])
-            for k, name in enumerate(component[1:]):
-                H += self.kernel.observation_model(X, component=name)
-            return H
+        H_comp = _component_observation_model(self.kernel, component)
 
         ## Project at data
         component_mean, component_var = self.states.project_at_data(H_comp)
+        if return_var and conditioned_on is not None:
+            component_var = self.states.project_conditional_variance_at_data(
+                H_comp, _conditioning_observation_models(self.kernel, conditioned_on)
+            )
 
         if return_var:
             return component_mean, component_var
